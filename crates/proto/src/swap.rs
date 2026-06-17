@@ -41,6 +41,10 @@ impl Engine {
         }
         Ok(())
     }
+
+    pub fn render_with(&self, renderer: &mut crate::render::Renderer) -> crate::render::Pixmap {
+        renderer.render(&self.skin.scene, &**self.host.borrow())
+    }
 }
 
 #[cfg(test)]
