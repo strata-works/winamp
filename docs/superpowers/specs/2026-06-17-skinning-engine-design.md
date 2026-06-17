@@ -204,6 +204,9 @@ zero media knowledge; every media concept enters via host extension only.
 
 ## Open items deferred by design
 
-- **Exact rendering backend** — resolved by the Phase 0 spike, not pre-committed.
+- **Exact rendering backend** — RESOLVED by the Phase 0 spike: **vello** (GPU vector
+  rendering, no tessellator, raw `wgpu` available beneath for visualizer shaders). All
+  three candidates passed the hit-testing gate; vello was chosen for fit with the
+  GPU/shader direction (decision 6). See `2026-06-17-phase0-backend-decision.md`.
 - **Detailed per-module API surfaces** — resolved by the Phase 2 spec, informed by
   Phase 1 lessons.

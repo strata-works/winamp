@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- Language: Rust, **edition 2021**, stable toolchain. Every crate sets `edition = "2021"`.
+- Language: Rust, **edition 2024**, stable toolchain (1.95+). Every crate sets `edition = "2024"`.
 - Repository layout: a single Cargo **workspace** at repo root; all crates under `crates/`.
 - Crate versions: install with `cargo add <crate>` so Cargo resolves the current release. Do **not** hand-pin versions in this plan.
 - The `hittest` crate MUST NOT depend on any rendering, GPU, windowing, or image crate. This decoupling is the whole point — a dependency edge from `hittest` to a render crate is a task failure.
@@ -54,7 +54,7 @@ Create `crates/hittest/Cargo.toml`:
 [package]
 name = "hittest"
 version = "0.0.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
 ```
@@ -268,7 +268,7 @@ Create `crates/spike-render/Cargo.toml`:
 [package]
 name = "spike-render"
 version = "0.0.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
 hittest = { path = "../hittest" }
@@ -1257,6 +1257,213 @@ Expected: PASS — `hittest` tests, the parity-gate unit tests, and the winner's
 ```bash
 git add -A
 git commit -m "feat: decide Phase 0 rendering backend and prune losers"
+```
+
+---
+
+### Task 7: Live interactive viewer (added by amendment — runs BEFORE the Task 6 decision/prune)
+
+> **Why this exists:** Tasks 3–5 prove each backend is *pixel-correct* (headless parity gate), but the backend decision also wants a *visual* comparison — antialiasing quality and the feel of free-form hit-testing. This task adds one interactive viewer that presents each backend's real output and reacts to clicks. It must be built while all three backends still exist, i.e. before Task 6 Step 6 prunes the losers.
+
+> **Spike note:** `winit` (0.30+, `ApplicationHandler` model) and `softbuffer` are version-churny like `wgpu`. The code below targets the current API; **if the resolved versions' signatures differ, align with their `examples/`.** The contract: a window shows the selected backend's rendered shape, integer-upscaled to be visible; left-click reports INSIDE/OUTSIDE via the `hittest` kernel and recolors the fill (green=inside, red=outside); Space toggles L-shape/ring; Esc/close quits. All three backends present through the SAME path (each produces a `Pixmap`; the viewer blits it), so no per-backend surface code.
+
+**Files:**
+- Modify: `crates/spike-render/Cargo.toml` (add `winit`, `softbuffer` under `[dev-dependencies]` — examples may use dev-deps, keeping the library's own deps clean)
+- Create: `crates/spike-render/examples/viewer.rs`
+
+**Interfaces:**
+- Consumes: `Renderer`, `Pixmap` (Task 2); `TinySkiaRenderer`, `WgpuRenderer`, `VelloRenderer` (Tasks 3–5); `hittest::{Region, Point, l_shape, ring}` (Task 1).
+- Produces: an example binary `viewer` (no library API). Not covered by the parity gate; verified by compile + launch.
+
+- [ ] **Step 1: Add the dev-dependencies**
+
+Run: `cargo add winit softbuffer -p spike-render --dev`
+Expected: both under `[dev-dependencies]` in `crates/spike-render/Cargo.toml`.
+
+- [ ] **Step 2: Create the viewer example**
+
+Create `crates/spike-render/examples/viewer.rs`:
+
+```rust
+//! Live viewer to visually compare rendering backends and feel the hit-testing.
+//! Usage: cargo run -p spike-render --example viewer -- <tiny-skia|wgpu|vello>
+//! Left-click: report INSIDE/OUTSIDE + recolor (green=inside, red=outside).
+//! Space: toggle L-shape / ring. Esc or close: quit.
+
+use std::num::NonZeroU32;
+use std::rc::Rc;
+
+use hittest::{l_shape, ring, Point, Region};
+use spike_render::tiny_skia_backend::TinySkiaRenderer;
+use spike_render::vello_backend::VelloRenderer;
+use spike_render::wgpu_backend::WgpuRenderer;
+use spike_render::Renderer;
+
+use winit::application::ApplicationHandler;
+use winit::event::{ElementState, MouseButton, WindowEvent};
+use winit::event_loop::{ActiveEventLoop, EventLoop};
+use winit::keyboard::{Key, NamedKey};
+use winit::window::{Window, WindowId};
+
+const CANVAS: u32 = 200; // region coordinate space
+const SCALE: u32 = 3; // integer upscale so the window is visible
+const BG: [u8; 4] = [0, 0, 0, 255];
+const FILL_DEFAULT: [u8; 4] = [255, 0, 0, 255]; // red until first click
+const FILL_INSIDE: [u8; 4] = [0, 200, 0, 255]; // green after an inside click
+const FILL_OUTSIDE: [u8; 4] = [200, 0, 0, 255]; // red after an outside click
+
+fn make_renderer(name: &str) -> Box<dyn Renderer> {
+    match name {
+        "tiny-skia" => Box::new(TinySkiaRenderer),
+        "wgpu" => Box::new(WgpuRenderer::new()),
+        "vello" => Box::new(VelloRenderer::new()),
+        other => {
+            eprintln!("unknown backend '{other}'; use tiny-skia | wgpu | vello");
+            std::process::exit(2);
+        }
+    }
+}
+
+struct App {
+    backend_name: String,
+    renderer: Box<dyn Renderer>,
+    region: Region,
+    use_ring: bool,
+    fill: [u8; 4],
+    cursor: (f64, f64),
+    window: Option<Rc<Window>>,
+    surface: Option<softbuffer::Surface<Rc<Window>, Rc<Window>>>,
+}
+
+impl App {
+    fn new(backend_name: String) -> Self {
+        Self {
+            renderer: make_renderer(&backend_name),
+            backend_name,
+            region: l_shape(),
+            use_ring: false,
+            fill: FILL_DEFAULT,
+            cursor: (0.0, 0.0),
+            window: None,
+            surface: None,
+        }
+    }
+
+    fn redraw(&mut self) {
+        let (Some(window), Some(surface)) = (self.window.as_ref(), self.surface.as_mut()) else {
+            return;
+        };
+        let win_w = CANVAS * SCALE;
+        let win_h = CANVAS * SCALE;
+        surface
+            .resize(NonZeroU32::new(win_w).unwrap(), NonZeroU32::new(win_h).unwrap())
+            .unwrap();
+
+        // Each backend renders its real output into a CANVASxCANVAS RGBA8 Pixmap.
+        let pm = self.renderer.render(&self.region, (CANVAS, CANVAS), self.fill, BG);
+
+        let mut buf = surface.buffer_mut().unwrap();
+        // Nearest-neighbor integer upscale + RGBA8 -> softbuffer 0RGB u32.
+        for wy in 0..win_h {
+            let sy = wy / SCALE;
+            for wx in 0..win_w {
+                let sx = wx / SCALE;
+                let i = ((sy * CANVAS + sx) * 4) as usize;
+                let (r, g, b) = (pm.data[i] as u32, pm.data[i + 1] as u32, pm.data[i + 2] as u32);
+                buf[(wy * win_w + wx) as usize] = (r << 16) | (g << 8) | b;
+            }
+        }
+        buf.present().unwrap();
+        let _ = window;
+    }
+
+    fn on_click(&mut self) {
+        // Window pixel -> region coordinate (undo the integer upscale).
+        let rx = self.cursor.0 as f32 / SCALE as f32;
+        let ry = self.cursor.1 as f32 / SCALE as f32;
+        let inside = self.region.contains(Point { x: rx, y: ry });
+        self.fill = if inside { FILL_INSIDE } else { FILL_OUTSIDE };
+        println!(
+            "[{}] click ({rx:.1}, {ry:.1}) -> {}",
+            self.backend_name,
+            if inside { "INSIDE" } else { "OUTSIDE" }
+        );
+    }
+}
+
+impl ApplicationHandler for App {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        let attrs = Window::default_attributes()
+            .with_title("skin-engine backend viewer")
+            .with_inner_size(winit::dpi::LogicalSize::new(CANVAS * SCALE, CANVAS * SCALE));
+        let window = Rc::new(event_loop.create_window(attrs).unwrap());
+        let context = softbuffer::Context::new(window.clone()).unwrap();
+        let surface = softbuffer::Surface::new(&context, window.clone()).unwrap();
+        self.window = Some(window);
+        self.surface = Some(surface);
+    }
+
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+        match event {
+            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::RedrawRequested => self.redraw(),
+            WindowEvent::CursorMoved { position, .. } => {
+                self.cursor = (position.x, position.y);
+            }
+            WindowEvent::MouseInput { state, button, .. }
+                if state == ElementState::Pressed && button == MouseButton::Left =>
+            {
+                self.on_click();
+                if let Some(w) = &self.window {
+                    w.request_redraw();
+                }
+            }
+            WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
+                match event.logical_key {
+                    Key::Named(NamedKey::Escape) => event_loop.exit(),
+                    Key::Named(NamedKey::Space) => {
+                        self.use_ring = !self.use_ring;
+                        self.region = if self.use_ring { ring() } else { l_shape() };
+                        self.fill = FILL_DEFAULT;
+                        if let Some(w) = &self.window {
+                            w.request_redraw();
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn main() {
+    let name = std::env::args().nth(1).unwrap_or_else(|| {
+        eprintln!("usage: viewer <tiny-skia|wgpu|vello>");
+        std::process::exit(2);
+    });
+    let event_loop = EventLoop::new().unwrap();
+    let mut app = App::new(name);
+    event_loop.run_app(&mut app).unwrap();
+}
+```
+
+- [ ] **Step 3: Verify it compiles for the example target**
+
+Run: `cargo build -p spike-render --example viewer`
+Expected: compiles cleanly. If `winit`/`softbuffer` signatures differ from the resolved versions, reconcile against their docs/examples (do not change the backends or the parity gate). The `softbuffer` buffer format is `0x00RRGGBB` u32; keep the RGBA8→u32 conversion correct.
+
+- [ ] **Step 4: Smoke-launch each backend (best effort)**
+
+If a display session is available, briefly run each and confirm a window appears with the red shape, clicking prints INSIDE/OUTSIDE and recolors, and Space toggles the shape:
+`cargo run -p spike-render --example viewer -- tiny-skia` (then `wgpu`, then `vello`).
+If running headless (no display), note that launch could not be verified interactively and rely on the clean compile; the human will run it.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add crates/spike-render/Cargo.toml crates/spike-render/examples/viewer.rs
+git commit -m "feat(spike-render): live interactive backend viewer"
 ```
 
 ---
