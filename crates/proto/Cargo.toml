@@ -1,0 +1,11 @@
+[package]
+name = "proto"
+version = "0.0.0"
+edition = "2024"
+
+[dependencies]
+hittest = { path = "../hittest" }
+
+[[bin]]
+name = "proto"
+path = "src/main.rs"
