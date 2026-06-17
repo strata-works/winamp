@@ -1,4 +1,5 @@
 pub mod command;
+pub mod engine;
 pub mod host;
 pub mod scene;
 pub mod script;
@@ -7,5 +8,5 @@ pub mod state;
 pub mod swap;
 pub mod vocab;
 
-#[cfg(test)]
-mod fixture;
+#[doc(hidden)]
+pub mod fixture;
