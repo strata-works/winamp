@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- Language: Rust, **edition 2021**, stable toolchain. Every crate sets `edition = "2021"`.
+- Language: Rust, **edition 2024**, stable toolchain (1.95+). Every crate sets `edition = "2024"`.
 - Repository layout: a single Cargo **workspace** at repo root; all crates under `crates/`.
 - Crate versions: install with `cargo add <crate>` so Cargo resolves the current release. Do **not** hand-pin versions in this plan.
 - The `hittest` crate MUST NOT depend on any rendering, GPU, windowing, or image crate. This decoupling is the whole point — a dependency edge from `hittest` to a render crate is a task failure.
@@ -54,7 +54,7 @@ Create `crates/hittest/Cargo.toml`:
 [package]
 name = "hittest"
 version = "0.0.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
 ```
@@ -268,7 +268,7 @@ Create `crates/spike-render/Cargo.toml`:
 [package]
 name = "spike-render"
 version = "0.0.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
 hittest = { path = "../hittest" }
