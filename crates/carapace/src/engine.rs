@@ -34,11 +34,10 @@ impl Engine {
 
     /// Phase 1 (input): resolve the hit and run the handler, which only enqueues.
     pub fn handle_pointer(&mut self, p: Pt, _kind: PointerEvent) {
-        if let Some(id) = self.skin.scene.hit(p) {
-            if let Err(e) = self.skin.fire(id) {
-                // A bad handler drops its command(s); the loop continues.
-                eprintln!("carapace: handler error: {e:?}");
-            }
+        if let Some(id) = self.skin.scene.hit(p)
+            && let Err(e) = self.skin.fire(id) {
+            // A bad handler drops its command(s); the loop continues.
+            eprintln!("carapace: handler error: {e:?}");
         }
     }
 

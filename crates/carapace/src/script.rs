@@ -101,7 +101,13 @@ pub fn load(
     }
     env.set("host", host_tbl)?;
 
-    // Run the skin once under the sandboxed env (only the registry ctors + host are visible).
+    // Run the skin once under the sandboxed env.  The env exposes only the registry
+    // primitive constructors + the `host` table of allowlisted action shims; `io`, `os`,
+    // `require`, `load`, and all other base globals are absent.  One deliberate subtlety:
+    // Lua's string metatable is wired by the VM at startup and is not detached by swapping
+    // `_ENV`, so string methods on literals (e.g. `('x'):upper()`) remain reachable — but
+    // they carry no capability (no filesystem, process, or module access) and are useful,
+    // so we accept and document them as part of the sandbox contract.
     lua.load(&source.lua_src).set_environment(env).exec()?;
 
     let (nodes, handler_fns) = {
@@ -195,5 +201,26 @@ mod tests {
             let r = load(&src(bad), &FixtureHost::new(), reg.clone(), new_queue());
             assert!(r.is_err(), "expected sandbox/registry to reject `{bad}`");
         }
+    }
+
+    /// String methods on literals are reachable via the string metatable (accepted,
+    /// documented sandbox boundary), but `os`, `load`, and `require` remain blocked.
+    #[test]
+    fn string_methods_reachable_but_capability_free() {
+        let reg = Rc::new(VocabRegistry::base());
+
+        // String methods work — this is the accepted, documented behaviour.
+        let ok = load(&src("local _ = ('x'):upper()"), &FixtureHost::new(), reg.clone(), new_queue());
+        assert!(ok.is_ok(), "string metatable methods must be reachable");
+
+        // Capabilities remain blocked despite the string metatable being present.
+        let r_os = load(&src("os.time()"), &FixtureHost::new(), reg.clone(), new_queue());
+        assert!(r_os.is_err(), "os.time() must be blocked");
+
+        let r_load = load(&src("load('')"), &FixtureHost::new(), reg.clone(), new_queue());
+        assert!(r_load.is_err(), "load() must be blocked");
+
+        let r_req = load(&src("require('os')"), &FixtureHost::new(), reg.clone(), new_queue());
+        assert!(r_req.is_err(), "require('os') must be blocked");
     }
 }

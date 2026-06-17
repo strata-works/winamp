@@ -41,10 +41,9 @@ impl Scene {
     /// Topmost hotspot containing `p` (later nodes draw on top → iterate in reverse).
     pub fn hit(&self, p: Pt) -> Option<HandlerId> {
         for node in self.nodes.iter().rev() {
-            if let Node::Hotspot { region, on_press } = node {
-                if region.contains(Point { x: p.x, y: p.y }) {
-                    return Some(*on_press);
-                }
+            if let Node::Hotspot { region, on_press } = node
+                && region.contains(Point { x: p.x, y: p.y }) {
+                return Some(*on_press);
             }
         }
         None

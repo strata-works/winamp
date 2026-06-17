@@ -84,6 +84,12 @@ pub struct VocabRegistry {
     prims: Vec<Box<dyn Primitive>>,
 }
 
+impl Default for VocabRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl VocabRegistry {
     pub fn new() -> Self {
         Self { prims: Vec::new() }

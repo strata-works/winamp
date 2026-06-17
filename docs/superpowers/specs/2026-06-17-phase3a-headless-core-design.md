@@ -85,7 +85,10 @@ are **data-driven through the registry**:
   and pushing the `Node` into the scene builder. The `host` table (allowlisted actions →
   command-enqueue shims) is added alongside (Phase 2 §3).
 - The sandbox surface is therefore **`{ <registry primitive ids…>, host }`** — when Phase
-  5 adds primitives or a host registers extensions, **no engine code changes**.
+  5 adds primitives or a host registers extensions, **no engine code changes**.  The env
+  exposes only registry constructors + `host`; `io`, `os`, `require`, `load`, and all other
+  base globals are absent, though Lua string methods on literals (e.g. `('x'):upper()`)
+  remain reachable via the VM's string metatable and are capability-free.
 
 **`Node`** (engine-owned, domain-neutral) is what primitives produce: geometry (path) +
 style (color) + optional **binding key** (value-driven nodes) + optional **hotspot handler

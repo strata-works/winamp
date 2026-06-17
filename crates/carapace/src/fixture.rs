@@ -16,7 +16,54 @@ impl FixtureHost {
     }
 }
 
+impl Default for FixtureHost {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 const ACTIONS: &[ActionSpec] = &[ActionSpec { name: "toggle" }, ActionSpec { name: "bump" }];
+
+/// Test-only, domain-neutral host with a single `noop` action that flips `flag`.
+/// Distinct from `FixtureHost` — has no `toggle`/`bump`/`on`/`level`. Never shipped.
+pub struct OtherFixtureHost {
+    flag: bool,
+}
+
+impl OtherFixtureHost {
+    pub fn new() -> Self {
+        Self { flag: false }
+    }
+}
+
+impl Default for OtherFixtureHost {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+const OTHER_ACTIONS: &[ActionSpec] = &[ActionSpec { name: "noop" }];
+
+impl Host for OtherFixtureHost {
+    fn name(&self) -> &str {
+        "other_fixture"
+    }
+    fn tick(&mut self, _dt: Duration) {}
+    fn get(&self, key: &str) -> Option<StateValue> {
+        match key {
+            "flag" => Some(StateValue::Bool(self.flag)),
+            _ => None,
+        }
+    }
+    fn actions(&self) -> &[ActionSpec] {
+        OTHER_ACTIONS
+    }
+    fn invoke(&mut self, action: &str, _args: &[Value]) {
+        if action == "noop" {
+            self.flag = !self.flag;
+        }
+    }
+}
 
 impl Host for FixtureHost {
     fn name(&self) -> &str {
