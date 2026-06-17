@@ -1,0 +1,5 @@
+id = "media-classic"
+name = "Media Classic"
+width = 300
+height = 120
+entry = "skin.lua"
