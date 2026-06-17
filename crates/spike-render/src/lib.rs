@@ -1,8 +1,6 @@
 use hittest::{Point, Region};
 
-pub mod tiny_skia_backend;
 pub mod vello_backend;
-pub mod wgpu_backend;
 
 #[derive(Clone, Debug)]
 pub struct Pixmap {

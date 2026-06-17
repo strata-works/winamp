@@ -1,5 +1,5 @@
 //! Live viewer to visually compare rendering backends and feel the hit-testing.
-//! Usage: cargo run -p spike-render --example viewer -- <tiny-skia|wgpu|vello>
+//! Usage: cargo run -p spike-render --example viewer  (vello is the chosen backend)
 //! Left-click: report INSIDE/OUTSIDE + recolor (green=inside, red=outside).
 //! Space: toggle L-shape / ring. Esc or close: quit.
 //!
@@ -12,9 +12,7 @@ use std::num::NonZeroU32;
 use std::rc::Rc;
 
 use hittest::{l_shape, ring, Point, Region};
-use spike_render::tiny_skia_backend::TinySkiaRenderer;
 use spike_render::vello_backend::VelloRenderer;
-use spike_render::wgpu_backend::WgpuRenderer;
 use spike_render::Renderer;
 
 use winit::application::ApplicationHandler;
@@ -32,11 +30,10 @@ const FILL_OUTSIDE: [u8; 4] = [220, 30, 30, 255]; // red: last click missed
 
 fn make_renderer(name: &str) -> Box<dyn Renderer> {
     match name {
-        "tiny-skia" => Box::new(TinySkiaRenderer),
-        "wgpu" => Box::new(WgpuRenderer::new()),
+        // Phase 0 chose vello; the other candidates were pruned after the decision.
         "vello" => Box::new(VelloRenderer::new()),
         other => {
-            eprintln!("unknown backend '{other}'; use tiny-skia | wgpu | vello");
+            eprintln!("unknown backend '{other}'; only 'vello' is available");
             std::process::exit(2);
         }
     }
@@ -168,10 +165,8 @@ impl ApplicationHandler for App {
 }
 
 fn main() {
-    let name = std::env::args().nth(1).unwrap_or_else(|| {
-        eprintln!("usage: viewer <tiny-skia|wgpu|vello>");
-        std::process::exit(2);
-    });
+    // vello is the only remaining backend; default to it when no arg is given.
+    let name = std::env::args().nth(1).unwrap_or_else(|| "vello".to_string());
     let event_loop = EventLoop::new().unwrap();
     let mut app = App::new(name);
     event_loop.run_app(&mut app).unwrap();
