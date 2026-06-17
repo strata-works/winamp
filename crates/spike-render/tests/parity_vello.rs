@@ -19,5 +19,6 @@ fn vello_matches_hittest_on_ring() {
     let mut r = VelloRenderer::new();
     let pm = r.render(&ring(), (200, 200), FILL, BG);
     let report = parity_check(&ring(), &pm, FILL, BG);
+    assert!(report.checked > 8_000, "too few unambiguous pixels: {}", report.checked);
     assert!(report.mismatches.is_empty(), "mismatches: {:?}", report.mismatches);
 }

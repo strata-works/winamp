@@ -3,10 +3,10 @@
 //! Left-click: report INSIDE/OUTSIDE + recolor (green=inside, red=outside).
 //! Space: toggle L-shape / ring. Esc or close: quit.
 //!
-//! The window is a presenter only: each backend renders its real output into a
+//! The window is a presenter only: the backend renders its real output into a
 //! CANVAS x CANVAS RGBA8 Pixmap, which is blitted (DPI-robust nearest-neighbor
-//! scale to the window's physical size) via softbuffer. Identical path for all
-//! three backends, so what you see is faithful to each backend's own rendering.
+//! scale to the window's physical size) via softbuffer, so what you see is
+//! faithful to the backend's own rendering.
 
 use std::num::NonZeroU32;
 use std::rc::Rc;
