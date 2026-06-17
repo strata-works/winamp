@@ -1,4 +1,6 @@
-# Skinnable UI Engine (working name)
+# carapace
+
+> A swappable shell over any host. (Repo codename: `winamp`.)
 
 A general-purpose, **host-agnostic** skinnable UI engine for desktop apps — written in
 Rust. It lets an application hand its entire surface over to a *skin* that defines its
