@@ -1,0 +1,9 @@
+[package]
+name = "spike-render"
+version = "0.0.0"
+edition = "2024"
+
+[dependencies]
+hittest = { path = "../hittest" }
+
+[dev-dependencies]
