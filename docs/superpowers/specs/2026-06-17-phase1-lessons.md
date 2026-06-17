@@ -61,27 +61,45 @@ prototype code, which is throwaway.
    panics without one. Phase 3 needs a CI story (software adapter / `lavapipe`, or a
    render-free test mode) so rendering logic can be tested without a GPU.
 
+8. **The render path is a performance dead end — confirmed by the live run (~31 fps).**
+   Measured ~31 fps on the dev Mac (not 60, not uncapped). Each frame does: vello renders
+   to an *offscreen* texture → **synchronous GPU→CPU readback** (`copy_texture_to_buffer`
+   + `map_async` + poll-wait, which stalls the pipeline every frame) → single-threaded
+   CPU upscale-blit of ~1.3M pixels into softbuffer. This offscreen-render-then-read-back
+   chain was a Phase 0 *test* convenience (for headless pixel asserts); it must NOT be the
+   live render path. **Phase 3 requirement:** render directly to the window surface
+   (vello → wgpu surface, GPU-composited, no readback, no CPU blit) and let vsync pace it.
+
+9. **Timestep must be wall-clock, not fixed.** `app.rs` ticks a hardcoded `dt = 1/60`
+   regardless of the real frame rate, so at the measured ~31 fps the animation runs at
+   roughly **half real-time speed**. Combined with #8 this is the most visible defect from
+   the live run. **Phase 3 requirement:** derive `dt` from a real clock (`Instant`).
+
 7. **External API churn is a real maintenance cost.** `wgpu`/`vello`/`winit`/`mlua` are
    all fast-moving; Phase 0 already hit 5+ `wgpu` breaks. Phase 2 should decide a version
    pinning + upgrade-cadence policy rather than tracking latest.
 
-## Open — pending the live interactive run
+## Live interactive run — findings
 
-The headless tests prove correctness; they do not prove *feel*. Confirm on a real run
-(`cargo run -p proto`) and fold any findings back here before Phase 2:
+Ran `cargo run -p proto` on the dev Mac. The app launches, renders all skins correctly
+(the `sysmon-dial` concave L-hotspot + CPU bar render as intended), and swap/host-switch
+print the expected state-preserved log lines.
 
-- Does the skin swap (`Tab`) actually *look* seamless mid-playback, or is there a visible
-  flash/reset when the scene is torn down and rebuilt?
-- Does free-form hit-testing feel right at the edges of the concave hotspot
-  (`sysmon-dial`), including near the notch?
-- Is the per-frame full re-render (and per-frame `surface.resize`) smooth, or does it
-  reveal a need for dirty-tracking / partial redraw earlier than Phase 3?
-- Does clicking map accurately to the intended hotspot on a HiDPI display?
+- **Frame rate / smoothness — RESOLVED (negative):** ~31 fps, render-bound. See problems
+  #8 and #9 above — the offscreen-readback-then-CPU-blit path and the fixed `dt` are the
+  cause. This is the headline finding of the live run.
+
+Still worth a focused look before Phase 2 (no problems *reported* on the run, but not
+deliberately stress-tested):
+
+- Does the skin swap (`Tab`) ever show a visible flash/reset mid-playback? (None reported.)
+- Free-form hit-testing feel at the concave notch edges (`sysmon-dial`).
+- HiDPI click-to-hotspot mapping accuracy.
 
 ## Recommendation for Phase 2
 
 Carry decisions 3 and 8 forward unchanged (validated). Spend the Phase 2 spec on: the
-multi-node scene + render contract (problem 1), the richer value-fill / shared-geometry
-vocabulary (problems 2–3), and — most importantly — the host-boundary re-entrancy model
-(problem 4), which is the one genuinely unresolved architectural question the prototype
-exposed.
+multi-node scene + render contract (problem 1) — including **direct-to-surface rendering
+with a wall-clock timestep** (problems 8–9), the headline finding from the live run; the
+richer value-fill / shared-geometry vocabulary (problems 2–3); and — the one genuinely
+unresolved *architectural* question — the host-boundary re-entrancy model (problem 4).

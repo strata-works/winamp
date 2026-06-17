@@ -1,6 +1,7 @@
 use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::time::Instant;
 
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, MouseButton, WindowEvent};
@@ -52,6 +53,9 @@ struct App {
     cursor: (f64, f64),
     window: Option<Rc<Window>>,
     surface: Option<softbuffer::Surface<Rc<Window>, Rc<Window>>>,
+    // Throwaway instrumentation: count redraws and report fps once per second.
+    frames: u32,
+    last_report: Instant,
 }
 
 impl App {
@@ -68,6 +72,8 @@ impl App {
             cursor: (0.0, 0.0),
             window: None,
             surface: None,
+            frames: 0,
+            last_report: Instant::now(),
         }
     }
 
@@ -103,6 +109,15 @@ impl App {
             }
         }
         buf.present().unwrap();
+
+        // fps report once per second.
+        self.frames += 1;
+        let elapsed = self.last_report.elapsed();
+        if elapsed.as_secs_f32() >= 1.0 {
+            println!("fps: {:.0}", self.frames as f32 / elapsed.as_secs_f32());
+            self.frames = 0;
+            self.last_report = Instant::now();
+        }
 
         // Keep animating.
         if let Some(w) = &self.window {
