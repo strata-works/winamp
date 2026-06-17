@@ -5,5 +5,6 @@ edition = "2024"
 
 [dependencies]
 hittest = { path = "../hittest" }
+tiny-skia = "0.12.0"
 
 [dev-dependencies]

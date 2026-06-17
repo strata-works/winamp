@@ -1,5 +1,7 @@
 use hittest::{Point, Region};
 
+pub mod tiny_skia_backend;
+
 #[derive(Clone, Debug)]
 pub struct Pixmap {
     pub width: u32,
