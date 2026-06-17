@@ -1,0 +1,19 @@
+[package]
+name = "proto"
+version = "0.0.0"
+edition = "2024"
+
+[dependencies]
+hittest = { path = "../hittest" }
+mlua = { version = "0.11.6", features = ["lua54", "vendored"] }
+pollster = "0.4.0"
+serde = { version = "1.0.228", features = ["derive"] }
+softbuffer = "0.4.8"
+toml = "1.1.2"
+vello = "0.9.0"
+wgpu = "29.0.3"
+winit = "0.30.13"
+
+[[bin]]
+name = "proto"
+path = "src/main.rs"
