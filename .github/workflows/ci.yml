@@ -28,5 +28,9 @@ jobs:
         run: cargo fmt --all --check
       - name: Clippy (keeper crates)
         run: cargo clippy -p hittest -p carapace --all-targets -- -D warnings
-      - name: Test
-        run: cargo test --workspace
+      - name: Test (headless keeper crates)
+        # Scoped to the headless keeper crates: proto/spike-render have GPU render
+        # tests (wgpu request_adapter) that fail on the GPU-less runner, and are
+        # throwaway (removed end of Phase 3). The 3b plan adds a GPU/render CI leg
+        # (software adapter) and widens this to --workspace once render lands.
+        run: cargo test -p hittest -p carapace
