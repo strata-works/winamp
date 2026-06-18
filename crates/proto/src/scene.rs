@@ -17,9 +17,19 @@ pub type HandlerId = usize;
 
 #[derive(Clone, Debug)]
 pub enum Node {
-    Fill { path: Vec<Pt>, color: Color },
-    Hotspot { path: Vec<Pt>, on_press: HandlerId },
-    ValueFill { path: Vec<Pt>, value_key: String, color: Color },
+    Fill {
+        path: Vec<Pt>,
+        color: Color,
+    },
+    Hotspot {
+        path: Vec<Pt>,
+        on_press: HandlerId,
+    },
+    ValueFill {
+        path: Vec<Pt>,
+        value_key: String,
+        color: Color,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -69,7 +79,10 @@ mod tests {
     #[test]
     fn click_inside_hotspot_returns_its_handler() {
         let scene = Scene {
-            nodes: vec![Node::Hotspot { path: l_path(), on_press: 7 }],
+            nodes: vec![Node::Hotspot {
+                path: l_path(),
+                on_press: 7,
+            }],
             canvas: (200, 200),
         };
         assert_eq!(scene.hit(Pt { x: 60.0, y: 60.0 }), Some(7));
@@ -78,7 +91,10 @@ mod tests {
     #[test]
     fn click_in_concave_notch_misses() {
         let scene = Scene {
-            nodes: vec![Node::Hotspot { path: l_path(), on_press: 7 }],
+            nodes: vec![Node::Hotspot {
+                path: l_path(),
+                on_press: 7,
+            }],
             canvas: (200, 200),
         };
         assert_eq!(scene.hit(Pt { x: 130.0, y: 130.0 }), None);
@@ -94,8 +110,14 @@ mod tests {
         ];
         let scene = Scene {
             nodes: vec![
-                Node::Hotspot { path: square.clone(), on_press: 1 },
-                Node::Hotspot { path: square, on_press: 2 },
+                Node::Hotspot {
+                    path: square.clone(),
+                    on_press: 1,
+                },
+                Node::Hotspot {
+                    path: square,
+                    on_press: 2,
+                },
             ],
             canvas: (200, 200),
         };

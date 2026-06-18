@@ -1,3 +1,3 @@
 [workspace]
-members = ["crates/hittest", "crates/spike-render", "crates/proto"]
+members = ["crates/hittest", "crates/spike-render", "crates/proto", "crates/carapace"]
 resolver = "2"

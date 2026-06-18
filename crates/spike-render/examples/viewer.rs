@@ -11,9 +11,9 @@
 use std::num::NonZeroU32;
 use std::rc::Rc;
 
-use hittest::{l_shape, ring, Point, Region};
-use spike_render::vello_backend::VelloRenderer;
+use hittest::{Point, Region, l_shape, ring};
 use spike_render::Renderer;
+use spike_render::vello_backend::VelloRenderer;
 
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, MouseButton, WindowEvent};
@@ -76,7 +76,9 @@ impl App {
             .unwrap();
 
         // Each backend renders its real output into a CANVASxCANVAS RGBA8 Pixmap.
-        let pm = self.renderer.render(&self.region, (CANVAS, CANVAS), self.fill, BG);
+        let pm = self
+            .renderer
+            .render(&self.region, (CANVAS, CANVAS), self.fill, BG);
 
         let mut buf = surface.buffer_mut().unwrap();
         // Nearest-neighbor scale CANVAS -> physical window, RGBA8 -> softbuffer 0RGB u32.
@@ -85,7 +87,11 @@ impl App {
             for px in 0..pw {
                 let sx = px * CANVAS / pw;
                 let i = ((sy * CANVAS + sx) * 4) as usize;
-                let (r, g, b) = (pm.data[i] as u32, pm.data[i + 1] as u32, pm.data[i + 2] as u32);
+                let (r, g, b) = (
+                    pm.data[i] as u32,
+                    pm.data[i + 1] as u32,
+                    pm.data[i + 2] as u32,
+                );
                 buf[(py * pw + px) as usize] = (r << 16) | (g << 8) | b;
             }
         }
@@ -166,7 +172,9 @@ impl ApplicationHandler for App {
 
 fn main() {
     // vello is the only remaining backend; default to it when no arg is given.
-    let name = std::env::args().nth(1).unwrap_or_else(|| "vello".to_string());
+    let name = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "vello".to_string());
     let event_loop = EventLoop::new().unwrap();
     let mut app = App::new(name);
     event_loop.run_app(&mut app).unwrap();

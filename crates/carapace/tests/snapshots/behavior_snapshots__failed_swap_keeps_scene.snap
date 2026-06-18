@@ -1,0 +1,16 @@
+---
+source: crates/carapace/tests/behavior_snapshots.rs
+expression: t
+---
+=== step 0 (initial) ===
+scene:
+canvas 200x200
+hotspot handler=0
+value_fill key=level rgb=1,2,3
+state: on=Some(Bool(false)) level=Some(Scalar(0.0))
+=== step 1 ===
+scene:
+canvas 200x200
+hotspot handler=0
+value_fill key=level rgb=1,2,3
+state: on=Some(Bool(false)) level=Some(Scalar(0.0))

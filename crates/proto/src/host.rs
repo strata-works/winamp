@@ -21,7 +21,10 @@ pub struct MediaHost {
 
 impl MediaHost {
     pub fn new() -> Self {
-        Self { playing: false, position: 0.0 }
+        Self {
+            playing: false,
+            position: 0.0,
+        }
     }
 }
 
@@ -64,7 +67,11 @@ pub struct SysmonHost {
 
 impl SysmonHost {
     pub fn new() -> Self {
-        Self { cpu: 0.3, sampling: true, phase: 0.0 }
+        Self {
+            cpu: 0.3,
+            sampling: true,
+            phase: 0.0,
+        }
     }
 }
 

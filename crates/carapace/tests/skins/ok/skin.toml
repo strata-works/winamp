@@ -1,0 +1,6 @@
+schema = 1
+id = "ok"
+name = "OK Skin"
+engine = "^0.1"
+canvas = { width = 300, height = 120 }
+entry = "skin.lua"

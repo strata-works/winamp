@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal --component rustfmt,clippy
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}
+          restore-keys: ${{ runner.os }}-cargo-
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Clippy (keeper crates)
+        run: cargo clippy -p hittest -p carapace --all-targets -- -D warnings
+      - name: Test (headless keeper crates)
+        # Scoped to the headless keeper crates: proto/spike-render have GPU render
+        # tests (wgpu request_adapter) that fail on the GPU-less runner, and are
+        # throwaway (removed end of Phase 3). The 3b plan adds a GPU/render CI leg
+        # (software adapter) and widens this to --workspace once render lands.
+        run: cargo test -p hittest -p carapace
