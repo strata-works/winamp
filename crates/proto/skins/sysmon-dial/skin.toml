@@ -1,5 +1,0 @@
-id = "sysmon-dial"
-name = "Sysmon Dial"
-width = 300
-height = 120
-entry = "skin.lua"

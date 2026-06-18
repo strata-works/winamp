@@ -1,5 +1,0 @@
-id = "media-minimal"
-name = "Media Minimal"
-width = 300
-height = 120
-entry = "skin.lua"

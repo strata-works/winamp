@@ -1,5 +1,0 @@
-id = "sysmon-bars"
-name = "Sysmon Bars"
-width = 300
-height = 120
-entry = "skin.lua"
