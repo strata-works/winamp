@@ -12,7 +12,10 @@ pub struct FixtureHost {
 
 impl FixtureHost {
     pub fn new() -> Self {
-        Self { on: false, level: 0.0 }
+        Self {
+            on: false,
+            level: 0.0,
+        }
     }
 }
 

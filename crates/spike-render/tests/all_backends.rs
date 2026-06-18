@@ -1,6 +1,6 @@
 use hittest::{l_shape, ring};
 use spike_render::vello_backend::VelloRenderer;
-use spike_render::{parity_check, Renderer};
+use spike_render::{Renderer, parity_check};
 
 const FILL: [u8; 4] = [255, 0, 0, 255];
 const BG: [u8; 4] = [0, 0, 0, 255];

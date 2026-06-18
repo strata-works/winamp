@@ -21,14 +21,21 @@ fn parse_path(t: &Table) -> mlua::Result<Vec<Pt>> {
     let mut pts = Vec::new();
     for entry in path.sequence_values::<Table>() {
         let p = entry?;
-        pts.push(Pt { x: p.get("x")?, y: p.get("y")? });
+        pts.push(Pt {
+            x: p.get("x")?,
+            y: p.get("y")?,
+        });
     }
     Ok(pts)
 }
 
 fn parse_color(t: &Table) -> mlua::Result<Color> {
     let c: Table = t.get("color")?;
-    Ok(Color { r: c.get("r")?, g: c.get("g")?, b: c.get("b")? })
+    Ok(Color {
+        r: c.get("r")?,
+        g: c.get("g")?,
+        b: c.get("b")?,
+    })
 }
 
 pub fn load(lua_src: &str, canvas: (u32, u32), host: SharedHost) -> mlua::Result<LoadedSkin> {
@@ -59,7 +66,9 @@ pub fn load(lua_src: &str, canvas: (u32, u32), host: SharedHost) -> mlua::Result
                 h.push(on_press);
                 h.len() - 1
             };
-            nodes.borrow_mut().push(Node::Hotspot { path, on_press: id });
+            nodes
+                .borrow_mut()
+                .push(Node::Hotspot { path, on_press: id });
             Ok(())
         })?;
         env.set("region", f)?;
@@ -70,7 +79,11 @@ pub fn load(lua_src: &str, canvas: (u32, u32), host: SharedHost) -> mlua::Result
             let path = parse_path(&t)?;
             let color = parse_color(&t)?;
             let value_key: String = t.get("value")?;
-            nodes.borrow_mut().push(Node::ValueFill { path, value_key, color });
+            nodes.borrow_mut().push(Node::ValueFill {
+                path,
+                value_key,
+                color,
+            });
             Ok(())
         })?;
         env.set("value_fill", f)?;
@@ -97,8 +110,16 @@ pub fn load(lua_src: &str, canvas: (u32, u32), host: SharedHost) -> mlua::Result
         .iter()
         .map(|f| lua.create_registry_value(f.clone()))
         .collect::<mlua::Result<Vec<_>>>()?;
-    let scene = Scene { nodes: nodes.borrow().clone(), canvas };
-    Ok(LoadedSkin { scene, lua, handlers, _host: host })
+    let scene = Scene {
+        nodes: nodes.borrow().clone(),
+        canvas,
+    };
+    Ok(LoadedSkin {
+        scene,
+        lua,
+        handlers,
+        _host: host,
+    })
 }
 
 impl LoadedSkin {

@@ -62,7 +62,10 @@ pub fn load(
 ) -> Result<LoadedSkin, ScriptError> {
     let lua = Lua::new();
     let env = lua.create_table()?;
-    let builder = Rc::new(RefCell::new(SceneBuilder { nodes: Vec::new(), handler_fns: Vec::new() }));
+    let builder = Rc::new(RefCell::new(SceneBuilder {
+        nodes: Vec::new(),
+        handler_fns: Vec::new(),
+    }));
 
     // One Lua constructor per registry primitive id (data-driven — not hardcoded).
     let ids: Vec<String> = registry.iter().map(|p| p.id().to_string()).collect();
@@ -112,14 +115,24 @@ pub fn load(
 
     let (nodes, handler_fns) = {
         let mut b = builder.borrow_mut();
-        (std::mem::take(&mut b.nodes), std::mem::take(&mut b.handler_fns))
+        (
+            std::mem::take(&mut b.nodes),
+            std::mem::take(&mut b.handler_fns),
+        )
     };
     let handlers = handler_fns
         .into_iter()
         .map(|f| lua.create_registry_value(f))
         .collect::<mlua::Result<Vec<_>>>()?;
 
-    Ok(LoadedSkin { scene: Scene { nodes, canvas: source.canvas }, lua, handlers })
+    Ok(LoadedSkin {
+        scene: Scene {
+            nodes,
+            canvas: source.canvas,
+        },
+        lua,
+        handlers,
+    })
 }
 
 impl LoadedSkin {
@@ -139,7 +152,10 @@ mod tests {
     use std::rc::Rc;
 
     fn src(s: &str) -> SkinSource {
-        SkinSource { lua_src: s.to_string(), canvas: (300, 120) }
+        SkinSource {
+            lua_src: s.to_string(),
+            canvas: (300, 120),
+        }
     }
 
     #[test]
@@ -197,7 +213,13 @@ mod tests {
     #[test]
     fn sandbox_blocks_globals_and_unknown_names() {
         let reg = Rc::new(VocabRegistry::base());
-        for bad in ["io.write('x')", "os.time()", "require('os')", "host.nope()", "frobnicate{}"] {
+        for bad in [
+            "io.write('x')",
+            "os.time()",
+            "require('os')",
+            "host.nope()",
+            "frobnicate{}",
+        ] {
             let r = load(&src(bad), &FixtureHost::new(), reg.clone(), new_queue());
             assert!(r.is_err(), "expected sandbox/registry to reject `{bad}`");
         }
@@ -210,17 +232,37 @@ mod tests {
         let reg = Rc::new(VocabRegistry::base());
 
         // String methods work — this is the accepted, documented behaviour.
-        let ok = load(&src("local _ = ('x'):upper()"), &FixtureHost::new(), reg.clone(), new_queue());
+        let ok = load(
+            &src("local _ = ('x'):upper()"),
+            &FixtureHost::new(),
+            reg.clone(),
+            new_queue(),
+        );
         assert!(ok.is_ok(), "string metatable methods must be reachable");
 
         // Capabilities remain blocked despite the string metatable being present.
-        let r_os = load(&src("os.time()"), &FixtureHost::new(), reg.clone(), new_queue());
+        let r_os = load(
+            &src("os.time()"),
+            &FixtureHost::new(),
+            reg.clone(),
+            new_queue(),
+        );
         assert!(r_os.is_err(), "os.time() must be blocked");
 
-        let r_load = load(&src("load('')"), &FixtureHost::new(), reg.clone(), new_queue());
+        let r_load = load(
+            &src("load('')"),
+            &FixtureHost::new(),
+            reg.clone(),
+            new_queue(),
+        );
         assert!(r_load.is_err(), "load() must be blocked");
 
-        let r_req = load(&src("require('os')"), &FixtureHost::new(), reg.clone(), new_queue());
+        let r_req = load(
+            &src("require('os')"),
+            &FixtureHost::new(),
+            reg.clone(),
+            new_queue(),
+        );
         assert!(r_req.is_err(), "require('os') must be blocked");
     }
 }

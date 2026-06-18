@@ -31,7 +31,11 @@ impl VelloRenderer {
                 },
             )
             .expect("failed to create vello renderer");
-            Self { device, queue, renderer }
+            Self {
+                device,
+                queue,
+                renderer,
+            }
         })
     }
 
@@ -71,7 +75,11 @@ impl Renderer for VelloRenderer {
             let format = wgpu::TextureFormat::Rgba8Unorm;
             let texture = self.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("vello-target"),
-                size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                size: wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
@@ -123,7 +131,11 @@ impl Renderer for VelloRenderer {
                         rows_per_image: Some(h),
                     },
                 },
-                wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
             );
             self.queue.submit(Some(encoder.finish()));
 
@@ -141,7 +153,11 @@ impl Renderer for VelloRenderer {
             drop(mapped);
             out_buf.unmap();
 
-            Pixmap { width: w, height: h, data }
+            Pixmap {
+                width: w,
+                height: h,
+                data,
+            }
         })
     }
 }

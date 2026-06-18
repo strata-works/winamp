@@ -76,7 +76,10 @@ mod tests {
             "schema = 2\nid='x'\nname='x'\nengine='^0.1'\ncanvas={width=1,height=1}\nentry='s.lua'",
             "",
         );
-        assert!(matches!(load_dir(dir.path()), Err(SkinError::UnsupportedSchema(2))));
+        assert!(matches!(
+            load_dir(dir.path()),
+            Err(SkinError::UnsupportedSchema(2))
+        ));
     }
 
     #[test]
@@ -85,7 +88,10 @@ mod tests {
             "schema = 1\nid='x'\nname='x'\nengine='^9.9'\ncanvas={width=1,height=1}\nentry='s.lua'",
             "",
         );
-        assert!(matches!(load_dir(dir.path()), Err(SkinError::EngineIncompat(_))));
+        assert!(matches!(
+            load_dir(dir.path()),
+            Err(SkinError::EngineIncompat(_))
+        ));
     }
 
     // Minimal temp-dir helper (no external crate).

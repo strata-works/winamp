@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use crate::command::{Queue, SkinSource};
 use crate::host::Host;
-use crate::script::{load, LoadedSkin, ScriptError};
+use crate::script::{LoadedSkin, ScriptError, load};
 use crate::vocab::VocabRegistry;
 
 /// Build a fresh skin from `source`. On error the caller keeps its current skin
@@ -23,7 +23,10 @@ mod tests {
     use crate::fixture::FixtureHost;
 
     fn src(s: &str) -> SkinSource {
-        SkinSource { lua_src: s.to_string(), canvas: (10, 10) }
+        SkinSource {
+            lua_src: s.to_string(),
+            canvas: (10, 10),
+        }
     }
 
     #[test]

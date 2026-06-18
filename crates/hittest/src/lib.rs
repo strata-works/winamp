@@ -96,12 +96,7 @@ mod tests {
     fn square() -> Region {
         Region {
             contours: vec![Contour {
-                points: vec![
-                    pt(0.0, 0.0),
-                    pt(10.0, 0.0),
-                    pt(10.0, 10.0),
-                    pt(0.0, 10.0),
-                ],
+                points: vec![pt(0.0, 0.0), pt(10.0, 0.0), pt(10.0, 10.0), pt(0.0, 10.0)],
             }],
         }
     }

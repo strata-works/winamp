@@ -10,9 +10,15 @@ pub struct SkinSource {
 }
 
 pub enum Command {
-    HostAction { action: String, args: Vec<Value> },
+    HostAction {
+        action: String,
+        args: Vec<Value>,
+    },
     Swap(SkinSource),
-    SwitchHost { host: Box<dyn Host>, skin: SkinSource },
+    SwitchHost {
+        host: Box<dyn Host>,
+        skin: SkinSource,
+    },
 }
 
 /// Shared command queue: skin handlers push HostAction; the host app pushes

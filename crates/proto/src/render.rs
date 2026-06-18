@@ -91,7 +91,11 @@ impl Renderer {
                 },
             )
             .expect("failed to create vello renderer");
-            Self { device, queue, renderer }
+            Self {
+                device,
+                queue,
+                renderer,
+            }
         })
     }
 
@@ -114,7 +118,11 @@ impl Renderer {
                     Node::Hotspot { .. } => {
                         // invisible — skip
                     }
-                    Node::ValueFill { path, value_key, color } => {
+                    Node::ValueFill {
+                        path,
+                        value_key,
+                        color,
+                    } => {
                         let val = value_of(host, value_key);
                         let (min_x, min_y, max_x, max_y) = bbox(path);
                         let width = max_x - min_x;
@@ -128,7 +136,11 @@ impl Renderer {
             let format = wgpu::TextureFormat::Rgba8Unorm;
             let texture = self.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("vello-target"),
-                size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                size: wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
@@ -180,7 +192,11 @@ impl Renderer {
                         rows_per_image: Some(h),
                     },
                 },
-                wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
             );
             self.queue.submit(Some(encoder.finish()));
 
@@ -198,7 +214,11 @@ impl Renderer {
             drop(mapped);
             out_buf.unmap();
 
-            Pixmap { width: w, height: h, data }
+            Pixmap {
+                width: w,
+                height: h,
+                data,
+            }
         })
     }
 }
