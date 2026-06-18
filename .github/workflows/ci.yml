@@ -34,3 +34,41 @@ jobs:
         # throwaway (removed end of Phase 3). The 3b plan adds a GPU/render CI leg
         # (software adapter) and widens this to --workspace once render lands.
         run: cargo test -p hittest -p carapace
+
+  render:
+    runs-on: ubuntu-latest
+    # Best-effort software-render leg: do not block the PR while lavapipe is dialed in.
+    # Promote to a required check once it has run green a few times.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal
+      - name: Install Mesa lavapipe (software Vulkan)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mesa-vulkan-drivers libvulkan1 vulkan-tools
+      - name: Diagnose Vulkan ICDs
+        # Surfaces the actual lavapipe ICD path + whether an adapter is visible,
+        # so a future run can pin VK_ICD_FILENAMES if auto-discovery isn't enough.
+        run: |
+          echo "== /usr/share/vulkan/icd.d =="; ls -la /usr/share/vulkan/icd.d/ || true
+          echo "== vulkaninfo --summary =="; vulkaninfo --summary 2>&1 | head -60 || true
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-render-${{ hashFiles('**/Cargo.toml') }}
+          restore-keys: ${{ runner.os }}-cargo-render-
+      - name: Render tests (lavapipe software Vulkan)
+        # Rely on the Vulkan loader auto-discovering the lavapipe ICD that
+        # mesa-vulkan-drivers installs under /usr/share/vulkan/icd.d/. Do NOT
+        # override VK_ICD_FILENAMES with a guessed path — a wrong path suppresses
+        # auto-discovery and yields "no adapter". WGPU_BACKEND=vulkan since vello
+        # needs compute (GL/llvmpipe can't drive vello).
+        env:
+          WGPU_BACKEND: vulkan
+        run: cargo test -p carapace --features gpu-tests --test render_offscreen

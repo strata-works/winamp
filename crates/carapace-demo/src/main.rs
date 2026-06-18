@@ -1,0 +1,320 @@
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Instant;
+
+use carapace::command::{Command, SkinSource};
+use carapace::engine::{Engine, PointerEvent};
+use carapace::render::{RenderTarget, Renderer};
+use carapace::scene::Pt;
+use carapace::vocab::VocabRegistry;
+use carapace_demo::demo_host::DemoHost;
+
+use winit::application::ApplicationHandler;
+use winit::event::{ElementState, MouseButton, WindowEvent};
+use winit::event_loop::{ActiveEventLoop, EventLoop};
+use winit::keyboard::{Key, NamedKey};
+use winit::window::{Window, WindowId};
+
+const SKINS: [&str; 3] = ["skins/classic", "skins/minimal", "skins/reference"];
+const INIT_SCALE: u32 = 3;
+
+fn skin_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+}
+
+fn load_source(i: usize) -> (SkinSource, (u32, u32)) {
+    let (_m, src) = carapace::skin::load_dir(&skin_root().join(SKINS[i])).expect("load skin");
+    let canvas = src.canvas;
+    (src, canvas)
+}
+
+/// GPU state: wgpu surface + device + queue + surface config + blitter + intermediate texture.
+struct Gpu {
+    surface: wgpu::Surface<'static>,
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    config: wgpu::SurfaceConfiguration,
+    /// Shader-based blitter from the intermediate Rgba8Unorm storage texture to the surface.
+    blitter: wgpu::util::TextureBlitter,
+    /// Intermediate Rgba8Unorm texture sized to the surface; recreated on resize.
+    intermediate: (wgpu::Texture, wgpu::TextureView),
+}
+
+impl Gpu {
+    fn make_intermediate(
+        device: &wgpu::Device,
+        width: u32,
+        height: u32,
+    ) -> (wgpu::Texture, wgpu::TextureView) {
+        let tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("vello-intermediate"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            // STORAGE_BINDING for vello render_to_texture; TEXTURE_BINDING so the blitter
+            // can sample it.
+            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+        (tex, view)
+    }
+
+    fn reconfigure(&mut self, width: u32, height: u32) {
+        self.config.width = width.max(1);
+        self.config.height = height.max(1);
+        self.surface.configure(&self.device, &self.config);
+        self.intermediate =
+            Self::make_intermediate(&self.device, self.config.width, self.config.height);
+    }
+}
+
+struct App {
+    skin_index: usize,
+    engine: Engine,
+    cursor: (f64, f64),
+    last: Instant,
+    window: Option<Arc<Window>>,
+    gpu: Option<Gpu>,
+    renderer: Option<Renderer>,
+}
+
+impl App {
+    fn new() -> Self {
+        let (src, _canvas) = load_source(0);
+        let engine = Engine::new(Box::new(DemoHost::new()), VocabRegistry::base(), src).unwrap();
+        Self {
+            skin_index: 0,
+            engine,
+            cursor: (0.0, 0.0),
+            last: Instant::now(),
+            window: None,
+            gpu: None,
+            renderer: None,
+        }
+    }
+}
+
+impl ApplicationHandler for App {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        // Guard: winit may call resumed again on foreground transitions; create once.
+        if self.window.is_some() {
+            return;
+        }
+
+        // Size window from the initial skin canvas * scale.
+        let (cw, ch) = self.engine.scene().canvas;
+        let attrs = Window::default_attributes()
+            .with_title("carapace skin engine")
+            .with_inner_size(winit::dpi::LogicalSize::new(
+                cw * INIT_SCALE,
+                ch * INIT_SCALE,
+            ));
+        let window = Arc::new(event_loop.create_window(attrs).unwrap());
+        let phys = window.inner_size();
+        let (pw, ph) = (phys.width.max(1), phys.height.max(1));
+
+        let gpu = pollster::block_on(async {
+            let instance = wgpu::Instance::default();
+            // Surface must be created from Arc<Window> for 'static lifetime.
+            let surface = instance
+                .create_surface(window.clone())
+                .expect("create wgpu surface");
+
+            let adapter = instance
+                .request_adapter(&wgpu::RequestAdapterOptions {
+                    compatible_surface: Some(&surface),
+                    ..Default::default()
+                })
+                .await
+                .expect("no compatible wgpu adapter");
+
+            let (device, queue) = adapter
+                .request_device(&wgpu::DeviceDescriptor::default())
+                .await
+                .expect("create wgpu device");
+
+            let caps = surface.get_capabilities(&adapter);
+            // Use the first supported format (typically Bgra8Unorm on macOS Metal).
+            let surface_format = *caps
+                .formats
+                .first()
+                .expect("surface has no supported formats");
+
+            let config = wgpu::SurfaceConfiguration {
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                format: surface_format,
+                width: pw,
+                height: ph,
+                present_mode: wgpu::PresentMode::Fifo,
+                alpha_mode: caps.alpha_modes[0],
+                view_formats: vec![],
+                desired_maximum_frame_latency: 2,
+            };
+            surface.configure(&device, &config);
+
+            // Blitter: converts the Rgba8Unorm intermediate texture to the surface format.
+            let blitter = wgpu::util::TextureBlitter::new(&device, surface_format);
+
+            let intermediate = Gpu::make_intermediate(&device, pw, ph);
+
+            Gpu {
+                surface,
+                device,
+                queue,
+                config,
+                blitter,
+                intermediate,
+            }
+        });
+
+        let renderer = Renderer::new(&gpu.device);
+
+        self.window = Some(window.clone());
+        self.gpu = Some(gpu);
+        self.renderer = Some(renderer);
+
+        window.request_redraw();
+    }
+
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+        match event {
+            WindowEvent::CloseRequested => event_loop.exit(),
+
+            WindowEvent::Resized(size) => {
+                if let Some(gpu) = self.gpu.as_mut() {
+                    gpu.reconfigure(size.width, size.height);
+                }
+            }
+
+            WindowEvent::RedrawRequested => {
+                let now = Instant::now();
+                let dt = now - self.last;
+                self.last = now;
+
+                self.engine.update(dt);
+
+                let (Some(gpu), Some(renderer)) = (self.gpu.as_mut(), self.renderer.as_mut())
+                else {
+                    return;
+                };
+
+                // Acquire the surface frame.  wgpu 29 returns CurrentSurfaceTexture (not Result).
+                let frame = match gpu.surface.get_current_texture() {
+                    wgpu::CurrentSurfaceTexture::Success(f) => f,
+                    wgpu::CurrentSurfaceTexture::Suboptimal(f) => {
+                        // Still renderable; reconfigure next frame for best quality.
+                        f
+                    }
+                    wgpu::CurrentSurfaceTexture::Lost | wgpu::CurrentSurfaceTexture::Outdated => {
+                        // Reconfigure and skip this frame.
+                        let (w, h) = (gpu.config.width, gpu.config.height);
+                        gpu.reconfigure(w, h);
+                        if let Some(w) = &self.window {
+                            w.request_redraw();
+                        }
+                        return;
+                    }
+                    wgpu::CurrentSurfaceTexture::Timeout
+                    | wgpu::CurrentSurfaceTexture::Occluded
+                    | wgpu::CurrentSurfaceTexture::Validation => {
+                        // Skip the frame; try again next vsync.
+                        if let Some(w) = &self.window {
+                            w.request_redraw();
+                        }
+                        return;
+                    }
+                };
+
+                let surface_view = frame
+                    .texture
+                    .create_view(&wgpu::TextureViewDescriptor::default());
+
+                // Render the scene into the intermediate Rgba8Unorm storage texture.
+                let scene = self.engine.scene();
+                let read_value = |k: &str| self.engine.state(k);
+                renderer.draw(
+                    scene,
+                    read_value,
+                    &RenderTarget {
+                        device: &gpu.device,
+                        queue: &gpu.queue,
+                        view: &gpu.intermediate.1,
+                        width: gpu.config.width,
+                        height: gpu.config.height,
+                    },
+                );
+
+                // Blit the intermediate texture onto the surface frame using a render pass
+                // (handles format mismatch between Rgba8Unorm and the surface format).
+                let mut encoder =
+                    gpu.device
+                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                            label: Some("blit-encoder"),
+                        });
+                gpu.blitter.copy(
+                    &gpu.device,
+                    &mut encoder,
+                    &gpu.intermediate.1,
+                    &surface_view,
+                );
+                gpu.queue.submit(Some(encoder.finish()));
+
+                frame.present();
+
+                // Drive continuous animation at vsync.
+                if let Some(w) = &self.window {
+                    w.request_redraw();
+                }
+            }
+
+            WindowEvent::CursorMoved { position, .. } => {
+                self.cursor = (position.x, position.y);
+            }
+
+            WindowEvent::MouseInput { state, button, .. }
+                if state == ElementState::Pressed && button == MouseButton::Left =>
+            {
+                if let Some(window) = self.window.as_ref() {
+                    let phys = window.inner_size();
+                    let (pw, ph) = (phys.width.max(1) as f64, phys.height.max(1) as f64);
+                    let (cw, ch) = self.engine.scene().canvas;
+                    // Map physical cursor -> canvas coords via the same ratio used for the blit.
+                    let cx = (self.cursor.0 * cw as f64 / pw) as f32;
+                    let cy = (self.cursor.1 * ch as f64 / ph) as f32;
+                    self.engine
+                        .handle_pointer(Pt { x: cx, y: cy }, PointerEvent::Press);
+                }
+            }
+
+            WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
+                match event.logical_key {
+                    Key::Named(NamedKey::Escape) => event_loop.exit(),
+                    Key::Named(NamedKey::Tab) => {
+                        self.skin_index = (self.skin_index + 1) % SKINS.len();
+                        let (src, _) = load_source(self.skin_index);
+                        self.engine.handle_command(Command::Swap(src));
+                        if let Some(w) = &self.window {
+                            w.request_redraw();
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            _ => {}
+        }
+    }
+}
+
+fn main() {
+    let event_loop = EventLoop::new().unwrap();
+    let mut app = App::new();
+    event_loop.run_app(&mut app).unwrap();
+}

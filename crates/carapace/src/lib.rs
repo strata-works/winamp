@@ -1,6 +1,7 @@
 pub mod command;
 pub mod engine;
 pub mod host;
+pub mod render;
 pub mod scene;
 pub mod script;
 pub mod skin;
