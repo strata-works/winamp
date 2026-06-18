@@ -1,0 +1,14 @@
+[package]
+name = "carapace-demo"
+version = "0.0.0"
+edition = "2024"
+
+[dependencies]
+carapace = { path = "../carapace" }
+winit = "0.30.13"
+wgpu = "29.0.3"
+pollster = "0.4.0"
+
+[[bin]]
+name = "carapace-demo"
+path = "src/main.rs"
