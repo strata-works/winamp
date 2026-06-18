@@ -17,9 +17,19 @@ pub type HandlerId = usize;
 
 #[derive(Clone, Debug)]
 pub enum Node {
-    Fill { path: Vec<Pt>, color: Color },
-    Hotspot { region: Region, on_press: HandlerId },
-    ValueFill { path: Vec<Pt>, value_key: String, color: Color },
+    Fill {
+        path: Vec<Pt>,
+        color: Color,
+    },
+    Hotspot {
+        region: Region,
+        on_press: HandlerId,
+    },
+    ValueFill {
+        path: Vec<Pt>,
+        value_key: String,
+        color: Color,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -42,7 +52,8 @@ impl Scene {
     pub fn hit(&self, p: Pt) -> Option<HandlerId> {
         for node in self.nodes.iter().rev() {
             if let Node::Hotspot { region, on_press } = node
-                && region.contains(Point { x: p.x, y: p.y }) {
+                && region.contains(Point { x: p.x, y: p.y })
+            {
                 return Some(*on_press);
             }
         }
@@ -66,18 +77,27 @@ mod tests {
     }
 
     fn hotspot(path: &[Pt], id: HandlerId) -> Node {
-        Node::Hotspot { region: region_of(path), on_press: id }
+        Node::Hotspot {
+            region: region_of(path),
+            on_press: id,
+        }
     }
 
     #[test]
     fn click_inside_hotspot_returns_handler() {
-        let s = Scene { nodes: vec![hotspot(&l_path(), 7)], canvas: (200, 200) };
+        let s = Scene {
+            nodes: vec![hotspot(&l_path(), 7)],
+            canvas: (200, 200),
+        };
         assert_eq!(s.hit(Pt { x: 60.0, y: 60.0 }), Some(7));
     }
 
     #[test]
     fn click_in_concave_notch_misses() {
-        let s = Scene { nodes: vec![hotspot(&l_path(), 7)], canvas: (200, 200) };
+        let s = Scene {
+            nodes: vec![hotspot(&l_path(), 7)],
+            canvas: (200, 200),
+        };
         assert_eq!(s.hit(Pt { x: 130.0, y: 130.0 }), None);
     }
 
@@ -89,7 +109,10 @@ mod tests {
             Pt { x: 100.0, y: 100.0 },
             Pt { x: 0.0, y: 100.0 },
         ];
-        let s = Scene { nodes: vec![hotspot(&sq, 1), hotspot(&sq, 2)], canvas: (200, 200) };
+        let s = Scene {
+            nodes: vec![hotspot(&sq, 1), hotspot(&sq, 2)],
+            canvas: (200, 200),
+        };
         assert_eq!(s.hit(Pt { x: 50.0, y: 50.0 }), Some(2));
     }
 }

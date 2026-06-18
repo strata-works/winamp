@@ -35,8 +35,8 @@ fn make_host(host_index: usize) -> Box<dyn Host> {
 }
 
 fn load_engine(host_index: usize, skin_index: usize) -> Engine {
-    let files = load_dir(&skin_root().join(SKIN_DIRS[host_index][skin_index]))
-        .expect("load skin dir");
+    let files =
+        load_dir(&skin_root().join(SKIN_DIRS[host_index][skin_index])).expect("load skin dir");
     Engine::new(
         make_host(host_index),
         &files.lua_src,
@@ -140,11 +140,13 @@ impl App {
 
     fn swap_skin(&mut self) {
         self.skin_index ^= 1;
-        let files =
-            load_dir(&skin_root().join(SKIN_DIRS[self.host_index][self.skin_index]))
-                .expect("load skin dir");
+        let files = load_dir(&skin_root().join(SKIN_DIRS[self.host_index][self.skin_index]))
+            .expect("load skin dir");
         self.engine
-            .swap(&files.lua_src, (files.manifest.width, files.manifest.height))
+            .swap(
+                &files.lua_src,
+                (files.manifest.width, files.manifest.height),
+            )
             .expect("swap engine");
         println!(
             "[{}] swapped to skin {}, state preserved",
@@ -156,10 +158,7 @@ impl App {
         self.host_index ^= 1;
         self.skin_index = 0;
         self.engine = load_engine(self.host_index, 0);
-        println!(
-            "switched to host_index={}, skin_index=0",
-            self.host_index
-        );
+        println!("switched to host_index={}, skin_index=0", self.host_index);
     }
 }
 

@@ -1,7 +1,7 @@
 use std::rc::Rc;
 use std::time::Duration;
 
-use crate::command::{new_queue, Command, Queue, SkinSource};
+use crate::command::{Command, Queue, SkinSource, new_queue};
 use crate::host::Host;
 use crate::scene::{Pt, Scene};
 use crate::script::{LoadedSkin, ScriptError};
@@ -29,13 +29,19 @@ impl Engine {
         let registry = Rc::new(registry);
         let queue = new_queue();
         let skin = rebuild(&initial, host.as_ref(), registry.clone(), queue.clone())?;
-        Ok(Engine { host, registry, queue, skin })
+        Ok(Engine {
+            host,
+            registry,
+            queue,
+            skin,
+        })
     }
 
     /// Phase 1 (input): resolve the hit and run the handler, which only enqueues.
     pub fn handle_pointer(&mut self, p: Pt, _kind: PointerEvent) {
         if let Some(id) = self.skin.scene.hit(p)
-            && let Err(e) = self.skin.fire(id) {
+            && let Err(e) = self.skin.fire(id)
+        {
             // A bad handler drops its command(s); the loop continues.
             eprintln!("carapace: handler error: {e:?}");
         }
@@ -70,7 +76,12 @@ impl Engine {
     }
 
     fn apply_swap(&mut self, source: &SkinSource) {
-        match rebuild(source, self.host.as_ref(), self.registry.clone(), self.queue.clone()) {
+        match rebuild(
+            source,
+            self.host.as_ref(),
+            self.registry.clone(),
+            self.queue.clone(),
+        ) {
             Ok(skin) => self.skin = skin, // transactional: only replace on success
             Err(e) => eprintln!("carapace: swap failed, keeping current skin: {e:?}"),
         }

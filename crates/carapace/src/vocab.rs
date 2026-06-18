@@ -27,11 +27,16 @@ pub trait Primitive {
 }
 
 pub fn parse_path(t: &Table) -> Result<Vec<Pt>, BuildError> {
-    let path: Table = t.get("path").map_err(|_| BuildError::MissingField("path"))?;
+    let path: Table = t
+        .get("path")
+        .map_err(|_| BuildError::MissingField("path"))?;
     let mut pts = Vec::new();
     for entry in path.sequence_values::<Table>() {
         let p = entry?;
-        pts.push(Pt { x: p.get("x")?, y: p.get("y")? });
+        pts.push(Pt {
+            x: p.get("x")?,
+            y: p.get("y")?,
+        });
     }
     if pts.len() < 3 {
         return Err(BuildError::BadType("path needs >= 3 points"));
@@ -40,8 +45,14 @@ pub fn parse_path(t: &Table) -> Result<Vec<Pt>, BuildError> {
 }
 
 pub fn parse_color(t: &Table) -> Result<Color, BuildError> {
-    let c: Table = t.get("color").map_err(|_| BuildError::MissingField("color"))?;
-    Ok(Color { r: c.get("r")?, g: c.get("g")?, b: c.get("b")? })
+    let c: Table = t
+        .get("color")
+        .map_err(|_| BuildError::MissingField("color"))?;
+    Ok(Color {
+        r: c.get("r")?,
+        g: c.get("g")?,
+        b: c.get("b")?,
+    })
 }
 
 struct FillPrim;
@@ -50,7 +61,10 @@ impl Primitive for FillPrim {
         "fill"
     }
     fn build(&self, args: &Table, _ctx: &mut dyn BuildContext) -> Result<Node, BuildError> {
-        Ok(Node::Fill { path: parse_path(args)?, color: parse_color(args)? })
+        Ok(Node::Fill {
+            path: parse_path(args)?,
+            color: parse_color(args)?,
+        })
     }
 }
 
@@ -65,7 +79,10 @@ impl Primitive for RegionPrim {
             .get("on_press")
             .map_err(|_| BuildError::MissingField("on_press"))?;
         let id = ctx.register_handler(on_press);
-        Ok(Node::Hotspot { region: crate::scene::region_of(&path), on_press: id })
+        Ok(Node::Hotspot {
+            region: crate::scene::region_of(&path),
+            on_press: id,
+        })
     }
 }
 
@@ -75,8 +92,14 @@ impl Primitive for ValueFillPrim {
         "value_fill"
     }
     fn build(&self, args: &Table, _ctx: &mut dyn BuildContext) -> Result<Node, BuildError> {
-        let value_key: String = args.get("value").map_err(|_| BuildError::MissingField("value"))?;
-        Ok(Node::ValueFill { path: parse_path(args)?, value_key, color: parse_color(args)? })
+        let value_key: String = args
+            .get("value")
+            .map_err(|_| BuildError::MissingField("value"))?;
+        Ok(Node::ValueFill {
+            path: parse_path(args)?,
+            value_key,
+            color: parse_color(args)?,
+        })
     }
 }
 
@@ -183,7 +206,10 @@ mod tests {
     fn missing_field_errors() {
         let lua = Lua::new();
         let t = tbl(&lua, "return { color = {r=0,g=0,b=0} }"); // no path
-        assert!(matches!(FillPrim.build(&t, &mut NoHandlers), Err(BuildError::MissingField("path"))));
+        assert!(matches!(
+            FillPrim.build(&t, &mut NoHandlers),
+            Err(BuildError::MissingField("path"))
+        ));
     }
 
     #[test]

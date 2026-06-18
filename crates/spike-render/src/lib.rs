@@ -43,7 +43,10 @@ pub fn parity_check(region: &Region, pm: &Pixmap, fill: [u8; 4], bg: [u8; 4]) ->
             }
         }
     }
-    ParityReport { checked, mismatches }
+    ParityReport {
+        checked,
+        mismatches,
+    }
 }
 
 #[cfg(test)]
@@ -77,7 +80,11 @@ mod tests {
                 data.extend_from_slice(&c);
             }
         }
-        Pixmap { width: 4, height: 4, data }
+        Pixmap {
+            width: 4,
+            height: 4,
+            data,
+        }
     }
 
     #[test]
