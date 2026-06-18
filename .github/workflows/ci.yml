@@ -26,14 +26,14 @@ jobs:
           restore-keys: ${{ runner.os }}-cargo-
       - name: Format
         run: cargo fmt --all --check
-      - name: Clippy (keeper crates)
-        run: cargo clippy -p hittest -p carapace --all-targets -- -D warnings
-      - name: Test (headless keeper crates)
-        # Scoped to the headless keeper crates: proto/spike-render have GPU render
-        # tests (wgpu request_adapter) that fail on the GPU-less runner, and are
-        # throwaway (removed end of Phase 3). The 3b plan adds a GPU/render CI leg
-        # (software adapter) and widens this to --workspace once render lands.
-        run: cargo test -p hittest -p carapace
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Test (headless workspace)
+        # Whole workspace now that the throwaway proto/spike-render crates are gone.
+        # The only GPU test (carapace render_offscreen) is gated behind the `gpu-tests`
+        # feature, so it compiles out here and runs only in the `render` (lavapipe) job;
+        # benches don't run under `cargo test`. So this stays headless + GPU-free.
+        run: cargo test --workspace
 
   render:
     runs-on: ubuntu-latest
