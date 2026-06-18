@@ -102,18 +102,23 @@ the host hands over wgpu handles per frame; `Renderer` owns only the persistent
 `vello::Renderer`.
 
 **Canvas→surface scaling:** skins declare `scene.canvas`; the surface may differ. `draw`
-applies a uniform scale transform (canvas→surface) so the skin fills the window; the demo
-maps clicks back through the same scale (DPI-correct, carried from the Phase 1 viewer).
+applies a **non-uniform** scale transform (canvas→surface, stretch-to-fill) so the skin
+fills the window; the demo maps clicks back through the **matching inverse** ratio
+(`canvas/physical`), so clicks stay correct at any window aspect (DPI-correct, carried from
+the Phase 1 viewer). *(As built: non-uniform stretch rather than letterbox — the two
+mappings are exact inverses, so hit-testing stays consistent.)*
 
 ## 3. Render testing & perf benches
 
 **Offscreen render-parity + pixel-golden test (the testable render coverage).** `draw`
 targets any `TextureView`, so the test renders to an **offscreen** `Rgba8Unorm` texture
 (no window), reads pixels back (the proven Phase 0 vello readback), and asserts:
-- **parity** (primary gate): every unambiguous (non-AA) filled pixel agrees with `hittest`
-  for the node geometry — Phase 0's approach, AA pixels skipped.
-- **one committed pixel-golden PNG** of a representative scene (Flutter-Gold analog),
-  **generated under `lavapipe`** for determinism, with a bless command.
+- **sentinel-pixel assertions** (primary gate, *as built*): assert specific known pixels
+  equal expected colors (inside a fill = its color; outside = base black; a `value_fill`
+  half-filled at value 0.5). Deterministic across the `lavapipe` software adapter and robust
+  to AA — the robust subset of the parity idea.
+- a full committed **pixel-golden PNG** (Flutter-Gold analog) is **deferred** — fragile to
+  AA/driver differences; the sentinel-pixel gate is what we ship.
 
 These need a GPU adapter, so they are gated (a `gpu-tests` feature or `#[ignore]`) and run
 only in the `lavapipe` job — the fast headless gate skips them.
