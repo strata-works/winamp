@@ -34,3 +34,29 @@ jobs:
         # throwaway (removed end of Phase 3). The 3b plan adds a GPU/render CI leg
         # (software adapter) and widens this to --workspace once render lands.
         run: cargo test -p hittest -p carapace
+
+  render:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal
+      - name: Install Mesa lavapipe (software Vulkan)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mesa-vulkan-drivers libvulkan1 vulkan-tools
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-render-${{ hashFiles('**/Cargo.toml') }}
+          restore-keys: ${{ runner.os }}-cargo-render-
+      - name: Render tests (software adapter)
+        env:
+          # Force the lavapipe software Vulkan ICD.
+          VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+          WGPU_BACKEND: vulkan
+        run: cargo test -p carapace --features gpu-tests --test render_offscreen
