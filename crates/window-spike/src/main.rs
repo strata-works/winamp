@@ -35,8 +35,24 @@ fn load_headspace_bitmap() -> Bitmap {
     // The reference skin's first Image node is the Headspace faceplate.
     for node in &engine.scene().nodes {
         if let Node::Image { image, .. } = node {
+            let mut rgba = image.rgba.clone();
+            // SPIKE color-key: headspace.png has NO alpha channel (opaque background,
+            // `sips hasAlpha: no`). Real WMP skins shaped the window with a separate region
+            // mask. To prove the transparency pipeline here, treat the top-left corner color
+            // as the transparent key and zero the alpha of near-matching pixels. (Finding:
+            // total window replacement needs skins authored with alpha or a shape/region mask.)
+            let key = [rgba[0], rgba[1], rgba[2]];
+            const TOL: i32 = 28;
+            for px in rgba.chunks_exact_mut(4) {
+                let d = (px[0] as i32 - key[0] as i32).abs()
+                    + (px[1] as i32 - key[1] as i32).abs()
+                    + (px[2] as i32 - key[2] as i32).abs();
+                if d <= TOL {
+                    px[3] = 0;
+                }
+            }
             return Bitmap {
-                rgba: Arc::new(image.rgba.clone()),
+                rgba: Arc::new(rgba),
                 w: image.width,
                 h: image.height,
             };
