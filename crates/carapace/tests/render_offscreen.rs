@@ -1,7 +1,7 @@
 #![cfg(feature = "gpu-tests")]
 
 use carapace::render::{RenderTarget, Renderer};
-use carapace::scene::{Color, Node, Pt, Scene};
+use carapace::scene::{Color, ColorStop, Gradient, Node, Paint, Pt, Scene};
 use carapace::state::StateValue;
 
 // Build a device + an offscreen Rgba8Unorm storage texture, render, read back.
@@ -107,6 +107,15 @@ fn px(data: &[u8], w: u32, x: u32, y: u32) -> [u8; 3] {
     [data[i], data[i + 1], data[i + 2]]
 }
 
+fn rect(x0: f32, y0: f32, x1: f32, y1: f32) -> Vec<Pt> {
+    vec![
+        Pt { x: x0, y: y0 },
+        Pt { x: x1, y: y0 },
+        Pt { x: x1, y: y1 },
+        Pt { x: x0, y: y1 },
+    ]
+}
+
 #[test]
 fn renders_fill_and_value_fill_at_sentinel_pixels() {
     let o = offscreen(200, 200);
@@ -122,7 +131,12 @@ fn renders_fill_and_value_fill_at_sentinel_pixels() {
                     Pt { x: 100.0, y: 100.0 },
                     Pt { x: 20.0, y: 100.0 },
                 ],
-                color: Color { r: 255, g: 0, b: 0 },
+                paint: Paint::Solid(Color {
+                    r: 255,
+                    g: 0,
+                    b: 0,
+                    a: 255,
+                }),
             },
             // a value_fill bar across the bottom, value=0.5 -> fills left half of its bbox
             Node::ValueFill {
@@ -133,7 +147,12 @@ fn renders_fill_and_value_fill_at_sentinel_pixels() {
                     Pt { x: 0.0, y: 170.0 },
                 ],
                 value_key: "v".to_string(),
-                color: Color { r: 0, g: 255, b: 0 },
+                color: Color {
+                    r: 0,
+                    g: 255,
+                    b: 0,
+                    a: 255,
+                },
             },
         ],
     };
@@ -255,5 +274,134 @@ fn renders_an_image_at_sentinel_pixels() {
         (g[0] as i32 - 188).abs() <= 4,
         "byte-passthrough preserves sRGB grey ~188, got {}",
         g[0]
+    );
+}
+
+#[test]
+fn renders_translucent_fill_blended_over_background() {
+    let o = offscreen(100, 100);
+    let mut r = Renderer::new(&o.device);
+    let scene = Scene {
+        canvas: (100, 100),
+        nodes: vec![
+            // opaque red background
+            Node::Fill {
+                path: rect(0.0, 0.0, 100.0, 100.0),
+                paint: Paint::Solid(Color {
+                    r: 255,
+                    g: 0,
+                    b: 0,
+                    a: 255,
+                }),
+            },
+            // 50%-alpha blue over it
+            Node::Fill {
+                path: rect(0.0, 0.0, 100.0, 100.0),
+                paint: Paint::Solid(Color {
+                    r: 0,
+                    g: 0,
+                    b: 255,
+                    a: 128,
+                }),
+            },
+        ],
+    };
+    let read = |_k: &str| None;
+    r.draw(
+        &scene,
+        read,
+        &RenderTarget {
+            device: &o.device,
+            queue: &o.queue,
+            view: &o.view,
+            width: o.w,
+            height: o.h,
+        },
+    );
+    let data = readback(&o);
+    let p = px(&data, 100, 50, 50);
+    // Straight-alpha "blue over red": result ≈ blend of the two. This also pins that
+    // alpha is wired through `from_rgba8` (not dropped to 255). Tolerance absorbs the
+    // pipeline's blend-space nuance (vello 0.9 byte-passthrough).
+    assert!(
+        (p[0] as i32 - 127).abs() <= 16,
+        "R blended toward ~127, got {}",
+        p[0]
+    );
+    assert!(p[1] <= 8, "no green, got {}", p[1]);
+    assert!(
+        (p[2] as i32 - 128).abs() <= 16,
+        "B blended toward ~128, got {}",
+        p[2]
+    );
+}
+
+#[test]
+fn renders_linear_gradient_oriented_and_interpolating() {
+    let o = offscreen(200, 50);
+    let mut r = Renderer::new(&o.device);
+    let scene = Scene {
+        canvas: (200, 50),
+        nodes: vec![Node::Fill {
+            path: rect(0.0, 0.0, 200.0, 50.0),
+            paint: Paint::Gradient(Gradient::Linear {
+                from: Pt { x: 0.0, y: 0.0 },
+                to: Pt { x: 200.0, y: 0.0 },
+                stops: vec![
+                    ColorStop {
+                        at: 0.0,
+                        color: Color {
+                            r: 255,
+                            g: 0,
+                            b: 0,
+                            a: 255,
+                        },
+                    },
+                    ColorStop {
+                        at: 1.0,
+                        color: Color {
+                            r: 0,
+                            g: 0,
+                            b: 255,
+                            a: 255,
+                        },
+                    },
+                ],
+            }),
+        }],
+    };
+    let read = |_k: &str| None;
+    r.draw(
+        &scene,
+        read,
+        &RenderTarget {
+            device: &o.device,
+            queue: &o.queue,
+            view: &o.view,
+            width: o.w,
+            height: o.h,
+        },
+    );
+    let data = readback(&o);
+    let left = px(&data, 200, 10, 25);
+    let mid = px(&data, 200, 100, 25);
+    let right = px(&data, 200, 190, 25);
+    // Endpoints + orientation: left is red-dominant, right is blue-dominant (horizontal red→blue).
+    assert!(left[0] > 200 && left[2] < 60, "left ~red, got {:?}", left);
+    assert!(
+        right[2] > 200 && right[0] < 60,
+        "right ~blue, got {:?}",
+        right
+    );
+    // Interpolation: R decreases and B increases left→right (robust to interpolation color space).
+    assert!(
+        mid[0] < left[0] && mid[0] > right[0],
+        "R decreases L→R, mid {:?}",
+        mid
+    );
+    assert!(
+        mid[2] > left[2] && mid[2] < right[2],
+        "B increases L→R, mid {:?}",
+        mid
     );
 }

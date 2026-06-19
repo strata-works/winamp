@@ -1,6 +1,16 @@
 -- The genuine Headspace WMP artwork as the faceplate (native 342x394).
 image{ asset = "headspace.png", x = 0, y = 0 }
 
+-- Y2K glass sheen across the header band (translucent white, fading down).
+fill{ path = {{x=0,y=0},{x=342,y=0},{x=342,y=46},{x=0,y=46}}, gradient = {
+  type = "linear", from = {x=0,y=0}, to = {x=0,y=46},
+  stops = { {at=0, color={r=255,g=255,b=255, a=110}},
+            {at=1, color={r=255,g=255,b=255, a=0}} } } }
+-- Radial glossy highlight over the play transport.
+fill{ path = {{x=148,y=18},{x=184,y=18},{x=184,y=54},{x=148,y=54}}, gradient = {
+  type = "radial", center = {x=166,y=36}, radius = 18,
+  stops = { {at=0, color={r=255,g=255,b=255, a=170}},
+            {at=1, color={r=255,g=255,b=255, a=0}} } } }
 -- Invisible interactive overlays on top of the bitmap (positions traced from the artwork):
 -- play/pause hotspot over the transport area
 region{ path = {{x=150,y=24},{x=178,y=24},{x=178,y=48},{x=150,y=48}},

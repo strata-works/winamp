@@ -6,13 +6,13 @@ expression: t
 scene:
 canvas 200x200
 hotspot handler=0
-value_fill key=level rgb=1,2,3
+value_fill key=level rgba=1,2,3,255
 state: on=Some(Bool(false)) flag=None
 === step 1 ===
 scene:
 canvas 200x200
 hotspot handler=0
-value_fill key=level rgb=1,2,3
+value_fill key=level rgba=1,2,3,255
 state: on=Some(Bool(true)) flag=None
 === step 2 ===
 scene:

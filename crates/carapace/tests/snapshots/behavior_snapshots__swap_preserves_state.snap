@@ -6,22 +6,22 @@ expression: t
 scene:
 canvas 200x200
 hotspot handler=0
-value_fill key=level rgb=1,2,3
+value_fill key=level rgba=1,2,3,255
 state: on=Some(Bool(false)) level=Some(Scalar(0.0))
 === step 1 ===
 scene:
 canvas 200x200
 hotspot handler=0
-value_fill key=level rgb=1,2,3
+value_fill key=level rgba=1,2,3,255
 state: on=Some(Bool(true)) level=Some(Scalar(0.0))
 === step 2 ===
 scene:
 canvas 200x200
 hotspot handler=0
-value_fill key=level rgb=1,2,3
+value_fill key=level rgba=1,2,3,255
 state: on=Some(Bool(true)) level=Some(Scalar(0.3))
 === step 3 ===
 scene:
 canvas 200x200
-value_fill key=level rgb=9,9,9
+value_fill key=level rgba=9,9,9,255
 state: on=Some(Bool(true)) level=Some(Scalar(0.3))

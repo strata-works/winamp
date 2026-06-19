@@ -11,6 +11,39 @@ pub struct Color {
     pub r: u8,
     pub g: u8,
     pub b: u8,
+    pub a: u8,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ColorStop {
+    pub at: f32,
+    pub color: Color,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Gradient {
+    Linear {
+        from: Pt,
+        to: Pt,
+        stops: Vec<ColorStop>,
+    },
+    Radial {
+        center: Pt,
+        radius: f32,
+        stops: Vec<ColorStop>,
+    },
+    Sweep {
+        center: Pt,
+        start_deg: f32,
+        end_deg: f32,
+        stops: Vec<ColorStop>,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Paint {
+    Solid(Color),
+    Gradient(Gradient),
 }
 
 pub type HandlerId = usize;
@@ -27,7 +60,7 @@ pub struct ImageDest {
 pub enum Node {
     Fill {
         path: Vec<Pt>,
-        color: Color,
+        paint: Paint,
     },
     Hotspot {
         region: Region,
@@ -66,15 +99,23 @@ impl Scene {
         let mut lines = vec![format!("canvas {}x{}", self.canvas.0, self.canvas.1)];
         for node in &self.nodes {
             lines.push(match node {
-                Node::Fill { color, .. } => {
-                    format!("fill rgb={},{},{}", color.r, color.g, color.b)
-                }
+                Node::Fill { paint, .. } => match paint {
+                    Paint::Solid(c) => format!("fill rgba={},{},{},{}", c.r, c.g, c.b, c.a),
+                    Paint::Gradient(g) => {
+                        let (kind, n) = match g {
+                            Gradient::Linear { stops, .. } => ("linear", stops.len()),
+                            Gradient::Radial { stops, .. } => ("radial", stops.len()),
+                            Gradient::Sweep { stops, .. } => ("sweep", stops.len()),
+                        };
+                        format!("fill gradient={} stops={}", kind, n)
+                    }
+                },
                 Node::Hotspot { on_press, .. } => format!("hotspot handler={}", on_press),
                 Node::ValueFill {
                     value_key, color, ..
                 } => format!(
-                    "value_fill key={} rgb={},{},{}",
-                    value_key, color.r, color.g, color.b
+                    "value_fill key={} rgba={},{},{},{}",
+                    value_key, color.r, color.g, color.b, color.a
                 ),
                 Node::Image { image, dest } => format!(
                     "image {}x{} at {},{} dest {}x{}",
@@ -150,11 +191,12 @@ mod tests {
             nodes: vec![
                 Node::Fill {
                     path: vec![Pt { x: 0.0, y: 0.0 }],
-                    color: Color {
+                    paint: Paint::Solid(Color {
                         r: 10,
                         g: 20,
                         b: 30,
-                    },
+                        a: 255,
+                    }),
                 },
                 Node::Hotspot {
                     region: region_of(&l_path()),
@@ -163,14 +205,19 @@ mod tests {
                 Node::ValueFill {
                     path: vec![Pt { x: 0.0, y: 0.0 }],
                     value_key: "level".to_string(),
-                    color: Color { r: 1, g: 2, b: 3 },
+                    color: Color {
+                        r: 1,
+                        g: 2,
+                        b: 3,
+                        a: 255,
+                    },
                 },
             ],
         };
         let expected = "canvas 300x120\n\
-                        fill rgb=10,20,30\n\
+                        fill rgba=10,20,30,255\n\
                         hotspot handler=2\n\
-                        value_fill key=level rgb=1,2,3";
+                        value_fill key=level rgba=1,2,3,255";
         assert_eq!(scene.summary(), expected);
     }
 
@@ -197,6 +244,44 @@ mod tests {
         assert_eq!(
             scene.summary(),
             "canvas 342x394\nimage 342x394 at 0,0 dest 342x394"
+        );
+    }
+
+    #[test]
+    fn summary_describes_gradient_fills() {
+        let scene = Scene {
+            canvas: (10, 10),
+            nodes: vec![Node::Fill {
+                path: vec![Pt { x: 0.0, y: 0.0 }],
+                paint: Paint::Gradient(Gradient::Linear {
+                    from: Pt { x: 0.0, y: 0.0 },
+                    to: Pt { x: 0.0, y: 10.0 },
+                    stops: vec![
+                        ColorStop {
+                            at: 0.0,
+                            color: Color {
+                                r: 0,
+                                g: 0,
+                                b: 0,
+                                a: 255,
+                            },
+                        },
+                        ColorStop {
+                            at: 1.0,
+                            color: Color {
+                                r: 255,
+                                g: 255,
+                                b: 255,
+                                a: 0,
+                            },
+                        },
+                    ],
+                }),
+            }],
+        };
+        assert_eq!(
+            scene.summary(),
+            "canvas 10x10\nfill gradient=linear stops=2"
         );
     }
 

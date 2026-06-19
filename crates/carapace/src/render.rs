@@ -1,10 +1,11 @@
 use vello::kurbo::{Affine, BezPath, Point as KPoint, Rect};
 use vello::peniko::{
-    Blob, Color as VColor, Fill, ImageAlphaType, ImageBrush, ImageData, ImageFormat, ImageQuality,
+    Blob, Brush, Color as VColor, Fill, Gradient as PGradient, ImageAlphaType, ImageBrush,
+    ImageData, ImageFormat, ImageQuality,
 };
 use vello::{AaConfig, RenderParams, Scene as VScene};
 
-use crate::scene::{Color, Node, Pt, Scene};
+use crate::scene::{Color, ColorStop, Gradient, Node, Paint, Pt, Scene};
 use crate::state::StateValue;
 
 pub struct RenderTarget<'a> {
@@ -20,7 +21,50 @@ pub struct Renderer {
 }
 
 fn vcolor(c: Color) -> VColor {
-    VColor::from_rgba8(c.r, c.g, c.b, 255)
+    VColor::from_rgba8(c.r, c.g, c.b, c.a)
+}
+
+fn pstops(stops: &[ColorStop]) -> Vec<(f32, VColor)> {
+    stops
+        .iter()
+        .map(|s| {
+            (
+                s.at,
+                VColor::from_rgba8(s.color.r, s.color.g, s.color.b, s.color.a),
+            )
+        })
+        .collect()
+}
+
+/// A peniko brush for a Paint.
+fn paint_brush(paint: &Paint) -> Brush {
+    match paint {
+        Paint::Solid(c) => Brush::Solid(vcolor(*c)),
+        Paint::Gradient(g) => Brush::Gradient(match g {
+            Gradient::Linear { from, to, stops } => PGradient::new_linear(
+                KPoint::new(from.x as f64, from.y as f64),
+                KPoint::new(to.x as f64, to.y as f64),
+            )
+            .with_stops(&pstops(stops)[..]),
+            Gradient::Radial {
+                center,
+                radius,
+                stops,
+            } => PGradient::new_radial(KPoint::new(center.x as f64, center.y as f64), *radius)
+                .with_stops(&pstops(stops)[..]),
+            Gradient::Sweep {
+                center,
+                start_deg,
+                end_deg,
+                stops,
+            } => PGradient::new_sweep(
+                KPoint::new(center.x as f64, center.y as f64),
+                start_deg.to_radians(),
+                end_deg.to_radians(),
+            )
+            .with_stops(&pstops(stops)[..]),
+        }),
+    }
 }
 
 fn bez(path: &[Pt]) -> BezPath {
@@ -83,8 +127,8 @@ impl Renderer {
         let mut vs = VScene::new();
         for node in &scene.nodes {
             match node {
-                Node::Fill { path, color } => {
-                    vs.fill(Fill::NonZero, xform, vcolor(*color), None, &bez(path));
+                Node::Fill { path, paint } => {
+                    vs.fill(Fill::NonZero, xform, &paint_brush(paint), None, &bez(path));
                 }
                 Node::Hotspot { .. } => {} // invisible
                 Node::ValueFill {
