@@ -48,4 +48,38 @@ fn headspace_reference_builds_with_bitmap() {
         nodes.iter().any(|n| matches!(n, Node::ValueFill { .. })),
         "has the live seek bar"
     );
+    use carapace::scene::Paint;
+    assert!(
+        nodes.iter().any(|n| matches!(
+            n,
+            Node::Fill {
+                paint: Paint::Gradient(_),
+                ..
+            }
+        )),
+        "reference skin now has gradient sheen/glossy accents"
+    );
+}
+
+#[test]
+fn minimal_has_a_sweep_gradient() {
+    use carapace::scene::{Gradient, Node, Paint};
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("skins/minimal");
+    let (_m, source) = carapace::skin::load_dir(&dir).unwrap();
+    let e = carapace::engine::Engine::new(
+        Box::new(carapace_demo::demo_host::DemoHost::new()),
+        carapace::vocab::VocabRegistry::base(),
+        source,
+    )
+    .unwrap();
+    assert!(
+        e.scene().nodes.iter().any(|n| matches!(
+            n,
+            Node::Fill {
+                paint: Paint::Gradient(Gradient::Sweep { .. }),
+                ..
+            }
+        )),
+        "minimal skin shows a sweep gradient"
+    );
 }
