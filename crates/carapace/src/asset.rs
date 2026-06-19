@@ -27,10 +27,17 @@ pub struct AssetResolver {
 
 fn walk(root: &Path, dir: &Path, index: &mut HashMap<String, PathBuf>) -> std::io::Result<()> {
     for entry in std::fs::read_dir(dir)? {
-        let path = entry?.path();
-        if path.is_dir() {
+        let entry = entry?;
+        // `DirEntry::file_type` does NOT follow symlinks (lstat). Skip symlinks so an asset
+        // link can't escape the skin dir to read an arbitrary file (sandbox integrity).
+        let ft = entry.file_type()?;
+        if ft.is_symlink() {
+            continue;
+        }
+        let path = entry.path();
+        if ft.is_dir() {
             walk(root, &path, index)?;
-        } else if path.is_file() {
+        } else if ft.is_file() {
             if let Ok(rel) = path.strip_prefix(root) {
                 index.insert(rel.to_string_lossy().replace('\\', "/"), path.clone());
             }
@@ -181,5 +188,22 @@ mod tests {
             AssetResolver::empty().image("red.png"),
             Err(AssetError::Unresolved(_))
         ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_escaping_the_skin_dir_is_not_resolved() {
+        let t = temp_skin("symlink");
+        // Write a secret OUTSIDE the skin dir and a symlink to it INSIDE assets/.
+        let secret = std::env::temp_dir().join("carapace-asset-symlink-secret.txt");
+        std::fs::write(&secret, b"top secret").unwrap();
+        std::os::unix::fs::symlink(&secret, t.0.join("assets/leak.txt")).unwrap();
+        let r = AssetResolver::resolve(&t.0, "assets").unwrap();
+        // The symlink must NOT have been indexed -> unresolvable.
+        assert!(matches!(
+            r.bytes("leak.txt"),
+            Err(AssetError::Unresolved(_))
+        ));
+        let _ = std::fs::remove_file(&secret);
     }
 }
