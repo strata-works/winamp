@@ -7,6 +7,10 @@ use crate::command::SkinSource;
 const SUPPORTED_SCHEMA: u32 = 1;
 const SUPPORTED_ENGINE: &str = "^0.1";
 
+fn default_asset_dir() -> String {
+    "assets".to_string()
+}
+
 #[derive(Debug, Deserialize, PartialEq)]
 pub struct Canvas {
     pub width: u32,
@@ -21,6 +25,8 @@ pub struct Manifest {
     pub engine: String,
     pub canvas: Canvas,
     pub entry: String,
+    #[serde(default = "default_asset_dir")]
+    pub asset_dir: String,
 }
 
 #[derive(Debug)]
@@ -29,6 +35,7 @@ pub enum SkinError {
     Toml(toml::de::Error),
     UnsupportedSchema(u32),
     EngineIncompat(String),
+    Asset(crate::asset::AssetError),
 }
 impl From<std::io::Error> for SkinError {
     fn from(e: std::io::Error) -> Self {
@@ -38,6 +45,11 @@ impl From<std::io::Error> for SkinError {
 impl From<toml::de::Error> for SkinError {
     fn from(e: toml::de::Error) -> Self {
         SkinError::Toml(e)
+    }
+}
+impl From<crate::asset::AssetError> for SkinError {
+    fn from(e: crate::asset::AssetError) -> Self {
+        SkinError::Asset(e)
     }
 }
 
@@ -51,7 +63,16 @@ pub fn load_dir(dir: &Path) -> Result<(Manifest, SkinSource), SkinError> {
     }
     let lua_src = std::fs::read_to_string(dir.join(&manifest.entry))?;
     let canvas = (manifest.canvas.width, manifest.canvas.height);
-    Ok((manifest, SkinSource::inline(lua_src, canvas)))
+    let assets = std::rc::Rc::new(crate::asset::AssetResolver::resolve(
+        dir,
+        &manifest.asset_dir,
+    )?);
+    let source = SkinSource {
+        lua_src,
+        canvas,
+        assets,
+    };
+    Ok((manifest, source))
 }
 
 #[cfg(test)]
