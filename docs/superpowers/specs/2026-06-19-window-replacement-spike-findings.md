@@ -37,12 +37,12 @@ feature needs the engine renderer to expose a **configurable base color (with al
 e.g. a `base_color` field on `RenderTarget` or a parameter on `Renderer::draw`, defaulting
 to opaque for the normal in-app demo and transparent for window-replacement hosts.
 
-## Tier 2 — drag + window controls: **code-complete & reviewed; runtime spot-checked**
-- Code: left-press on the body → `Window::drag_window()`; min-glyph rect → `Window::set_minimized(true)`; close-glyph rect → `event_loop.exit()`. Hit-tested in canvas space (cursor scaled by `bitmap / inner_size`). Reviewed correct; all are standard winit 0.30 calls.
-- Runtime: the window launched and **exited cleanly (exit 0)** on close across runs. Note the exit alone does NOT isolate the close-glyph rect: the native `WindowEvent::CloseRequested` path also calls `event_loop.exit()`, so a clean exit is consistent with *either* the drawn `X` glyph or a native close. Exact drag/minimize behavior and final control-rect alignment to the drawn `_`/`X` glyphs are to be ticked off by the human run; the rects are hardcoded eyeballed canvas coords and are trivially tunable.
+## Tier 2 — drag + window controls: **WORKED (human-confirmed)**
+- Code: left-press on the body → `Window::drag_window()`; min-glyph rect → `Window::set_minimized(true)`; close-glyph rect → `event_loop.exit()`. Hit-tested in canvas space (cursor scaled by `bitmap / inner_size`); all standard winit 0.30 calls.
+- Runtime (human run): dragging the head body moves the window, and the drawn `_`/`X` glyph rects minimize / quit as expected — confirmed working. The eyeballed canvas-space control rects landed acceptably on the drawn glyphs (they remain trivially tunable for the real phase).
 
-## Tier 3 — click-through verdict
-- `Window::set_cursor_hittest(false)` (toggled with the `t` key) is **whole-window** click-through only — it makes the entire window ignore the cursor, not the transparent pixels specifically.
+## Tier 3 — click-through verdict: **probe behaved as expected (human-confirmed)**
+- `Window::set_cursor_hittest(false)` (toggled with the `t` key) is **whole-window** click-through only — confirmed: toggling it makes the entire window ignore the cursor (clicks pass through everywhere), not the transparent pixels specifically.
 - **Per-pixel click-through** (clicks on transparent pixels fall through to apps behind, clicks on the head hit the skin) is **not reachable through winit's cross-platform API**. On macOS it requires native work — e.g. an `NSWindow` with a shaped input region, or feeding the skin's hit-test back into per-event accept/ignore. This is the genuinely hard part and stays a known unknown for the real phase (the engine already owns the shape via hit-testing, which is the raw material for a custom solution).
 
 ## Recommendation for the real phase
