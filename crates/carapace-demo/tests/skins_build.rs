@@ -25,11 +25,27 @@ fn minimal_builds() {
 }
 
 #[test]
-fn headspace_reference_builds() {
-    // The reference skin is intentionally busy — a render/perf stress scene.
-    let n = build("reference");
+fn headspace_reference_builds_with_bitmap() {
+    use carapace::scene::Node;
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("skins/reference");
+    let (_m, source) = carapace::skin::load_dir(&dir).unwrap();
+    let e = carapace::engine::Engine::new(
+        Box::new(carapace_demo::demo_host::DemoHost::new()),
+        carapace::vocab::VocabRegistry::base(),
+        source,
+    )
+    .unwrap();
+    let nodes = &e.scene().nodes;
     assert!(
-        n >= 15,
-        "headspace homage should be a busy scene, got {n} nodes"
+        nodes.iter().any(|n| matches!(n, Node::Image { .. })),
+        "draws the headspace bitmap"
+    );
+    assert!(
+        nodes.iter().any(|n| matches!(n, Node::Hotspot { .. })),
+        "has interactive hotspots"
+    );
+    assert!(
+        nodes.iter().any(|n| matches!(n, Node::ValueFill { .. })),
+        "has the live seek bar"
     );
 }
