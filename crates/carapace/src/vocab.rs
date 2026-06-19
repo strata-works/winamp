@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use mlua::{Function, Table};
 
-use crate::scene::{Color, HandlerId, Node, Paint, Pt};
+use crate::scene::{Color, ColorStop, Gradient, HandlerId, Node, Paint, Pt};
 
 #[derive(Debug)]
 pub enum BuildError {
@@ -68,6 +68,80 @@ pub fn parse_color(t: &Table) -> Result<Color, BuildError> {
     color_from_table(&c)
 }
 
+fn parse_pt(t: &Table, key: &'static str) -> Result<Pt, BuildError> {
+    let p: Table = t.get(key).map_err(|_| BuildError::MissingField(key))?;
+    Ok(Pt {
+        x: p.get("x")?,
+        y: p.get("y")?,
+    })
+}
+
+fn parse_stops(g: &Table) -> Result<Vec<ColorStop>, BuildError> {
+    let stops_t: Table = g
+        .get("stops")
+        .map_err(|_| BuildError::MissingField("stops"))?;
+    let mut stops = Vec::new();
+    for entry in stops_t.sequence_values::<Table>() {
+        let e = entry?;
+        let at: f32 = e.get("at").map_err(|_| BuildError::MissingField("at"))?;
+        let color_t: Table = e
+            .get("color")
+            .map_err(|_| BuildError::MissingField("color"))?;
+        stops.push(ColorStop {
+            at: at.clamp(0.0, 1.0),
+            color: color_from_table(&color_t)?,
+        });
+    }
+    if stops.len() < 2 {
+        return Err(BuildError::BadType("gradient needs >= 2 stops"));
+    }
+    stops.sort_by(|a, b| a.at.partial_cmp(&b.at).unwrap_or(std::cmp::Ordering::Equal));
+    Ok(stops)
+}
+
+fn parse_gradient(t: &Table) -> Result<Gradient, BuildError> {
+    let g: Table = t
+        .get("gradient")
+        .map_err(|_| BuildError::MissingField("gradient"))?;
+    let kind: String = g
+        .get("type")
+        .map_err(|_| BuildError::MissingField("type"))?;
+    let stops = parse_stops(&g)?;
+    Ok(match kind.as_str() {
+        "linear" => Gradient::Linear {
+            from: parse_pt(&g, "from")?,
+            to: parse_pt(&g, "to")?,
+            stops,
+        },
+        "radial" => Gradient::Radial {
+            center: parse_pt(&g, "center")?,
+            radius: g
+                .get("radius")
+                .map_err(|_| BuildError::MissingField("radius"))?,
+            stops,
+        },
+        "sweep" => Gradient::Sweep {
+            center: parse_pt(&g, "center")?,
+            start_deg: g.get::<Option<f32>>("start_deg")?.unwrap_or(0.0),
+            end_deg: g.get::<Option<f32>>("end_deg")?.unwrap_or(360.0),
+            stops,
+        },
+        _ => {
+            return Err(BuildError::BadType(
+                "gradient type must be linear|radial|sweep",
+            ));
+        }
+    })
+}
+
+fn parse_paint(args: &Table) -> Result<Paint, BuildError> {
+    if args.contains_key("gradient")? {
+        Ok(Paint::Gradient(parse_gradient(args)?))
+    } else {
+        Ok(Paint::Solid(parse_color(args)?))
+    }
+}
+
 struct FillPrim;
 impl Primitive for FillPrim {
     fn id(&self) -> &str {
@@ -76,7 +150,7 @@ impl Primitive for FillPrim {
     fn build(&self, args: &Table, _ctx: &mut dyn BuildContext) -> Result<Node, BuildError> {
         Ok(Node::Fill {
             path: parse_path(args)?,
-            paint: Paint::Solid(parse_color(args)?),
+            paint: parse_paint(args)?,
         })
     }
 }
@@ -171,7 +245,7 @@ impl VocabRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scene::Paint;
+    use crate::scene::{Gradient, Paint};
     use mlua::Lua;
 
     struct NoHandlers;
@@ -300,6 +374,103 @@ mod tests {
     #[test]
     fn base_registry_now_has_four() {
         assert_eq!(VocabRegistry::base().iter().count(), 4);
+    }
+
+    #[test]
+    fn fill_builds_linear_gradient() {
+        let lua = Lua::new();
+        let t = tbl(
+            &lua,
+            "return { path = {{x=0,y=0},{x=10,y=0},{x=10,y=10}}, gradient = { \
+               type='linear', from={x=0,y=0}, to={x=0,y=40}, \
+               stops = { {at=1, color={r=9,g=9,b=9,a=0}}, {at=0, color={r=255,g=255,b=255,a=120}} } } }",
+        );
+        match FillPrim.build(&t, &mut NoHandlers).unwrap() {
+            Node::Fill {
+                paint: Paint::Gradient(Gradient::Linear { from, to, stops }),
+                ..
+            } => {
+                assert_eq!((from, to), (Pt { x: 0.0, y: 0.0 }, Pt { x: 0.0, y: 40.0 }));
+                // stops sorted by `at`
+                assert_eq!(stops.len(), 2);
+                assert_eq!(stops[0].at, 0.0);
+                assert_eq!(
+                    stops[0].color,
+                    Color {
+                        r: 255,
+                        g: 255,
+                        b: 255,
+                        a: 120
+                    }
+                );
+                assert_eq!(stops[1].at, 1.0);
+            }
+            other => panic!("expected linear gradient fill, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn radial_and_sweep_parse_with_defaults() {
+        let lua = Lua::new();
+        let radial = tbl(
+            &lua,
+            "return { path = {{x=0,y=0},{x=1,y=0},{x=1,y=1}}, gradient = { \
+               type='radial', center={x=5,y=6}, radius=7, \
+               stops = { {at=0, color={r=0,g=0,b=0}}, {at=1, color={r=1,g=1,b=1}} } } }",
+        );
+        match FillPrim.build(&radial, &mut NoHandlers).unwrap() {
+            Node::Fill {
+                paint: Paint::Gradient(Gradient::Radial { center, radius, .. }),
+                ..
+            } => {
+                assert_eq!((center, radius), (Pt { x: 5.0, y: 6.0 }, 7.0));
+            }
+            other => panic!("expected radial, got {other:?}"),
+        }
+        // sweep with default angles 0..360
+        let sweep = tbl(
+            &lua,
+            "return { path = {{x=0,y=0},{x=1,y=0},{x=1,y=1}}, gradient = { \
+               type='sweep', center={x=2,y=3}, \
+               stops = { {at=0, color={r=0,g=0,b=0}}, {at=1, color={r=1,g=1,b=1}} } } }",
+        );
+        match FillPrim.build(&sweep, &mut NoHandlers).unwrap() {
+            Node::Fill {
+                paint:
+                    Paint::Gradient(Gradient::Sweep {
+                        start_deg, end_deg, ..
+                    }),
+                ..
+            } => {
+                assert_eq!((start_deg, end_deg), (0.0, 360.0));
+            }
+            other => panic!("expected sweep, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn gradient_rejects_bad_type_and_too_few_stops() {
+        let lua = Lua::new();
+        let bad_type = tbl(
+            &lua,
+            "return { path = {{x=0,y=0},{x=1,y=0},{x=1,y=1}}, gradient = { \
+               type='conic', from={x=0,y=0}, to={x=1,y=1}, \
+               stops = { {at=0, color={r=0,g=0,b=0}}, {at=1, color={r=1,g=1,b=1}} } } }",
+        );
+        assert!(matches!(
+            FillPrim.build(&bad_type, &mut NoHandlers),
+            Err(BuildError::BadType(_))
+        ));
+        let one_stop = tbl(
+            &lua,
+            "return { path = {{x=0,y=0},{x=1,y=0},{x=1,y=1}}, gradient = { \
+               type='linear', from={x=0,y=0}, to={x=1,y=1}, \
+               stops = { {at=0, color={r=0,g=0,b=0}} } } }",
+        );
+        assert!(matches!(
+            FillPrim.build(&one_stop, &mut NoHandlers),
+            Err(BuildError::BadType(_))
+        ));
     }
 
     #[test]

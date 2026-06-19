@@ -14,10 +14,36 @@ pub struct Color {
     pub a: u8,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ColorStop {
+    pub at: f32,
+    pub color: Color,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Gradient {
+    Linear {
+        from: Pt,
+        to: Pt,
+        stops: Vec<ColorStop>,
+    },
+    Radial {
+        center: Pt,
+        radius: f32,
+        stops: Vec<ColorStop>,
+    },
+    Sweep {
+        center: Pt,
+        start_deg: f32,
+        end_deg: f32,
+        stops: Vec<ColorStop>,
+    },
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Paint {
     Solid(Color),
-    // Gradient(Gradient) is added in Task 2.
+    Gradient(Gradient),
 }
 
 pub type HandlerId = usize;
@@ -75,6 +101,14 @@ impl Scene {
             lines.push(match node {
                 Node::Fill { paint, .. } => match paint {
                     Paint::Solid(c) => format!("fill rgba={},{},{},{}", c.r, c.g, c.b, c.a),
+                    Paint::Gradient(g) => {
+                        let (kind, n) = match g {
+                            Gradient::Linear { stops, .. } => ("linear", stops.len()),
+                            Gradient::Radial { stops, .. } => ("radial", stops.len()),
+                            Gradient::Sweep { stops, .. } => ("sweep", stops.len()),
+                        };
+                        format!("fill gradient={} stops={}", kind, n)
+                    }
                 },
                 Node::Hotspot { on_press, .. } => format!("hotspot handler={}", on_press),
                 Node::ValueFill {
@@ -210,6 +244,44 @@ mod tests {
         assert_eq!(
             scene.summary(),
             "canvas 342x394\nimage 342x394 at 0,0 dest 342x394"
+        );
+    }
+
+    #[test]
+    fn summary_describes_gradient_fills() {
+        let scene = Scene {
+            canvas: (10, 10),
+            nodes: vec![Node::Fill {
+                path: vec![Pt { x: 0.0, y: 0.0 }],
+                paint: Paint::Gradient(Gradient::Linear {
+                    from: Pt { x: 0.0, y: 0.0 },
+                    to: Pt { x: 0.0, y: 10.0 },
+                    stops: vec![
+                        ColorStop {
+                            at: 0.0,
+                            color: Color {
+                                r: 0,
+                                g: 0,
+                                b: 0,
+                                a: 255,
+                            },
+                        },
+                        ColorStop {
+                            at: 1.0,
+                            color: Color {
+                                r: 255,
+                                g: 255,
+                                b: 255,
+                                a: 0,
+                            },
+                        },
+                    ],
+                }),
+            }],
+        };
+        assert_eq!(
+            scene.summary(),
+            "canvas 10x10\nfill gradient=linear stops=2"
         );
     }
 

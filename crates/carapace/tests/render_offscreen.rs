@@ -1,7 +1,7 @@
 #![cfg(feature = "gpu-tests")]
 
 use carapace::render::{RenderTarget, Renderer};
-use carapace::scene::{Color, Node, Paint, Pt, Scene};
+use carapace::scene::{Color, ColorStop, Gradient, Node, Paint, Pt, Scene};
 use carapace::state::StateValue;
 
 // Build a device + an offscreen Rgba8Unorm storage texture, render, read back.
@@ -333,5 +333,75 @@ fn renders_translucent_fill_blended_over_background() {
         (p[2] as i32 - 128).abs() <= 16,
         "B blended toward ~128, got {}",
         p[2]
+    );
+}
+
+#[test]
+fn renders_linear_gradient_oriented_and_interpolating() {
+    let o = offscreen(200, 50);
+    let mut r = Renderer::new(&o.device);
+    let scene = Scene {
+        canvas: (200, 50),
+        nodes: vec![Node::Fill {
+            path: rect(0.0, 0.0, 200.0, 50.0),
+            paint: Paint::Gradient(Gradient::Linear {
+                from: Pt { x: 0.0, y: 0.0 },
+                to: Pt { x: 200.0, y: 0.0 },
+                stops: vec![
+                    ColorStop {
+                        at: 0.0,
+                        color: Color {
+                            r: 255,
+                            g: 0,
+                            b: 0,
+                            a: 255,
+                        },
+                    },
+                    ColorStop {
+                        at: 1.0,
+                        color: Color {
+                            r: 0,
+                            g: 0,
+                            b: 255,
+                            a: 255,
+                        },
+                    },
+                ],
+            }),
+        }],
+    };
+    let read = |_k: &str| None;
+    r.draw(
+        &scene,
+        read,
+        &RenderTarget {
+            device: &o.device,
+            queue: &o.queue,
+            view: &o.view,
+            width: o.w,
+            height: o.h,
+        },
+    );
+    let data = readback(&o);
+    let left = px(&data, 200, 10, 25);
+    let mid = px(&data, 200, 100, 25);
+    let right = px(&data, 200, 190, 25);
+    // Endpoints + orientation: left is red-dominant, right is blue-dominant (horizontal red→blue).
+    assert!(left[0] > 200 && left[2] < 60, "left ~red, got {:?}", left);
+    assert!(
+        right[2] > 200 && right[0] < 60,
+        "right ~blue, got {:?}",
+        right
+    );
+    // Interpolation: R decreases and B increases left→right (robust to interpolation color space).
+    assert!(
+        mid[0] < left[0] && mid[0] > right[0],
+        "R decreases L→R, mid {:?}",
+        mid
+    );
+    assert!(
+        mid[2] > left[2] && mid[2] < right[2],
+        "B increases L→R, mid {:?}",
+        mid
     );
 }
