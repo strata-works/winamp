@@ -1,10 +1,11 @@
 use vello::kurbo::{Affine, BezPath, Point as KPoint, Rect};
 use vello::peniko::{
-    Blob, Color as VColor, Fill, ImageAlphaType, ImageBrush, ImageData, ImageFormat, ImageQuality,
+    Blob, Brush, Color as VColor, Fill, ImageAlphaType, ImageBrush, ImageData, ImageFormat,
+    ImageQuality,
 };
 use vello::{AaConfig, RenderParams, Scene as VScene};
 
-use crate::scene::{Color, Node, Pt, Scene};
+use crate::scene::{Color, Node, Paint, Pt, Scene};
 use crate::state::StateValue;
 
 pub struct RenderTarget<'a> {
@@ -20,7 +21,14 @@ pub struct Renderer {
 }
 
 fn vcolor(c: Color) -> VColor {
-    VColor::from_rgba8(c.r, c.g, c.b, 255)
+    VColor::from_rgba8(c.r, c.g, c.b, c.a)
+}
+
+/// A peniko brush for a Paint. (Task 2 adds the Gradient arm.)
+fn paint_brush(paint: &Paint) -> Brush {
+    match paint {
+        Paint::Solid(c) => Brush::Solid(vcolor(*c)),
+    }
 }
 
 fn bez(path: &[Pt]) -> BezPath {
@@ -83,8 +91,8 @@ impl Renderer {
         let mut vs = VScene::new();
         for node in &scene.nodes {
             match node {
-                Node::Fill { path, color } => {
-                    vs.fill(Fill::NonZero, xform, vcolor(*color), None, &bez(path));
+                Node::Fill { path, paint } => {
+                    vs.fill(Fill::NonZero, xform, &paint_brush(paint), None, &bez(path));
                 }
                 Node::Hotspot { .. } => {} // invisible
                 Node::ValueFill {

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use mlua::{Function, Table};
 
-use crate::scene::{Color, HandlerId, Node, Pt};
+use crate::scene::{Color, HandlerId, Node, Paint, Pt};
 
 #[derive(Debug)]
 pub enum BuildError {
@@ -51,15 +51,21 @@ pub fn parse_path(t: &Table) -> Result<Vec<Pt>, BuildError> {
     Ok(pts)
 }
 
-pub fn parse_color(t: &Table) -> Result<Color, BuildError> {
-    let c: Table = t
-        .get("color")
-        .map_err(|_| BuildError::MissingField("color"))?;
+/// Reads r,g,b from a color table; optional `a` defaults to 255 (opaque).
+pub fn color_from_table(c: &Table) -> Result<Color, BuildError> {
     Ok(Color {
         r: c.get("r")?,
         g: c.get("g")?,
         b: c.get("b")?,
+        a: c.get::<Option<u8>>("a")?.unwrap_or(255),
     })
+}
+
+pub fn parse_color(t: &Table) -> Result<Color, BuildError> {
+    let c: Table = t
+        .get("color")
+        .map_err(|_| BuildError::MissingField("color"))?;
+    color_from_table(&c)
 }
 
 struct FillPrim;
@@ -70,7 +76,7 @@ impl Primitive for FillPrim {
     fn build(&self, args: &Table, _ctx: &mut dyn BuildContext) -> Result<Node, BuildError> {
         Ok(Node::Fill {
             path: parse_path(args)?,
-            color: parse_color(args)?,
+            paint: Paint::Solid(parse_color(args)?),
         })
     }
 }
@@ -165,6 +171,7 @@ impl VocabRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scene::Paint;
     use mlua::Lua;
 
     struct NoHandlers;
@@ -193,12 +200,48 @@ mod tests {
         );
         let node = FillPrim.build(&t, &mut NoHandlers).unwrap();
         match node {
-            Node::Fill { color, path } => {
-                assert_eq!(color, Color { r: 1, g: 2, b: 3 });
+            Node::Fill { paint, path } => {
+                assert_eq!(
+                    paint,
+                    Paint::Solid(Color {
+                        r: 1,
+                        g: 2,
+                        b: 3,
+                        a: 255
+                    })
+                );
                 assert_eq!(path.len(), 3);
             }
             other => panic!("expected Fill, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn color_alpha_defaults_opaque_and_parses_explicit() {
+        let lua = Lua::new();
+        let opaque: Table = lua.load("return { color = {r=1,g=2,b=3} }").eval().unwrap();
+        assert_eq!(
+            parse_color(&opaque).unwrap(),
+            Color {
+                r: 1,
+                g: 2,
+                b: 3,
+                a: 255
+            }
+        );
+        let translucent: Table = lua
+            .load("return { color = {r=1,g=2,b=3,a=90} }")
+            .eval()
+            .unwrap();
+        assert_eq!(
+            parse_color(&translucent).unwrap(),
+            Color {
+                r: 1,
+                g: 2,
+                b: 3,
+                a: 90
+            }
+        );
     }
 
     #[test]
