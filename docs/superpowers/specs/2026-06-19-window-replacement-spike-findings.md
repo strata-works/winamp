@@ -16,7 +16,7 @@ with no OS chrome and no bounding rectangle. The only real blocker is **asset au
 - Surface `alpha_modes` offered by the macOS Metal adapter: **`[Opaque, PostMultiplied]`** — note **`PreMultiplied` is NOT available** on this adapter (wgpu-hal Metal only advertises Opaque + PostMultiplied). The spike's preference order falls back to `PostMultiplied`.
 - `alpha_mode` chosen: **`PostMultiplied`**.
 - vello `base_color`: transparent `from_rgba8(0, 0, 0, 0)`.
-- Pipeline confirmed sound, end to end: vello → intermediate `Rgba8Unorm` → `wgpu::util::TextureBlitter` → surface. The blitter uses `blend: None` + `write_mask: ColorWrites::ALL`, so it copies alpha through faithfully; wgpu-hal sets `render_layer.setOpaque(false)` for `PostMultiplied`, so the Metal layer honors per-pixel alpha.
+- Pipeline confirmed sound end to end by the **visual result** (desktop shows through): vello → intermediate `Rgba8Unorm` → `wgpu::util::TextureBlitter` → surface. The *likely mechanism* — the blitter using `blend: None` + `write_mask: ColorWrites::ALL` to copy alpha faithfully, and wgpu-hal calling `render_layer.setOpaque(false)` for `PostMultiplied` so the Metal layer honors per-pixel alpha — is **inferred from wgpu 29.0.3 source inspection, not directly observed at runtime**. Treat it as an explanation to re-verify, not a contract, if the wgpu version changes.
 - Result: with transparent pixels present, the desktop shows through and the head floats (screenshot). A faint magenta fringe appears on anti-aliased edges — an artifact of the crude runtime color-key (below), not a pipeline fault.
 
 ### The real blocker: the asset has no alpha
@@ -39,7 +39,7 @@ to opaque for the normal in-app demo and transparent for window-replacement host
 
 ## Tier 2 — drag + window controls: **code-complete & reviewed; runtime spot-checked**
 - Code: left-press on the body → `Window::drag_window()`; min-glyph rect → `Window::set_minimized(true)`; close-glyph rect → `event_loop.exit()`. Hit-tested in canvas space (cursor scaled by `bitmap / inner_size`). Reviewed correct; all are standard winit 0.30 calls.
-- Runtime: the window launched and **exited cleanly (exit 0)** on close across runs — consistent with the close-glyph path working. (Exact drag/minimize behavior and final control-rect alignment to the drawn `_`/`X` glyphs to be ticked off by the human run; the rects are hardcoded eyeballed canvas coords and are trivially tunable.)
+- Runtime: the window launched and **exited cleanly (exit 0)** on close across runs. Note the exit alone does NOT isolate the close-glyph rect: the native `WindowEvent::CloseRequested` path also calls `event_loop.exit()`, so a clean exit is consistent with *either* the drawn `X` glyph or a native close. Exact drag/minimize behavior and final control-rect alignment to the drawn `_`/`X` glyphs are to be ticked off by the human run; the rects are hardcoded eyeballed canvas coords and are trivially tunable.
 
 ## Tier 3 — click-through verdict
 - `Window::set_cursor_hittest(false)` (toggled with the `t` key) is **whole-window** click-through only — it makes the entire window ignore the cursor, not the transparent pixels specifically.
