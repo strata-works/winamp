@@ -15,6 +15,14 @@ pub struct Color {
 
 pub type HandlerId = usize;
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ImageDest {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+}
+
 #[derive(Clone, Debug)]
 pub enum Node {
     Fill {
@@ -29,6 +37,10 @@ pub enum Node {
         path: Vec<Pt>,
         value_key: String,
         color: Color,
+    },
+    Image {
+        image: std::sync::Arc<crate::asset::DecodedImage>,
+        dest: ImageDest,
     },
 }
 
@@ -63,6 +75,15 @@ impl Scene {
                 } => format!(
                     "value_fill key={} rgb={},{},{}",
                     value_key, color.r, color.g, color.b
+                ),
+                Node::Image { image, dest } => format!(
+                    "image {}x{} at {},{} dest {}x{}",
+                    image.width,
+                    image.height,
+                    dest.x as i64,
+                    dest.y as i64,
+                    dest.w as i64,
+                    dest.h as i64
                 ),
             });
         }
@@ -151,6 +172,32 @@ mod tests {
                         hotspot handler=2\n\
                         value_fill key=level rgb=1,2,3";
         assert_eq!(scene.summary(), expected);
+    }
+
+    #[test]
+    fn summary_includes_image_nodes() {
+        use crate::asset::DecodedImage;
+        use std::sync::Arc;
+        let scene = Scene {
+            canvas: (342, 394),
+            nodes: vec![Node::Image {
+                image: Arc::new(DecodedImage {
+                    rgba: vec![0; 4],
+                    width: 342,
+                    height: 394,
+                }),
+                dest: ImageDest {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 342.0,
+                    h: 394.0,
+                },
+            }],
+        };
+        assert_eq!(
+            scene.summary(),
+            "canvas 342x394\nimage 342x394 at 0,0 dest 342x394"
+        );
     }
 
     #[test]

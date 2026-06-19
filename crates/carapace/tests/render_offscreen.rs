@@ -174,3 +174,86 @@ fn renders_fill_and_value_fill_at_sentinel_pixels() {
         "value_fill empty half (x=150 > 100)"
     );
 }
+
+#[test]
+fn renders_an_image_at_sentinel_pixels() {
+    use carapace::asset::DecodedImage;
+    use carapace::scene::{ImageDest, Node};
+    use std::sync::Arc;
+
+    // 8x8 sRGB source with four solid-color 4x4 quadrants:
+    //   TL (rows 0-3, cols 0-3): pure red   [255,   0,   0]
+    //   TR (rows 0-3, cols 4-7): pure green  [  0, 255,   0]
+    //   BL (rows 4-7, cols 0-3): pure blue   [  0,   0, 255]
+    //   BR (rows 4-7, cols 4-7): mid-grey    [188, 188, 188]
+    //
+    // Scaled to 200x200 dest → each source texel = 25 output px.
+    // Sample points map to source ~(1,1), (7,1), (1,7), (7,7) — each
+    // ≥1.5 texels inside its 4×4 quadrant, well away from the seam at
+    // source coord 4 — so bilinear reads pure solid color with no bleed.
+    let mut rgba = vec![0u8; 8 * 8 * 4];
+    for row in 0..8usize {
+        for col in 0..8usize {
+            let (r, g, b) = match (row < 4, col < 4) {
+                (true, true) => (255u8, 0u8, 0u8),       // TL red
+                (true, false) => (0u8, 255u8, 0u8),      // TR green
+                (false, true) => (0u8, 0u8, 255u8),      // BL blue
+                (false, false) => (188u8, 188u8, 188u8), // BR mid-grey
+            };
+            let i = (row * 8 + col) * 4;
+            rgba[i] = r;
+            rgba[i + 1] = g;
+            rgba[i + 2] = b;
+            rgba[i + 3] = 255;
+        }
+    }
+    let img = Arc::new(DecodedImage {
+        rgba,
+        width: 8,
+        height: 8,
+    });
+    let o = offscreen(200, 200);
+    let mut r = Renderer::new(&o.device);
+    let scene = Scene {
+        canvas: (200, 200),
+        nodes: vec![Node::Image {
+            image: img,
+            dest: ImageDest {
+                x: 0.0,
+                y: 0.0,
+                w: 200.0,
+                h: 200.0,
+            }, // scale 8x8 -> full 200x200 (25 output px per source texel)
+        }],
+    };
+    let read = |_k: &str| None;
+    r.draw(
+        &scene,
+        read,
+        &RenderTarget {
+            device: &o.device,
+            queue: &o.queue,
+            view: &o.view,
+            width: o.w,
+            height: o.h,
+        },
+    );
+    let data = readback(&o);
+    // Sample deep inside each quadrant (output px coords → source texel coords shown):
+    //   (25,25)  → src ~(1,1)  TL red quadrant interior
+    //   (175,25) → src ~(7,1)  TR green quadrant interior
+    //   (25,175) → src ~(1,7)  BL blue quadrant interior
+    //   (175,175)→ src ~(7,7)  BR grey quadrant interior
+    assert_eq!(px(&data, 200, 25, 25), [255, 0, 0], "TL red");
+    assert_eq!(px(&data, 200, 175, 25), [0, 255, 0], "TR green");
+    assert_eq!(px(&data, 200, 25, 175), [0, 0, 255], "BL blue");
+    // Byte-passthrough sentinel: the pipeline (vello 0.9) passes sRGB bytes through without
+    // sRGB→linear conversion, so the authored 188 value must be preserved (NOT gamma-shifted to
+    // ~128). Reading deep inside the solid grey quadrant under bilinear must yield ~188.
+    let g = px(&data, 200, 175, 175);
+    assert!(
+        (g[0] as i32 - 188).abs() <= 4,
+        "byte-passthrough preserves sRGB grey ~188, got {}",
+        g[0]
+    );
+}

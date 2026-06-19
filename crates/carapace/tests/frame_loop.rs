@@ -8,10 +8,7 @@ use carapace::state::StateValue;
 use carapace::vocab::VocabRegistry;
 
 fn src(s: &str) -> SkinSource {
-    SkinSource {
-        lua_src: s.to_string(),
-        canvas: (200, 200),
-    }
+    SkinSource::inline(s, (200, 200))
 }
 
 // A skin whose hotspot toggles, plus a value_fill bound to "level".

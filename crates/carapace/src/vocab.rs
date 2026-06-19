@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use mlua::{Function, Table};
 
 use crate::scene::{Color, HandlerId, Node, Pt};
@@ -7,6 +9,7 @@ pub enum BuildError {
     MissingField(&'static str),
     BadType(&'static str),
     Lua(mlua::Error),
+    Asset(crate::asset::AssetError),
 }
 
 impl From<mlua::Error> for BuildError {
@@ -18,6 +21,10 @@ impl From<mlua::Error> for BuildError {
 /// Lets a primitive register a Lua handler (for hotspots) and receive a HandlerId.
 pub trait BuildContext {
     fn register_handler(&mut self, f: Function) -> HandlerId;
+    fn image(
+        &mut self,
+        name: &str,
+    ) -> Result<Arc<crate::asset::DecodedImage>, crate::asset::AssetError>;
 }
 
 /// A vocabulary entry a skin can construct: `id` is the Lua constructor name.
@@ -103,6 +110,27 @@ impl Primitive for ValueFillPrim {
     }
 }
 
+struct ImagePrim;
+impl Primitive for ImagePrim {
+    fn id(&self) -> &str {
+        "image"
+    }
+    fn build(&self, args: &Table, ctx: &mut dyn BuildContext) -> Result<Node, BuildError> {
+        let name: String = args
+            .get("asset")
+            .map_err(|_| BuildError::MissingField("asset"))?;
+        let image = ctx.image(&name).map_err(BuildError::Asset)?;
+        let x: f32 = args.get("x").map_err(|_| BuildError::MissingField("x"))?;
+        let y: f32 = args.get("y").map_err(|_| BuildError::MissingField("y"))?;
+        let w: f32 = args.get("w").unwrap_or(image.width as f32);
+        let h: f32 = args.get("h").unwrap_or(image.height as f32);
+        Ok(Node::Image {
+            image,
+            dest: crate::scene::ImageDest { x, y, w, h },
+        })
+    }
+}
+
 pub struct VocabRegistry {
     prims: Vec<Box<dyn Primitive>>,
 }
@@ -129,6 +157,7 @@ impl VocabRegistry {
         r.register(Box::new(FillPrim));
         r.register(Box::new(RegionPrim));
         r.register(Box::new(ValueFillPrim));
+        r.register(Box::new(ImagePrim));
         r
     }
 }
@@ -142,6 +171,12 @@ mod tests {
     impl BuildContext for NoHandlers {
         fn register_handler(&mut self, _f: Function) -> HandlerId {
             0
+        }
+        fn image(
+            &mut self,
+            name: &str,
+        ) -> Result<std::sync::Arc<crate::asset::DecodedImage>, crate::asset::AssetError> {
+            Err(crate::asset::AssetError::Unresolved(name.to_string()))
         }
     }
 
@@ -188,6 +223,13 @@ mod tests {
                 self.0 += 1;
                 id
             }
+            fn image(
+                &mut self,
+                name: &str,
+            ) -> Result<std::sync::Arc<crate::asset::DecodedImage>, crate::asset::AssetError>
+            {
+                Err(crate::asset::AssetError::Unresolved(name.to_string()))
+            }
         }
         let lua = Lua::new();
         let t = tbl(
@@ -213,7 +255,51 @@ mod tests {
     }
 
     #[test]
-    fn base_registry_has_three() {
-        assert_eq!(VocabRegistry::base().iter().count(), 3);
+    fn base_registry_now_has_four() {
+        assert_eq!(VocabRegistry::base().iter().count(), 4);
+    }
+
+    #[test]
+    fn image_prim_builds_native_and_scaled() {
+        use crate::asset::DecodedImage;
+        use std::sync::Arc;
+        struct Ctx(Arc<DecodedImage>);
+        impl BuildContext for Ctx {
+            fn register_handler(&mut self, _f: Function) -> HandlerId {
+                0
+            }
+            fn image(
+                &mut self,
+                _name: &str,
+            ) -> Result<Arc<DecodedImage>, crate::asset::AssetError> {
+                Ok(self.0.clone())
+            }
+        }
+        let img = Arc::new(DecodedImage {
+            rgba: vec![0; 16],
+            width: 4,
+            height: 2,
+        });
+        let lua = mlua::Lua::new();
+        // native: dest = (x,y, native w,h)
+        let t: Table = lua
+            .load("return { asset='a.png', x=10, y=20 }")
+            .eval()
+            .unwrap();
+        match ImagePrim.build(&t, &mut Ctx(img.clone())).unwrap() {
+            Node::Image { dest, .. } => {
+                assert_eq!((dest.x, dest.y, dest.w, dest.h), (10.0, 20.0, 4.0, 2.0));
+            }
+            other => panic!("expected Image, got {other:?}"),
+        }
+        // scaled: explicit w,h
+        let t2: Table = lua
+            .load("return { asset='a.png', x=0, y=0, w=40, h=30 }")
+            .eval()
+            .unwrap();
+        match ImagePrim.build(&t2, &mut Ctx(img)).unwrap() {
+            Node::Image { dest, .. } => assert_eq!((dest.w, dest.h), (40.0, 30.0)),
+            other => panic!("expected Image, got {other:?}"),
+        }
     }
 }

@@ -1,12 +1,25 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use crate::asset::AssetResolver;
 use crate::host::{Host, Value};
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct SkinSource {
     pub lua_src: String,
     pub canvas: (u32, u32),
+    pub assets: Rc<AssetResolver>,
+}
+
+impl SkinSource {
+    /// An inline skin with no assets (tests, asset-free skins).
+    pub fn inline(lua_src: impl Into<String>, canvas: (u32, u32)) -> Self {
+        Self {
+            lua_src: lua_src.into(),
+            canvas,
+            assets: Rc::new(AssetResolver::empty()),
+        }
+    }
 }
 
 pub enum Command {

@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use mlua::{Function, Lua, RegistryKey, Table, Value as LuaValue};
 
@@ -34,11 +35,18 @@ pub struct LoadedSkin {
 struct SceneBuilder {
     nodes: Vec<Node>,
     handler_fns: Vec<Function>,
+    assets: std::rc::Rc<crate::asset::AssetResolver>,
 }
 impl BuildContext for SceneBuilder {
     fn register_handler(&mut self, f: Function) -> HandlerId {
         self.handler_fns.push(f);
         self.handler_fns.len() - 1
+    }
+    fn image(
+        &mut self,
+        name: &str,
+    ) -> Result<Arc<crate::asset::DecodedImage>, crate::asset::AssetError> {
+        self.assets.image(name)
     }
 }
 
@@ -65,6 +73,7 @@ pub fn load(
     let builder = Rc::new(RefCell::new(SceneBuilder {
         nodes: Vec::new(),
         handler_fns: Vec::new(),
+        assets: source.assets.clone(),
     }));
 
     // One Lua constructor per registry primitive id (data-driven — not hardcoded).
@@ -152,10 +161,7 @@ mod tests {
     use std::rc::Rc;
 
     fn src(s: &str) -> SkinSource {
-        SkinSource {
-            lua_src: s.to_string(),
-            canvas: (300, 120),
-        }
+        SkinSource::inline(s, (300, 120))
     }
 
     #[test]

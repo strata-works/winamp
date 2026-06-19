@@ -14,10 +14,7 @@ enum Step {
 }
 
 fn src(s: &str) -> SkinSource {
-    SkinSource {
-        lua_src: s.to_string(),
-        canvas: (200, 200),
-    }
+    SkinSource::inline(s, (200, 200))
 }
 
 /// Run a scenario and return a full trajectory string: the scene summary + the

@@ -1,5 +1,7 @@
 use vello::kurbo::{Affine, BezPath, Point as KPoint, Rect};
-use vello::peniko::{Color as VColor, Fill};
+use vello::peniko::{
+    Blob, Color as VColor, Fill, ImageAlphaType, ImageBrush, ImageData, ImageFormat, ImageQuality,
+};
 use vello::{AaConfig, RenderParams, Scene as VScene};
 
 use crate::scene::{Color, Node, Pt, Scene};
@@ -94,6 +96,30 @@ impl Renderer {
                     let (x0, y0, x1, y1) = bbox(path);
                     let filled = Rect::new(x0, y0, x0 + (x1 - x0) * v, y1);
                     vs.fill(Fill::NonZero, xform, vcolor(*color), None, &filled);
+                }
+                Node::Image { image, dest } => {
+                    // sRGB RGBA8 blob -> vello ImageData, placed at dest, under canvas->surface scale.
+                    let blob = Blob::new(std::sync::Arc::new(image.rgba.clone()));
+                    let vimg = ImageData {
+                        data: blob,
+                        format: ImageFormat::Rgba8,
+                        alpha_type: ImageAlphaType::Alpha,
+                        width: image.width,
+                        height: image.height,
+                    };
+                    // Scale native image size to dest.w x dest.h, then translate to dest.x, dest.y,
+                    // all under the canvas->surface transform.
+                    let place = Affine::translate((dest.x as f64, dest.y as f64))
+                        * Affine::scale_non_uniform(
+                            dest.w as f64 / image.width.max(1) as f64,
+                            dest.h as f64 / image.height.max(1) as f64,
+                        );
+                    vs.draw_image(
+                        ImageBrush::new(vimg)
+                            .with_quality(ImageQuality::Medium)
+                            .as_ref(),
+                        xform * place,
+                    );
                 }
             }
         }
