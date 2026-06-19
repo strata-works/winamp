@@ -23,8 +23,8 @@ struct Bitmap {
 }
 
 fn load_headspace_bitmap() -> Bitmap {
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../carapace-demo/skins/reference");
+    let dir =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../carapace-demo/skins/reference");
     let (_m, source) = carapace::skin::load_dir(&dir).expect("load reference skin");
     let engine = carapace::engine::Engine::new(
         Box::new(DemoHost::new()),
@@ -196,9 +196,11 @@ impl ApplicationHandler for App {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::RedrawRequested => {
-                let (Some(gpu), Some(renderer), Some(_win)) =
-                    (self.gpu.as_mut(), self.renderer.as_mut(), self.window.as_ref())
-                else {
+                let (Some(gpu), Some(renderer), Some(_win)) = (
+                    self.gpu.as_mut(),
+                    self.renderer.as_mut(),
+                    self.window.as_ref(),
+                ) else {
                     return;
                 };
                 let frame = match gpu.surface.get_current_texture() {
@@ -256,7 +258,9 @@ impl ApplicationHandler for App {
                 button: winit::event::MouseButton::Left,
                 ..
             } => {
-                let Some(win) = self.window.as_ref() else { return };
+                let Some(win) = self.window.as_ref() else {
+                    return;
+                };
                 let size = win.inner_size();
                 // cursor (physical) -> canvas coords
                 let cx = self.cursor.0 * self.bitmap.w as f64 / size.width.max(1) as f64;
