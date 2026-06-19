@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use mlua::{Function, Lua, RegistryKey, Table, Value as LuaValue};
 
@@ -39,6 +40,12 @@ impl BuildContext for SceneBuilder {
     fn register_handler(&mut self, f: Function) -> HandlerId {
         self.handler_fns.push(f);
         self.handler_fns.len() - 1
+    }
+    fn image(
+        &mut self,
+        name: &str,
+    ) -> Result<Arc<crate::asset::DecodedImage>, crate::asset::AssetError> {
+        Err(crate::asset::AssetError::Unresolved(name.to_string()))
     }
 }
 
