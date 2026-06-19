@@ -17,7 +17,7 @@ const SCALE: u32 = 2;
 
 /// The decoded skin bitmap + its native size, extracted from the real reference skin.
 struct Bitmap {
-    rgba: Vec<u8>,
+    rgba: Arc<Vec<u8>>,
     w: u32,
     h: u32,
 }
@@ -36,7 +36,7 @@ fn load_headspace_bitmap() -> Bitmap {
     for node in &engine.scene().nodes {
         if let Node::Image { image, .. } = node {
             return Bitmap {
-                rgba: image.rgba.clone(),
+                rgba: Arc::new(image.rgba.clone()),
                 w: image.width,
                 h: image.height,
             };
@@ -193,7 +193,7 @@ impl ApplicationHandler for App {
                 // Build a vello scene: draw the bitmap scaled to fill, on a TRANSPARENT base.
                 let mut vs = VScene::new();
                 let img = ImageData {
-                    data: Blob::new(Arc::new(self.bitmap.rgba.clone())),
+                    data: Blob::new(self.bitmap.rgba.clone()),
                     format: ImageFormat::Rgba8,
                     alpha_type: ImageAlphaType::Alpha,
                     width: self.bitmap.w,
