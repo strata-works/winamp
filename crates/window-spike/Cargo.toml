@@ -1,0 +1,18 @@
+[package]
+name = "window-spike"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "window-spike"
+path = "src/main.rs"
+
+[dependencies]
+carapace = { path = "../carapace" }
+carapace-demo = { path = "../carapace-demo" }
+winit = "0.30.13"
+wgpu = "29.0.3"
+vello = "0.9.0"
+peniko = "0.6.1"
+pollster = "0.4"
