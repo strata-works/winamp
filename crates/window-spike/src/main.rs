@@ -59,6 +59,8 @@ struct App {
     window: Option<Arc<Window>>,
     gpu: Option<Gpu>,
     renderer: Option<vello::Renderer>,
+    cursor: (f64, f64),
+    clickthrough: bool,
 }
 
 impl App {
@@ -68,6 +70,8 @@ impl App {
             window: None,
             gpu: None,
             renderer: None,
+            cursor: (0.0, 0.0),
+            clickthrough: false,
         }
     }
 }
@@ -227,6 +231,47 @@ impl ApplicationHandler for App {
                     .copy(&gpu.device, &mut enc, &gpu.intermediate, &surface_view);
                 gpu.queue.submit(Some(enc.finish()));
                 frame.present();
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                self.cursor = (position.x, position.y);
+            }
+            WindowEvent::MouseInput {
+                state: winit::event::ElementState::Pressed,
+                button: winit::event::MouseButton::Left,
+                ..
+            } => {
+                let Some(win) = self.window.as_ref() else { return };
+                let size = win.inner_size();
+                // cursor (physical) -> canvas coords
+                let cx = self.cursor.0 * self.bitmap.w as f64 / size.width.max(1) as f64;
+                let cy = self.cursor.1 * self.bitmap.h as f64 / size.height.max(1) as f64;
+                // Eyeballed Headspace min/close glyph rects (canvas space) — tune by observation.
+                let in_rect = |x0: f64, y0: f64, x1: f64, y1: f64| {
+                    cx >= x0 && cx <= x1 && cy >= y0 && cy <= y1
+                };
+                if in_rect(150.0, 4.0, 170.0, 24.0) {
+                    win.set_minimized(true); // minimize glyph
+                } else if in_rect(172.0, 4.0, 194.0, 24.0) {
+                    event_loop.exit(); // close glyph
+                } else {
+                    let _ = win.drag_window(); // press on body -> move window
+                }
+            }
+            WindowEvent::KeyboardInput {
+                event:
+                    winit::event::KeyEvent {
+                        logical_key: winit::keyboard::Key::Character(ref c),
+                        state: winit::event::ElementState::Pressed,
+                        ..
+                    },
+                ..
+            } if c == "t" => {
+                // Tier 3 probe: toggle whole-window click-through.
+                self.clickthrough = !self.clickthrough;
+                if let Some(win) = self.window.as_ref() {
+                    let _ = win.set_cursor_hittest(!self.clickthrough);
+                    eprintln!("cursor_hittest set to {}", !self.clickthrough);
+                }
             }
             _ => {}
         }
