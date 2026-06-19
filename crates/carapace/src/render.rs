@@ -116,7 +116,7 @@ impl Renderer {
                         );
                     vs.draw_image(
                         ImageBrush::new(vimg)
-                            .with_quality(ImageQuality::Low)
+                            .with_quality(ImageQuality::Medium)
                             .as_ref(),
                         xform * place,
                     );
