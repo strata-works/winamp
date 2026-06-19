@@ -174,3 +174,60 @@ fn renders_fill_and_value_fill_at_sentinel_pixels() {
         "value_fill empty half (x=150 > 100)"
     );
 }
+
+#[test]
+fn renders_an_image_at_sentinel_pixels() {
+    use carapace::asset::DecodedImage;
+    use carapace::scene::{ImageDest, Node};
+    use std::sync::Arc;
+
+    // 2x2 sRGB image: TL pure red, TR pure green, BL pure blue, BR mid-grey (188 = sRGB ~0.5 linear).
+    let rgba = vec![
+        255, 0, 0, 255, /*TL*/ 0, 255, 0, 255, /*TR*/
+        0, 0, 255, 255, /*BL*/ 188, 188, 188, 255, /*BR*/
+    ];
+    let img = Arc::new(DecodedImage {
+        rgba,
+        width: 2,
+        height: 2,
+    });
+    let o = offscreen(200, 200);
+    let mut r = Renderer::new(&o.device);
+    let scene = Scene {
+        canvas: (200, 200),
+        nodes: vec![Node::Image {
+            image: img,
+            dest: ImageDest {
+                x: 0.0,
+                y: 0.0,
+                w: 200.0,
+                h: 200.0,
+            }, // scale 2x2 -> full 200x200
+        }],
+    };
+    let read = |_k: &str| None;
+    r.draw(
+        &scene,
+        read,
+        &RenderTarget {
+            device: &o.device,
+            queue: &o.queue,
+            view: &o.view,
+            width: o.w,
+            height: o.h,
+        },
+    );
+    let data = readback(&o);
+    // Each source texel maps to a 100x100 block; sample block centers.
+    assert_eq!(px(&data, 200, 50, 50), [255, 0, 0], "TL red");
+    assert_eq!(px(&data, 200, 150, 50), [0, 255, 0], "TR green");
+    assert_eq!(px(&data, 200, 50, 150), [0, 0, 255], "BL blue");
+    // Color sentinel: a mid-grey sRGB texel must round-trip to ~188 (NOT ~128), proving the
+    // pipeline treats the image as sRGB (samples sRGB->linear, composites, returns sRGB).
+    let g = px(&data, 200, 150, 150);
+    assert!(
+        (g[0] as i32 - 188).abs() <= 4,
+        "sRGB grey round-trips to ~188, got {}",
+        g[0]
+    );
+}
