@@ -7,9 +7,11 @@ Rust. It lets an application hand its entire surface over to a *skin* that defin
 own layout, appearance, and interactive hotspots, and lets users hot-swap skins at
 runtime without losing app state.
 
-> **Status: early spike.** Only Phase 0 is built — a hit-testing kernel and a rendering-
-> backend bake-off (see [Current status](#current-status)). The full engine does not
-> exist yet. This repo is being built phase by phase against a written design.
+> **Status: working engine, built phase by phase.** The core engine runs end-to-end —
+> a Lua-scripted skin renders to a live GPU window, hotspots fire host actions, dynamic
+> values animate, and skins hot-swap with state intact. As of **Phase 5a** skins can draw
+> real bitmap artwork: the demo renders the genuine Headspace WMP faceplate with live
+> play/seek. See [Current status](#current-status).
 
 ## Motivation
 
@@ -30,85 +32,123 @@ the engine carries **zero** domain-specific knowledge.
 ## Design at a glance
 
 The full design and rationale live in
-[`docs/superpowers/specs/2026-06-17-skinning-engine-design.md`](docs/superpowers/specs/2026-06-17-skinning-engine-design.md).
+[`docs/superpowers/specs/2026-06-17-skinning-engine-design.md`](docs/superpowers/specs/2026-06-17-skinning-engine-design.md)
+and the engine architecture in
+[`docs/superpowers/specs/2026-06-17-phase2-engine-architecture.md`](docs/superpowers/specs/2026-06-17-phase2-engine-architecture.md).
 The load-bearing decisions:
 
 - **Coupled artifact.** A skin replaces layout + appearance + hotspot behavior together
   as one unit — the "total reskin" model, not a restyling layer.
 - **Free-form, not slot-based.** Skins define their own canvas and arbitrary-shaped
-  hotspots (vector paths). The engine therefore owns its own retained-mode scene graph
-  and its own hit-testing, independent of any native widget layout.
+  hotspots (vector paths). The engine owns its own retained-mode scene graph and its own
+  hit-testing, independent of any native widget layout.
 - **Live swap, state survives.** Skins hot-swap while running with no loss of app state.
-  Application state lives entirely **outside** the scene graph; the scene graph is
-  disposable and always rebuilt from state — never the reverse.
+  Application state lives entirely **outside** the scene graph; the scene is a pure
+  projection of state (it binds *keys*, never values) and is always rebuilt — never the
+  reverse. Swap is transactional: a skin that fails to load leaves the prior one running.
 - **Embedded Lua scripting in a capability sandbox.** Skins bind to host actions/state
-  through a Lua script that can only reach an explicit allowlisted API surface (the base
-  vocabulary plus host extensions). No raw host/io/os access.
+  through a Lua script whose `_ENV` is *only* the vocabulary constructors plus an
+  allowlisted set of host actions — no raw `host`/`io`/`os`/filesystem access.
 - **Domain-neutral base vocabulary, host-extensible.** The engine ships only generic
-  primitives (button, slider, text, image, region, custom draw-slot, value-binding).
-  Anything domain-flavored — "transport control", "audio visualizer" — is registered by
-  the host as an extension.
-- **Desktop-first, Rust + vello.** Targets desktop (consistent with an existing
-  shader/GPU stack). The rendering backend is **vello** (chosen in Phase 0); web
-  portability is a non-binding stretch goal.
+  primitives (currently `fill`, `region` hotspots, value-bound `value_fill`, and `image`;
+  more to come). Anything domain-flavored — "transport control", "audio visualizer" — is
+  registered by the host as an extension.
+- **Desktop-first, Rust + vello.** The host owns the window, event loop, and surface; the
+  engine renders **direct-to-surface** (no readback) on a wall-clock delta. The 2D backend
+  is **vello** (chosen in Phase 0) over `wgpu`, leaving raw `wgpu` available underneath for
+  future visualizer shaders.
 
 ## Current status
 
-**Phase 0 — rendering / hit-test spike: complete.** Phase 0 de-risked the one open
-design decision (the 2D rendering backend) by building three candidates behind a common
-trait and holding each to an objective gate.
+The engine works end-to-end. Run `cargo run -p carapace-demo` and a real GPU window opens
+running a skin; **Tab** cycles through the bundled skins, clicks hit free-form hotspots
+that call back into the host, a value-bound seek bar advances on wall-clock time, and a
+skin swap preserves playback state.
 
 What exists today:
 
 | Crate | What it is |
 |-------|------------|
-| [`crates/hittest`](crates/hittest) | Dependency-free even-odd point-in-region kernel for concave + holed shapes. The decoupled hit-testing module; has **no** rendering/GPU dependency. |
-| [`crates/spike-render`](crates/spike-render) | A `Renderer` trait, an RGBA8 `Pixmap`, and a `parity_check` gate that asserts every unambiguous pixel a backend fills agrees with `hittest`'s independent verdict. Contains the chosen **vello** backend and a live viewer. |
+| [`crates/hittest`](crates/hittest) | Dependency-free even-odd point-in-region kernel for concave + holed shapes. The decoupled hit-testing module; **no** rendering/GPU dependency. |
+| [`crates/carapace`](crates/carapace) | The engine: scene graph + hit-testing, host command queue, external state + value bindings, transactional skin swap, Lua scripting in a capability sandbox, the base vocabulary, sandboxed asset loading + image decode, and a vello/`wgpu` direct-to-surface renderer. |
+| [`crates/carapace-demo`](crates/carapace-demo) | A live host app (`winit` + `wgpu`) with a fake media-player host and three bundled skins, including the real Headspace bitmap. The reference embedder. |
 
-**Decision: vello.** All three candidates (`tiny-skia`, `wgpu`+`lyon`, `vello`) passed the
-correctness gate — free-form hit-testing is satisfied by the decoupled `hittest` module
-regardless of backend. vello was chosen for fit with the GPU/shader direction: it renders
-vector paths directly (no tessellator) while leaving raw `wgpu` available underneath for
-visualizer shaders. Full rationale:
-[`docs/superpowers/specs/2026-06-17-phase0-backend-decision.md`](docs/superpowers/specs/2026-06-17-phase0-backend-decision.md).
+**Phase 5a — asset loading + the `image` primitive: complete.** A type-agnostic,
+sandboxed `AssetResolver` scans a skin's `assets/` directory (Flutter-style: resolved =
+usable; `..` and symlinks can't escape the skin dir) and decodes PNG/JPEG/GIF/BMP to sRGB
+RGBA8 on first use. The new `image{ asset = "…", x, y }` primitive draws that bitmap
+through vello. The demo `reference` skin is the genuine `headspace.png` faceplate with two
+invisible hotspots (play/stop) and a live seek bar layered on top — exactly how real WMP
+skins are built. See
+[`docs/superpowers/specs/2026-06-18-phase5a-asset-loading-design.md`](docs/superpowers/specs/2026-06-18-phase5a-asset-loading-design.md).
+
+## A skin, end to end
+
+A skin is a directory: a `skin.toml` manifest (canvas size, entry script, asset dir) plus
+a Lua entry script that calls vocabulary constructors. The demo's `reference` skin:
+
+```lua
+image{ asset = "headspace.png", x = 0, y = 0 }                       -- the bitmap faceplate
+region{ path = { ... play button ... }, on_press = function() host.toggle_play() end }
+region{ path = { ... stop button ... }, on_press = function() host.stop() end }
+value_fill{ path = { ... seek bar ... }, value = "position",         -- bound to host state
+            color = { r = 120, g = 230, b = 80 } }
+```
+
+The bitmap supplies the look; Lua supplies placement and interactivity; the host supplies
+state (`position`) and actions (`toggle_play`, `stop`). The engine knows nothing about
+"playback" — those are just an allowlisted action name and a bound state key.
 
 ## Building & running
 
-Requires a recent Rust toolchain (edition 2024; built against Rust 1.95). On macOS the
-GPU paths use Metal.
+Requires a recent Rust toolchain (edition 2024; built against Rust 1.96). Dependency
+versions are pinned via a committed `Cargo.lock`; CI builds `--locked`. On macOS the GPU
+paths use Metal; on Linux, Vulkan.
 
 ```sh
-# Run the full test suite (hit-test kernel + the parity gate against vello)
-cargo test
+# Full workspace test suite (hit-test kernel, engine, headless skin/scene tests).
+cargo test --workspace
 
-# Launch the live viewer: shows a shape, click to test inside/outside,
-# Space toggles the concave L-shape / holed ring, Esc quits.
-cargo run -p spike-render --example viewer
+# Launch the live demo: a GPU window running a skin.
+#   Tab   cycle skins (classic / minimal / reference=real Headspace bitmap)
+#   click free-form hotspots fire host actions; the seek bar advances live
+#   state survives a skin swap
+cargo run -p carapace-demo
 ```
 
-In the viewer the shape starts gray; a left-click turns it **green** if the click landed
-inside the shape and **red** if it missed — the free-form hit-testing, live.
+The GPU render-correctness test is gated behind the `gpu-tests` feature (it needs a real
+adapter) and runs separately:
+
+```sh
+cargo test -p carapace --features gpu-tests --test render_offscreen
+```
 
 ## Roadmap
 
-Phases **0–1 are throwaway** (spikes/prototype); **2–6** build the real engine.
+The engine is built phase by phase against written specs (in `docs/superpowers/`). Phases
+0–1 were throwaway (spike + prototype) and have been removed; 2 onward build the real
+engine. Phase 5 was decomposed into sub-projects (5a–5e).
 
-- **Phase 0 — rendering / hit-test spike.** ✅ Done. Backend chosen: vello.
-- **Phase 1 — throwaway prototype.** Fake media-player and system-monitor hosts, two
-  skins each, exercising hit-testing, the Lua↔host boundary, and state-survives-swap.
-- **Phase 2 — formalize the spec** from what the prototype surfaces.
-- **Phase 3 — core engine** (scene graph, hit-testing, render, state, swap), driven from
-  Rust before scripting is layered on.
-- **Phase 4 — scripting + capability sandbox** (`mlua`, skin artifact loader).
-- **Phase 5 — base vocabulary + host-extension mechanism.**
-- **Phase 6 — validation** against both host kinds, proving zero media-specific
-  knowledge in the engine.
+- **Phase 0 — rendering / hit-test spike.** ✅ Backend chosen: vello.
+- **Phase 1 — throwaway prototype.** ✅ Surfaced the Lua↔host boundary and swap lessons.
+- **Phase 2 — formal engine architecture spec.** ✅
+- **Phase 3 — core engine + live host.** ✅ Headless core (scene graph, hit-testing,
+  state, transactional swap, Lua scripting + capability sandbox, skin loader) then
+  direct-to-surface render and the live `winit`/`wgpu` host app. CI + a software-render
+  regression harness landed alongside.
+- **Phase 5a — asset loading + `image` primitive.** ✅ Real bitmap skins.
+- **Phase 5b — gradient fills.** ⏳ Next (Y2K chrome/sheen).
+- **Phase 5c–5e** — text + fonts (reuses the asset resolver); vocab ergonomics (shape
+  helpers, shared draw+hotspot geometry); the host-extension registration mechanism.
+- **Phase 6 — validation** against both a media-player and a system-monitor host, proving
+  zero media-specific knowledge in the engine.
 
 ## Repository layout
 
 ```
-crates/hittest/         # decoupled hit-testing kernel (no render deps)
-crates/spike-render/     # Renderer trait + parity gate + vello backend + viewer example
-docs/superpowers/specs/  # design doc + backend decision
-docs/superpowers/plans/  # phase implementation plans
+crates/hittest/          # decoupled hit-testing kernel (no render deps)
+crates/carapace/          # the engine (scene, state, swap, scripting, vocab, assets, render)
+crates/carapace-demo/     # live winit/wgpu host app + bundled skins
+docs/superpowers/specs/   # design docs, per-phase specs, decisions
+docs/superpowers/plans/   # per-phase implementation plans
 ```
