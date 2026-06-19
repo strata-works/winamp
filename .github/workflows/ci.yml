@@ -22,18 +22,18 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
       - name: Format
         run: cargo fmt --all --check
       - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - name: Test (headless workspace)
         # Whole workspace now that the throwaway proto/spike-render crates are gone.
         # The only GPU test (carapace render_offscreen) is gated behind the `gpu-tests`
         # feature, so it compiles out here and runs only in the `render` (lavapipe) job;
         # benches don't run under `cargo test`. So this stays headless + GPU-free.
-        run: cargo test --workspace
+        run: cargo test --locked --workspace
 
   render:
     runs-on: ubuntu-latest
@@ -61,7 +61,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-render-${{ hashFiles('**/Cargo.toml') }}
+          key: ${{ runner.os }}-cargo-render-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-render-
       - name: Render tests (lavapipe software Vulkan)
         # Rely on the Vulkan loader auto-discovering the lavapipe ICD that
@@ -71,4 +71,4 @@ jobs:
         # needs compute (GL/llvmpipe can't drive vello).
         env:
           WGPU_BACKEND: vulkan
-        run: cargo test -p carapace --features gpu-tests --test render_offscreen
+        run: cargo test --locked -p carapace --features gpu-tests --test render_offscreen

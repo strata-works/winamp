@@ -37,10 +37,10 @@ fn walk(root: &Path, dir: &Path, index: &mut HashMap<String, PathBuf>) -> std::i
         let path = entry.path();
         if ft.is_dir() {
             walk(root, &path, index)?;
-        } else if ft.is_file() {
-            if let Ok(rel) = path.strip_prefix(root) {
-                index.insert(rel.to_string_lossy().replace('\\', "/"), path.clone());
-            }
+        } else if ft.is_file()
+            && let Ok(rel) = path.strip_prefix(root)
+        {
+            index.insert(rel.to_string_lossy().replace('\\', "/"), path.clone());
         }
     }
     Ok(())
