@@ -95,6 +95,7 @@ impl Renderer {
                     let filled = Rect::new(x0, y0, x0 + (x1 - x0) * v, y1);
                     vs.fill(Fill::NonZero, xform, vcolor(*color), None, &filled);
                 }
+                Node::Image { .. } => {} // rendering not yet implemented
             }
         }
 
