@@ -51,7 +51,7 @@ pub fn load_dir(dir: &Path) -> Result<(Manifest, SkinSource), SkinError> {
     }
     let lua_src = std::fs::read_to_string(dir.join(&manifest.entry))?;
     let canvas = (manifest.canvas.width, manifest.canvas.height);
-    Ok((manifest, SkinSource { lua_src, canvas }))
+    Ok((manifest, SkinSource::inline(lua_src, canvas)))
 }
 
 #[cfg(test)]

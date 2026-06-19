@@ -35,6 +35,7 @@ pub struct LoadedSkin {
 struct SceneBuilder {
     nodes: Vec<Node>,
     handler_fns: Vec<Function>,
+    assets: std::rc::Rc<crate::asset::AssetResolver>,
 }
 impl BuildContext for SceneBuilder {
     fn register_handler(&mut self, f: Function) -> HandlerId {
@@ -45,7 +46,7 @@ impl BuildContext for SceneBuilder {
         &mut self,
         name: &str,
     ) -> Result<Arc<crate::asset::DecodedImage>, crate::asset::AssetError> {
-        Err(crate::asset::AssetError::Unresolved(name.to_string()))
+        self.assets.image(name)
     }
 }
 
@@ -72,6 +73,7 @@ pub fn load(
     let builder = Rc::new(RefCell::new(SceneBuilder {
         nodes: Vec::new(),
         handler_fns: Vec::new(),
+        assets: source.assets.clone(),
     }));
 
     // One Lua constructor per registry primitive id (data-driven — not hardcoded).
@@ -159,10 +161,7 @@ mod tests {
     use std::rc::Rc;
 
     fn src(s: &str) -> SkinSource {
-        SkinSource {
-            lua_src: s.to_string(),
-            canvas: (300, 120),
-        }
+        SkinSource::inline(s, (300, 120))
     }
 
     #[test]

@@ -23,10 +23,7 @@ mod tests {
     use crate::fixture::FixtureHost;
 
     fn src(s: &str) -> SkinSource {
-        SkinSource {
-            lua_src: s.to_string(),
-            canvas: (10, 10),
-        }
+        SkinSource::inline(s, (10, 10))
     }
 
     #[test]
