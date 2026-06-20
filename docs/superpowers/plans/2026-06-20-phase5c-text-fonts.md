@@ -135,8 +135,8 @@ git -c user.name="Daniel Agbemava" -c user.email="danagbemava@gmail.com" \
 - Produces:
   ```rust
   pub enum TextContent { Static(String), Bound(String) }
-  pub enum HAlign { Left, Center, Right }   // Clone, Copy, Debug, PartialEq
-  pub enum VAlign { Top, Middle, Bottom }   // Clone, Copy, Debug, PartialEq
+  pub enum HAlign { Left, Center, Right }   // Clone, Copy, Debug, PartialEq, Eq, Hash
+  pub enum VAlign { Top, Middle, Bottom }   // Clone, Copy, Debug, PartialEq, Eq, Hash
   pub struct FontData { pub bytes: std::sync::Arc<[u8]> }   // Debug
   // Node variant:
   Node::Text {
@@ -222,14 +222,14 @@ pub enum TextContent {
     Bound(String),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum HAlign {
     Left,
     Center,
     Right,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum VAlign {
     Top,
     Middle,
@@ -634,7 +634,7 @@ git -c user.name="Daniel Agbemava" -c user.email="danagbemava@gmail.com" \
 
 **Interfaces:**
 - Consumes: `Node::Text` (Task 2), `paint_brush` (existing `render.rs:40`), `StateValue::Str` (Task 1).
-- Produces: text rendered under the canvas→surface transform with 2-D anchor offset and `Paint` fill.
+- Produces: text rendered under the canvas→surface transform with 2-D anchor offset and `Paint` fill; a render-side layout cache so identical text is shaped once; `Renderer::layout_cache_len()` test hook.
 
 - [ ] **Step 1: Acquire the test font**
 
@@ -744,6 +744,40 @@ fn renders_value_bound_text_from_string_state() {
     }
     assert!(green_ink > 80, "expected green ink from bound string state, found {green_ink}");
 }
+
+#[test]
+fn identical_text_is_shaped_once_and_cached() {
+    use carapace::scene::{FontData, HAlign, Node, TextContent, VAlign};
+    use std::sync::Arc;
+
+    let font = Arc::new(FontData {
+        bytes: Arc::from(include_bytes!("fonts/vt323.ttf").as_slice()),
+    });
+    let mk = |y: f32, valign: VAlign| Node::Text {
+        // Same string/font/size/halign/max_width => one cache entry, even at different y/valign.
+        content: TextContent::Static("CACHE".to_string()),
+        font: Some(font.clone()),
+        font_name: Some("vt323.ttf".to_string()),
+        size: 24.0,
+        paint: Paint::Solid(Color { r: 255, g: 255, b: 255, a: 255 }),
+        halign: HAlign::Left,
+        valign,
+        max_width: None,
+        pos: Pt { x: 4.0, y },
+    };
+    let o = offscreen(200, 120);
+    let mut r = Renderer::new(&o.device);
+    let scene = Scene {
+        canvas: (200, 120),
+        nodes: vec![mk(10.0, VAlign::Top), mk(60.0, VAlign::Bottom)],
+    };
+    let target = RenderTarget {
+        device: &o.device, queue: &o.queue, view: &o.view, width: o.w, height: o.h,
+    };
+    r.draw(&scene, |_k: &str| None, &target);
+    r.draw(&scene, |_k: &str| None, &target); // second frame: must reuse, not re-shape
+    assert_eq!(r.layout_cache_len(), 1, "identical text shares one cached layout");
+}
 ```
 
 - [ ] **Step 4: Run it to verify it fails**
@@ -764,6 +798,14 @@ use parley::{
 use vello::Glyph;
 ```
 
+Add a layout-cache key alias above the struct:
+
+```rust
+// Everything that affects shaping. `valign` is excluded — it's a draw-time offset, not a
+// layout input — so vertically-different placements of identical text share one cached layout.
+type LayoutKey = (usize, u32, crate::scene::HAlign, Option<u32>, String);
+```
+
 Change `struct Renderer` (`render.rs:19-21`) and `new` (`:101-113`) to:
 
 ```rust
@@ -773,6 +815,8 @@ pub struct Renderer {
     layout_cx: LayoutContext<Brush>,
     // Arc<FontData> ptr -> registered parley family name. Keeps system fallback for None fonts.
     families: HashMap<usize, String>,
+    // Cache of shaped layouts so unchanged text is never re-shaped per frame (perf-priority).
+    layouts: HashMap<LayoutKey, parley::Layout<Brush>>,
 }
 ```
 
@@ -784,7 +828,17 @@ In `new`, after building `inner`, return:
             font_cx: FontContext::new(),
             layout_cx: LayoutContext::new(),
             families: HashMap::new(),
+            layouts: HashMap::new(),
         }
+```
+
+Also add a test-only accessor (used by the cache GPU test) as an `impl Renderer` method:
+
+```rust
+    #[doc(hidden)]
+    pub fn layout_cache_len(&self) -> usize {
+        self.layouts.len()
+    }
 ```
 
 - [ ] **Step 6: Add the `text_of` helper and the draw arm**
@@ -824,11 +878,16 @@ In `draw`, add a `Node::Text` arm to the `match node` (after the `Node::Image` a
                     }
 
                     // Register the skin font once (keyed by Arc ptr); None => system default family.
+                    let font_ptr = font
+                        .as_ref()
+                        .map(|f| std::sync::Arc::as_ptr(f) as *const () as usize)
+                        .unwrap_or(0);
                     let family = font.as_ref().map(|f| {
-                        let ptr = std::sync::Arc::as_ptr(f) as *const () as usize;
+                        // Disjoint borrows of two distinct self fields — allowed since both are
+                        // direct field accesses (not through a method).
                         let font_cx = &mut self.font_cx;
                         self.families
-                            .entry(ptr)
+                            .entry(font_ptr)
                             .or_insert_with(|| {
                                 let blob = vello::peniko::Blob::new(std::sync::Arc::new(
                                     f.bytes.to_vec(),
@@ -844,27 +903,41 @@ In `draw`, add a `Node::Text` arm to the `match node` (after the `Node::Image` a
                             .clone()
                     });
 
-                    // Build the layout (parley). FontStack chooses the family; absent => default
-                    // collection (system fonts) provides the glyphs/fallback.
-                    let mut builder =
-                        self.layout_cx.ranged_builder(&mut self.font_cx, &s, 1.0, true);
-                    builder.push_default(StyleProperty::FontSize(*size));
-                    if let Some(fam) = &family {
-                        builder.push_default(StyleProperty::FontStack(FontStack::Single(
-                            parley::FontFamily::Named(std::borrow::Cow::Owned(fam.clone())),
-                        )));
+                    // Build + cache the parley layout. Key covers everything that affects shaping
+                    // (valign excluded — it's a draw offset). On a hit, no re-shaping happens.
+                    let key: LayoutKey = (
+                        font_ptr,
+                        size.to_bits(),
+                        *halign,
+                        max_width.map(|w| w.to_bits()),
+                        s.clone(),
+                    );
+                    if !self.layouts.contains_key(&key) {
+                        // FontStack chooses the family; absent => default collection (system
+                        // fonts) provides the glyphs/fallback.
+                        let mut builder =
+                            self.layout_cx.ranged_builder(&mut self.font_cx, &s, 1.0, true);
+                        builder.push_default(StyleProperty::FontSize(*size));
+                        if let Some(fam) = &family {
+                            builder.push_default(StyleProperty::FontStack(FontStack::Single(
+                                parley::FontFamily::Named(std::borrow::Cow::Owned(fam.clone())),
+                            )));
+                        }
+                        let mut layout = builder.build(&s);
+                        layout.break_all_lines(*max_width);
+                        let align = match halign {
+                            HAlign::Left => Alignment::Start,
+                            HAlign::Center => Alignment::Middle,
+                            HAlign::Right => Alignment::End,
+                        };
+                        let bw = max_width.unwrap_or(layout.width());
+                        layout.align(Some(bw), align, AlignmentOptions::default());
+                        self.layouts.insert(key.clone(), layout);
                     }
-                    let mut layout = builder.build(&s);
-                    layout.break_all_lines(*max_width);
-                    let align = match halign {
-                        HAlign::Left => Alignment::Start,
-                        HAlign::Center => Alignment::Middle,
-                        HAlign::Right => Alignment::End,
-                    };
-                    let block_w = max_width.unwrap_or(layout.width());
-                    layout.align(Some(block_w), align, AlignmentOptions::default());
+                    let layout = &self.layouts[&key];
 
                     // 2-D anchor offset from the block's measured size.
+                    let block_w = max_width.unwrap_or(layout.width());
                     let off_x = match halign {
                         HAlign::Left => 0.0,
                         HAlign::Center => -block_w / 2.0,
@@ -912,7 +985,7 @@ In `draw`, add a `Node::Text` arm to the `match node` (after the `Node::Image` a
 - [ ] **Step 7: Run the GPU tests**
 
 Run: `cargo test -p carapace --features gpu-tests --test render_offscreen`
-Expected: PASS — `renders_bundled_font_text_in_fill_color`, `renders_value_bound_text_from_string_state`, and the existing fill/image/gradient sentinels. Iterate on parley method names (per the integration note) until green.
+Expected: PASS — `renders_bundled_font_text_in_fill_color`, `renders_value_bound_text_from_string_state`, `identical_text_is_shaped_once_and_cached`, and the existing fill/image/gradient sentinels. Iterate on parley method names (per the integration note) until green.
 
 - [ ] **Step 8: Confirm headless build still green**
 
@@ -1082,12 +1155,13 @@ git -c user.name="Daniel Agbemava" -c user.email="danagbemava@gmail.com" \
 - `AssetResolver::font` + `BuildContext::font` plumbing → Task 3. ✅
 - `text{}` parsing (text xor value; font; size default 16; parse_paint; halign/valign defaults + bad → BadType; x/y; max_width) → Task 4. ✅
 - parley layout at render time, font registration + system fallback, layout-from-state, 2-D anchor offset, Paint fill via `draw_glyphs` → Task 5. ✅
+- Render-side layout cache (perf-priority; `valign` excluded from the key) → Task 5 (struct field, cache-aware draw arm, `identical_text_is_shaped_once_and_cached` GPU test). ✅
 - Geometry-free `summary()` (static + bound + paint variants) → Task 2 test. ✅
-- GPU tests with bundled font + ASCII (deterministic; solid + value-bound string) → Task 5. ✅
+- GPU tests with bundled font + ASCII (deterministic; solid + value-bound string + cache) → Task 5. ✅
 - Demo payoff (gradient-chrome label + live `track_title` + wrapped system-fallback) → Task 6. ✅
 - Dependency policy (sfw add parley; single peniko) → Global Constraints + Task 5 Steps 2. ✅
 - README current per phase → Task 7. ✅
 
 **Deferred (per spec, intentionally not in any task):** rich text / mixed runs, font weight/italic selection, logical (start/end) alignment + base-direction control, editable text, per-glyph animation, bitmap fonts. RTL/bidi *text* renders for free via parley (no task needed).
 
-**Note on the layout cache:** the spec calls for a render-side layout cache (perf). It is **not** implemented in Task 5's steps to keep the first cut simple and the GPU test honest. If profiling shows per-frame re-shaping is a bottleneck (the perf-priority concern), add a `HashMap<(usize,u32,HAlign,Option<u32>,String), parley::Layout<Brush>>` keyed by `(font ptr, size.to_bits(), halign, max_width.map(f32::to_bits), resolved string)` as a follow-up — `valign` stays excluded (draw offset, not layout input). Flagged here rather than silently dropped.
+**Note on the layout cache:** implemented in Task 5 — a `HashMap<LayoutKey, parley::Layout<Brush>>` on `Renderer` keyed by `(font ptr, size.to_bits(), halign, max_width.map(f32::to_bits), resolved string)`, so identical text (static, or a bound string unchanged between frames) is shaped once. `valign` is deliberately excluded from the key (it's a draw-time offset, so two vertically-different placements of identical text share one entry). Covered by `identical_text_is_shaped_once_and_cached`. **Unbounded-growth caveat:** the cache has no eviction — for the demo and typical skins the set of distinct strings is tiny, but a host that streams unbounded distinct bound strings (e.g. a fast-changing timecode at millisecond resolution) would grow it without limit. If that workload appears, add an LRU bound or clear-per-swap; flagged, not silently shipped.
