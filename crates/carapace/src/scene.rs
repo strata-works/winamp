@@ -46,6 +46,31 @@ pub enum Paint {
     Gradient(Gradient),
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub enum TextContent {
+    Static(String),
+    Bound(String),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum HAlign {
+    Left,
+    Center,
+    Right,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum VAlign {
+    Top,
+    Middle,
+    Bottom,
+}
+
+#[derive(Debug)]
+pub struct FontData {
+    pub bytes: std::sync::Arc<[u8]>,
+}
+
 pub type HandlerId = usize;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -74,6 +99,17 @@ pub enum Node {
     Image {
         image: std::sync::Arc<crate::asset::DecodedImage>,
         dest: ImageDest,
+    },
+    Text {
+        content: TextContent,
+        font: Option<std::sync::Arc<FontData>>,
+        font_name: Option<String>,
+        size: f32,
+        paint: Paint,
+        halign: HAlign,
+        valign: VAlign,
+        max_width: Option<f32>,
+        pos: Pt,
     },
 }
 
@@ -126,6 +162,43 @@ impl Scene {
                     dest.w as i64,
                     dest.h as i64
                 ),
+                Node::Text {
+                    content,
+                    font_name,
+                    size,
+                    paint,
+                    halign,
+                    valign,
+                    ..
+                } => {
+                    let head = match content {
+                        TextContent::Static(s) => format!("text \"{s}\""),
+                        TextContent::Bound(k) => format!("text value={k}"),
+                    };
+                    let font = font_name.as_deref().unwrap_or("system");
+                    let h = match halign {
+                        HAlign::Left => "left",
+                        HAlign::Center => "center",
+                        HAlign::Right => "right",
+                    };
+                    let v = match valign {
+                        VAlign::Top => "top",
+                        VAlign::Middle => "middle",
+                        VAlign::Bottom => "bottom",
+                    };
+                    let paint_s = match paint {
+                        Paint::Solid(c) => format!("rgba={},{},{},{}", c.r, c.g, c.b, c.a),
+                        Paint::Gradient(g) => {
+                            let (kind, n) = match g {
+                                Gradient::Linear { stops, .. } => ("linear", stops.len()),
+                                Gradient::Radial { stops, .. } => ("radial", stops.len()),
+                                Gradient::Sweep { stops, .. } => ("sweep", stops.len()),
+                            };
+                            format!("gradient={kind} stops={n}")
+                        }
+                    };
+                    format!("{head} font={font} size={} halign={h} valign={v} {paint_s}", *size as i64)
+                }
             });
         }
         lines.join("\n")
@@ -282,6 +355,50 @@ mod tests {
         assert_eq!(
             scene.summary(),
             "canvas 10x10\nfill gradient=linear stops=2"
+        );
+    }
+
+    #[test]
+    fn summary_describes_text_nodes() {
+        let scene = Scene {
+            canvas: (200, 50),
+            nodes: vec![
+                Node::Text {
+                    content: TextContent::Static("HI".to_string()),
+                    font: None,
+                    font_name: Some("vt323.ttf".to_string()),
+                    size: 18.0,
+                    paint: Paint::Solid(Color { r: 1, g: 2, b: 3, a: 255 }),
+                    halign: HAlign::Center,
+                    valign: VAlign::Top,
+                    max_width: None,
+                    pos: Pt { x: 40.0, y: 8.0 },
+                },
+                Node::Text {
+                    content: TextContent::Bound("track_title".to_string()),
+                    font: None,
+                    font_name: None,
+                    size: 12.0,
+                    paint: Paint::Gradient(Gradient::Linear {
+                        from: Pt { x: 0.0, y: 0.0 },
+                        to: Pt { x: 0.0, y: 12.0 },
+                        stops: vec![
+                            ColorStop { at: 0.0, color: Color { r: 0, g: 0, b: 0, a: 255 } },
+                            ColorStop { at: 1.0, color: Color { r: 9, g: 9, b: 9, a: 255 } },
+                        ],
+                    }),
+                    halign: HAlign::Right,
+                    valign: VAlign::Middle,
+                    max_width: Some(120.0),
+                    pos: Pt { x: 200.0, y: 30.0 },
+                },
+            ],
+        };
+        assert_eq!(
+            scene.summary(),
+            "canvas 200x50\n\
+             text \"HI\" font=vt323.ttf size=18 halign=center valign=top rgba=1,2,3,255\n\
+             text value=track_title font=system size=12 halign=right valign=middle gradient=linear stops=2"
         );
     }
 

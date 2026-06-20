@@ -165,6 +165,7 @@ impl Renderer {
                         xform * place,
                     );
                 }
+                Node::Text { .. } => {} // rendered in Phase 5c Task 5
             }
         }
 
