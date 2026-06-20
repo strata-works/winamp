@@ -35,9 +35,11 @@ numerals) with no new fill machinery.
 - A **`StateValue::Str`** variant so host state can carry strings (the only non-rendering
   change; `StateValue` becomes `Clone`, no longer `Copy`).
 - A **`text{}`** primitive + `Node::Text` carrying plain inputs (content, font, size, paint,
-  align, optional wrap-width, position) — no glyph geometry in the scene.
-- **Multi-line layout** (explicit `\n` and wrap at `max_width`) and **alignment**
-  (left/center/right) via **parley**.
+  halign/valign, optional wrap-width, position) — no glyph geometry in the scene.
+- **Multi-line layout** (explicit `\n` and wrap at `max_width`) via **parley**, with **2-D
+  anchoring**: `halign` (left/center/right) doubles as line justification + horizontal anchor,
+  `valign` (top/middle/bottom) anchors `pos` against the block's measured height — full 9-way
+  placement, no region/box model.
 - **Value-bound text:** `value="<key>"` resolves a string state key at render, mirroring
   `value_fill` — the scene binds the key, never the value.
 - **Fonts via the 5a resolver:** `AssetResolver::font(name)` returns raw font bytes (cached,
@@ -51,7 +53,10 @@ numerals) with no new fill machinery.
 - **Rich text** — mixed styles/runs within one `text{}`, inline color/size changes.
 - **Font style selection** — weight/italic/variation axes beyond the bundled font file (one
   `text{}` names one font file).
-- **Complex-script / bidi tuning** beyond what parley gives for free; no RTL-specific work.
+- **RTL/bidi UI semantics** — RTL/bidi *text* renders correctly (parley/swash do bidi
+  reordering + complex-script shaping for free), but 5c keeps **physical** alignment
+  (left/center/right) and adds no **logical (start/end) alignment** or **base-direction
+  (LTR/RTL/auto) control** — those are a later slice.
 - **Editable text / caret / selection.**
 - **Per-glyph or value-driven text animation** (string updates on rebuild are fine; animated
   glyph effects are not).
@@ -71,7 +76,8 @@ lives behind that render seam, run at draw time after any state key is resolved.
   string is resolved at render (like `value_fill`'s scalar). Static text binds nothing. The
   "scene is rebuilt from state; never the reverse" rule is untouched.
 - **Layout at render time (chosen architecture).** Layout is a function of
-  `(string, font, size, align, max_width)`. For value-bound text the string isn't known until
+  `(string, font, size, halign, max_width)` — `valign` is a post-layout draw offset, not a
+  layout input. For value-bound text the string isn't known until
   the key resolves, so **all** text lays out at render — one code path for static and bound text.
   A layout **cache** keyed by the resolved inputs means unchanged text is never re-shaped per
   frame (serves the perf-priority constraint).
@@ -85,7 +91,7 @@ lives behind that render seam, run at draw time after any state key is resolved.
 ```
 state.rs   # StateValue gains Str(Arc<str>); enum becomes Clone (was Copy)
 host.rs    # Host::get already returns Option<StateValue> — now may yield Str; no signature change
-scene.rs   # new TextContent, TextAlign, FontData; Node::Text { .. }; summary() line
+scene.rs   # new TextContent, HAlign, VAlign, FontData; Node::Text { .. }; summary() line
 asset.rs   # AssetResolver::font(name) -> Result<Arc<FontData>, AssetError> (raw bytes, cached)
 vocab.rs   # BuildContext gains font(name); new TextPrim (the `text` constructor) using parse_paint
 script.rs  # threads font resolution into the SceneBuilder (like image)
@@ -123,7 +129,9 @@ resolver does the inverse: it reads `Str` and treats `Scalar`/`Bool`/missing as 
 pub enum TextContent { Static(String), Bound(String) }   // Bound holds a state key
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum TextAlign { Left, Center, Right }
+pub enum HAlign { Left, Center, Right }    // line justification + horizontal anchor of pos
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum VAlign { Top, Middle, Bottom }    // vertical anchor of pos against measured height
 
 #[derive(Debug)]
 pub struct FontData { pub bytes: std::sync::Arc<[u8]> }   // raw font file bytes (resolver-owned)
@@ -134,15 +142,23 @@ Text {
     font: Option<std::sync::Arc<FontData>>,   // None -> system default family (fallback)
     size: f32,
     paint: Paint,                             // 5b: Solid | Gradient
-    align: TextAlign,
+    halign: HAlign,
+    valign: VAlign,
     max_width: Option<f32>,                   // None -> no wrap (breaks only on '\n')
-    pos: Pt,                                  // top-left anchor, canvas space
+    pos: Pt,                                  // anchor point, canvas space
 }
 ```
 
-No glyph runs or positions in the scene — shaping is a render concern. `pos` is the **top-left**
-of the text block (consistent with `image` `dest.x/y`). `align` governs justification of lines
-within the block's width: `max_width` when set, else the natural width of the longest line.
+No glyph runs or positions in the scene — shaping is a render concern. `pos` is the **anchor
+point**; `halign`/`valign` choose which edge/center of the laid-out block it pins:
+- `halign` governs both line justification within the block's width (`max_width` when set, else
+  the natural width of the longest line) **and** the horizontal anchor — `Left`: `pos.x` is the
+  left edge; `Center`: horizontal center; `Right`: right edge.
+- `valign` anchors `pos.y` against the block's **measured** height — `Top`: `pos.y` is the top
+  edge; `Middle`: vertical center; `Bottom`: bottom edge (after the last line).
+
+This gives full 9-way placement (top-left … bottom-right) from a point. "Centered in a fixed
+slot" is `pos` = slot center with `halign=Center, valign=Middle`. No rectangle/clipping model.
 
 ## 4. Asset / font resolution (`asset.rs`, `vocab.rs`, `script.rs`)
 
@@ -173,26 +189,28 @@ resolver into the `SceneBuilder` for `TextPrim` exactly as it does for `ImagePri
 - `size = <number>` (optional, default `16.0`).
 - fill via the existing **`parse_paint(args)`**: `gradient={…}` → `Paint::Gradient`, else
   `color={…}` → `Paint::Solid`; neither → `MissingField("color")` (shared 5b behavior).
-- `align = "left" | "center" | "right"` (optional, default `"left"`; any other → `BadType`).
-- `x`, `y` (required) → `pos`.
+- `halign = "left" | "center" | "right"` (optional, default `"left"`; any other → `BadType`).
+- `valign = "top" | "middle" | "bottom"` (optional, default `"top"`; any other → `BadType`).
+- `x`, `y` (required) → `pos` (the anchor point; `halign`/`valign` select which edge/center).
 - `max_width = <number>` (optional) → `Some(width)`; absent → `None` (no wrap).
 
 ```lua
--- static gradient-chrome label
-text{ text = "HEADSPACE", font = "digital.ttf", size = 18, x = 40, y = 8, align = "center",
+-- static gradient-chrome label, centered horizontally on x=40
+text{ text = "HEADSPACE", font = "digital.ttf", size = 18, x = 40, y = 8, halign = "center",
       gradient = { type = "linear", from = {x=0,y=0}, to = {x=0,y=18},
                    stops = { {at=0, color={r=230,g=240,b=255}},
                              {at=1, color={r=120,g=150,b=200}} } } }
 
--- value-bound live readout (string state key), solid color
-text{ value = "track_title", font = "digital.ttf", size = 12, x = 40, y = 30,
-      color = { r = 120, g = 230, b = 80 } }
+-- value-bound live readout, right-anchored to x=200 and vertically centered in a slot at y=30
+text{ value = "track_title", font = "digital.ttf", size = 12, x = 200, y = 30,
+      halign = "right", valign = "middle", color = { r = 120, g = 230, b = 80 } }
 
 -- wrapped multi-line static text, left aligned, system fallback font (no `font=`)
 text{ text = "now playing\nlong title that wraps", size = 11, x = 8, y = 60, max_width = 120 }
 ```
 
-A malformed `text{}` (both/neither content, bad `align`, missing font asset, bad paint) →
+A malformed `text{}` (both/neither content, bad `halign`/`valign`, missing font asset, bad
+paint) →
 `BuildError` → caught by the **transactional swap** (skin fails to load; prior scene stays).
 
 ## 6. Render (`render.rs`)
@@ -203,17 +221,21 @@ The `Renderer` owns a parley `FontContext` + `LayoutContext` (built once) and a 
   keyed by the `Arc<FontData>` pointer identity → a parley font family. `font: None` uses the
   system default family. parley's default collection includes system fonts, giving **fallback**
   for glyphs the bundled font lacks (and the whole string when no font is named).
-- **Layout cache:** keyed by `(font identity, size bits, align, max_width bits, resolved
-  string)` → a cached parley `Layout`. Unchanged text (static, or a bound string that didn't
+- **Layout cache:** keyed by `(font identity, size bits, halign, max_width bits, resolved
+  string)` → a cached parley `Layout` (`valign` excluded — it's applied as a draw offset, not
+  baked into layout). Unchanged text (static, or a bound string that didn't
   change between frames) is **not re-shaped** — the perf-critical path.
 - **Per `Node::Text` at draw:**
   1. Resolve `content`: `Static(s)` → `s`; `Bound(key)` → `read_value(key)` → `Str(s)` → `s`;
      `Scalar`/`Bool`/missing → empty string → **render nothing** (no panic, like `value_fill`
      degrades).
-  2. Get-or-build the `Layout` (font, size, max_width for wrap, align for justification).
-  3. For each glyph run: `vs.draw_glyphs(run_font).font_size(size).brush(paint_brush(&paint))
-     .transform(xform · translate(pos)).draw(Fill::NonZero, glyphs)` — `paint_brush` is the 5b
-     helper (solid color with real alpha, or a peniko gradient). Gradient coordinates are
+  2. Get-or-build the `Layout` (font, size, `max_width` for wrap, `halign` for justification).
+  3. Compute the **anchor offset** from the layout's measured size: horizontal by `halign`
+     (Left → 0, Center → −width/2, Right → −width), vertical by `valign` (Top → 0, Middle →
+     −height/2, Bottom → −height). The block's draw origin is `pos + offset`.
+  4. For each glyph run: `vs.draw_glyphs(run_font).font_size(size).brush(paint_brush(&paint))
+     .transform(xform · translate(pos + offset)).draw(Fill::NonZero, glyphs)` — `paint_brush` is
+     the 5b helper (solid color with real alpha, or a peniko gradient). Gradient coordinates are
      canvas-space, same as fills, so chrome text scales with the skin.
 
 Text draws under the same canvas→surface `xform` as every other node, so it scales with the
@@ -225,12 +247,13 @@ Domain-neutral, deterministic, **no glyph geometry** (glyph metrics are OS-depen
 fallback, so they must never enter a snapshot). One line per text node, with the paint
 descriptor reused from 5b:
 
-- Static: `text "<string>" font=<name|system> size=<n> align=<a> <paint>`
-- Bound:  `text value=<key> font=<name|system> size=<n> align=<a> <paint>`
+- Static: `text "<string>" font=<name|system> size=<n> halign=<h> valign=<v> <paint>`
+- Bound:  `text value=<key> font=<name|system> size=<n> halign=<h> valign=<v> <paint>`
 
 where `<paint>` is `rgba=<r>,<g>,<b>,<a>` (solid) or `gradient=<kind> stops=<n>` (gradient) —
 exactly the 5b spellings — `<name>` is the font asset name or the literal `system`, `<n>` is the
-integer size, `<a>` is `left|center|right`. `max_width` is omitted from the summary (geometry).
+integer size, `<h>` is `left|center|right`, `<v>` is `top|middle|bottom`. `pos` and `max_width`
+are omitted from the summary (geometry).
 The `<string>` is the author's static literal (deterministic); bound text shows the **key**, not
 a resolved value.
 
@@ -252,13 +275,13 @@ skin's `assets/` so named-font text is exercised without relying on the host's s
 
 **Headless (no GPU, fallback-independent):**
 - `parse` (`TextPrim`): `text=` xor `value=` (neither → `MissingField`; both → `BadType`);
-  `align` default `left` and bad value → `BadType`; `size` default `16`; missing `font` asset →
-  `BuildError`; `parse_paint` solid vs gradient reused from 5b.
+  `halign` default `left` / `valign` default `top` and bad values → `BadType`; `size` default
+  `16`; missing `font` asset → `BuildError`; `parse_paint` solid vs gradient reused from 5b.
 - `AssetResolver::font`: resolves a bundled font, caches (same `Arc` on repeat), rejects
   traversal (shares the 5a sandbox tests).
 - `summary()`: static line, bound (`value=`) line, and the gradient-paint variant are stable
-  (snapshot updated). Static string, font name/`system`, size, align, and paint appear; **no
-  geometry**.
+  (snapshot updated). Static string, font name/`system`, size, halign/valign, and paint appear;
+  **no geometry** (no `pos`, `max_width`, or glyph metrics).
 - `StateValue::Str`: `value_fill` ignores a `Str` binding (clamps to 0, no panic); state round-
   trips a `Str` through `engine.state`.
 
@@ -295,7 +318,7 @@ face (OFL/Apache); its license file ships alongside it in the skin's `assets/`.
 ## Definition of done (5c)
 
 `StateValue::Str` exists and round-trips through the host/state path; a `text{}` primitive lays
-out static and value-bound strings with multi-line wrapping and left/center/right alignment;
+out static and value-bound strings with multi-line wrapping and 2-D anchoring (halign × valign);
 fonts resolve through the sandboxed `AssetResolver` with parley system fallback; text fills via
 the 5b `Paint` (solid and gradient both render — the GPU color sentinels pass); the demo
 `reference` skin shows a gradient-chrome label and a live `track_title` readout; the headless
