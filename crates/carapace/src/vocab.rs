@@ -146,6 +146,26 @@ fn parse_paint(args: &Table) -> Result<Paint, BuildError> {
     }
 }
 
+fn parse_halign(args: &Table) -> Result<crate::scene::HAlign, BuildError> {
+    use crate::scene::HAlign;
+    match args.get::<Option<String>>("halign")?.as_deref() {
+        None | Some("left") => Ok(HAlign::Left),
+        Some("center") => Ok(HAlign::Center),
+        Some("right") => Ok(HAlign::Right),
+        Some(_) => Err(BuildError::BadType("halign must be left|center|right")),
+    }
+}
+
+fn parse_valign(args: &Table) -> Result<crate::scene::VAlign, BuildError> {
+    use crate::scene::VAlign;
+    match args.get::<Option<String>>("valign")?.as_deref() {
+        None | Some("top") => Ok(VAlign::Top),
+        Some("middle") => Ok(VAlign::Middle),
+        Some("bottom") => Ok(VAlign::Bottom),
+        Some(_) => Err(BuildError::BadType("valign must be top|middle|bottom")),
+    }
+}
+
 struct FillPrim;
 impl Primitive for FillPrim {
     fn id(&self) -> &str {
@@ -215,6 +235,48 @@ impl Primitive for ImagePrim {
     }
 }
 
+struct TextPrim;
+impl Primitive for TextPrim {
+    fn id(&self) -> &str {
+        "text"
+    }
+    fn build(&self, args: &Table, ctx: &mut dyn BuildContext) -> Result<Node, BuildError> {
+        use crate::scene::TextContent;
+        let has_text = args.contains_key("text")?;
+        let has_value = args.contains_key("value")?;
+        let content = match (has_text, has_value) {
+            (true, true) => {
+                return Err(BuildError::BadType("text and value are mutually exclusive"));
+            }
+            (false, false) => return Err(BuildError::MissingField("text")),
+            (true, false) => TextContent::Static(args.get("text")?),
+            (false, true) => TextContent::Bound(args.get("value")?),
+        };
+        let (font, font_name) = match args.get::<Option<String>>("font")? {
+            Some(name) => (Some(ctx.font(&name).map_err(BuildError::Asset)?), Some(name)),
+            None => (None, None),
+        };
+        let size: f32 = args.get::<Option<f32>>("size")?.unwrap_or(16.0);
+        let paint = parse_paint(args)?;
+        let halign = parse_halign(args)?;
+        let valign = parse_valign(args)?;
+        let x: f32 = args.get("x").map_err(|_| BuildError::MissingField("x"))?;
+        let y: f32 = args.get("y").map_err(|_| BuildError::MissingField("y"))?;
+        let max_width: Option<f32> = args.get("max_width")?;
+        Ok(Node::Text {
+            content,
+            font,
+            font_name,
+            size,
+            paint,
+            halign,
+            valign,
+            max_width,
+            pos: Pt { x, y },
+        })
+    }
+}
+
 pub struct VocabRegistry {
     prims: Vec<Box<dyn Primitive>>,
 }
@@ -242,6 +304,7 @@ impl VocabRegistry {
         r.register(Box::new(RegionPrim));
         r.register(Box::new(ValueFillPrim));
         r.register(Box::new(ImagePrim));
+        r.register(Box::new(TextPrim));
         r
     }
 }
@@ -389,8 +452,69 @@ mod tests {
     }
 
     #[test]
-    fn base_registry_now_has_four() {
-        assert_eq!(VocabRegistry::base().iter().count(), 4);
+    fn text_prim_builds_static_with_defaults() {
+        use crate::scene::{HAlign, TextContent, VAlign};
+        let lua = Lua::new();
+        let t = tbl(&lua, "return { text='HI', x=5, y=6, color={r=1,g=2,b=3} }");
+        match TextPrim.build(&t, &mut NoHandlers).unwrap() {
+            Node::Text {
+                content, size, halign, valign, font, font_name, max_width, pos, ..
+            } => {
+                assert_eq!(content, TextContent::Static("HI".to_string()));
+                assert_eq!(size, 16.0);
+                assert_eq!(halign, HAlign::Left);
+                assert_eq!(valign, VAlign::Top);
+                assert!(font.is_none() && font_name.is_none());
+                assert_eq!(max_width, None);
+                assert_eq!((pos.x, pos.y), (5.0, 6.0));
+            }
+            other => panic!("expected Text, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn text_prim_builds_bound_with_alignment_and_wrap() {
+        use crate::scene::{HAlign, TextContent, VAlign};
+        let lua = Lua::new();
+        let t = tbl(
+            &lua,
+            "return { value='track_title', x=0, y=0, color={r=0,g=0,b=0}, \
+               halign='right', valign='middle', size=12, max_width=120 }",
+        );
+        match TextPrim.build(&t, &mut NoHandlers).unwrap() {
+            Node::Text { content, halign, valign, max_width, .. } => {
+                assert_eq!(content, TextContent::Bound("track_title".to_string()));
+                assert_eq!(halign, HAlign::Right);
+                assert_eq!(valign, VAlign::Middle);
+                assert_eq!(max_width, Some(120.0));
+            }
+            other => panic!("expected Text, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn text_prim_content_xor_and_bad_align() {
+        let lua = Lua::new();
+        let neither = tbl(&lua, "return { x=0, y=0, color={r=0,g=0,b=0} }");
+        assert!(matches!(
+            TextPrim.build(&neither, &mut NoHandlers),
+            Err(BuildError::MissingField("text"))
+        ));
+        let both = tbl(&lua, "return { text='a', value='b', x=0, y=0, color={r=0,g=0,b=0} }");
+        assert!(matches!(
+            TextPrim.build(&both, &mut NoHandlers),
+            Err(BuildError::BadType(_))
+        ));
+        let bad_align = tbl(&lua, "return { text='a', x=0, y=0, color={r=0,g=0,b=0}, halign='up' }");
+        assert!(matches!(
+            TextPrim.build(&bad_align, &mut NoHandlers),
+            Err(BuildError::BadType(_))
+        ));
+    }
+
+    #[test]
+    fn base_registry_now_has_five() {
+        assert_eq!(VocabRegistry::base().iter().count(), 5);
     }
 
     #[test]
