@@ -184,3 +184,16 @@ impl Renderer {
             .expect("vello render_to_texture");
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::value_of;
+    use crate::state::StateValue;
+    use std::sync::Arc;
+
+    #[test]
+    fn value_of_ignores_string_state() {
+        let read = |_: &str| Some(StateValue::Str(Arc::from("not a number")));
+        assert_eq!(value_of(&read, "k"), 0.0);
+    }
+}
