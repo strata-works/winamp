@@ -23,6 +23,7 @@ pub struct AssetResolver {
     index: HashMap<String, PathBuf>,
     bytes_cache: RefCell<HashMap<String, Arc<[u8]>>>,
     image_cache: RefCell<HashMap<String, Arc<DecodedImage>>>,
+    font_cache: RefCell<HashMap<String, Arc<crate::scene::FontData>>>,
 }
 
 fn walk(root: &Path, dir: &Path, index: &mut HashMap<String, PathBuf>) -> std::io::Result<()> {
@@ -53,6 +54,7 @@ impl AssetResolver {
             index: HashMap::new(),
             bytes_cache: RefCell::new(HashMap::new()),
             image_cache: RefCell::new(HashMap::new()),
+            font_cache: RefCell::new(HashMap::new()),
         }
     }
 
@@ -68,6 +70,7 @@ impl AssetResolver {
             index,
             bytes_cache: RefCell::new(HashMap::new()),
             image_cache: RefCell::new(HashMap::new()),
+            font_cache: RefCell::new(HashMap::new()),
         })
     }
 
@@ -108,6 +111,18 @@ impl AssetResolver {
             .insert(name.to_string(), decoded.clone());
         Ok(decoded)
     }
+
+    pub fn font(&self, name: &str) -> Result<Arc<crate::scene::FontData>, AssetError> {
+        if let Some(f) = self.font_cache.borrow().get(name) {
+            return Ok(f.clone());
+        }
+        let bytes = self.bytes(name)?;
+        let font = Arc::new(crate::scene::FontData { bytes });
+        self.font_cache
+            .borrow_mut()
+            .insert(name.to_string(), font.clone());
+        Ok(font)
+    }
 }
 
 #[cfg(test)]
@@ -131,6 +146,7 @@ mod tests {
         img.save(base.join("assets/red.png")).unwrap();
         img.save(base.join("assets/sub/red.png")).unwrap();
         std::fs::write(base.join("assets/not_an_image.txt"), b"hello").unwrap();
+        std::fs::write(base.join("assets/face.ttf"), b"\x00\x01\x00\x00FAKEFONTBYTES").unwrap();
         Tmp(base)
     }
 
@@ -188,6 +204,17 @@ mod tests {
             AssetResolver::empty().image("red.png"),
             Err(AssetError::Unresolved(_))
         ));
+    }
+
+    #[test]
+    fn font_returns_raw_bytes_and_caches() {
+        let t = temp_skin("font");
+        let r = AssetResolver::resolve(&t.0, "assets").unwrap();
+        let a = r.font("face.ttf").unwrap();
+        let b = r.font("face.ttf").unwrap();
+        assert!(Arc::ptr_eq(&a, &b), "second font read hits the cache");
+        assert_eq!(&a.bytes[0..4], &[0x00, 0x01, 0x00, 0x00]);
+        assert!(matches!(r.font("nope.ttf"), Err(AssetError::Unresolved(_))));
     }
 
     #[cfg(unix)]

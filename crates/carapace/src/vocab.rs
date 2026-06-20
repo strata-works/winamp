@@ -25,6 +25,10 @@ pub trait BuildContext {
         &mut self,
         name: &str,
     ) -> Result<Arc<crate::asset::DecodedImage>, crate::asset::AssetError>;
+    fn font(
+        &mut self,
+        name: &str,
+    ) -> Result<Arc<crate::scene::FontData>, crate::asset::AssetError>;
 }
 
 /// A vocabulary entry a skin can construct: `id` is the Lua constructor name.
@@ -259,6 +263,12 @@ mod tests {
         ) -> Result<std::sync::Arc<crate::asset::DecodedImage>, crate::asset::AssetError> {
             Err(crate::asset::AssetError::Unresolved(name.to_string()))
         }
+        fn font(
+            &mut self,
+            name: &str,
+        ) -> Result<std::sync::Arc<crate::scene::FontData>, crate::asset::AssetError> {
+            Err(crate::asset::AssetError::Unresolved(name.to_string()))
+        }
     }
 
     fn tbl(lua: &Lua, src: &str) -> Table {
@@ -344,6 +354,13 @@ mod tests {
                 &mut self,
                 name: &str,
             ) -> Result<std::sync::Arc<crate::asset::DecodedImage>, crate::asset::AssetError>
+            {
+                Err(crate::asset::AssetError::Unresolved(name.to_string()))
+            }
+            fn font(
+                &mut self,
+                name: &str,
+            ) -> Result<std::sync::Arc<crate::scene::FontData>, crate::asset::AssetError>
             {
                 Err(crate::asset::AssetError::Unresolved(name.to_string()))
             }
@@ -487,6 +504,12 @@ mod tests {
                 _name: &str,
             ) -> Result<Arc<DecodedImage>, crate::asset::AssetError> {
                 Ok(self.0.clone())
+            }
+            fn font(
+                &mut self,
+                name: &str,
+            ) -> Result<std::sync::Arc<crate::scene::FontData>, crate::asset::AssetError> {
+                Err(crate::asset::AssetError::Unresolved(name.to_string()))
             }
         }
         let img = Arc::new(DecodedImage {
