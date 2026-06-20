@@ -197,7 +197,10 @@ impl Scene {
                             format!("gradient={kind} stops={n}")
                         }
                     };
-                    format!("{head} font={font} size={} halign={h} valign={v} {paint_s}", *size as i64)
+                    format!(
+                        "{head} font={font} size={} halign={h} valign={v} {paint_s}",
+                        *size as i64
+                    )
                 }
             });
         }
@@ -368,7 +371,12 @@ mod tests {
                     font: None,
                     font_name: Some("vt323.ttf".to_string()),
                     size: 18.0,
-                    paint: Paint::Solid(Color { r: 1, g: 2, b: 3, a: 255 }),
+                    paint: Paint::Solid(Color {
+                        r: 1,
+                        g: 2,
+                        b: 3,
+                        a: 255,
+                    }),
                     halign: HAlign::Center,
                     valign: VAlign::Top,
                     max_width: None,
@@ -383,8 +391,24 @@ mod tests {
                         from: Pt { x: 0.0, y: 0.0 },
                         to: Pt { x: 0.0, y: 12.0 },
                         stops: vec![
-                            ColorStop { at: 0.0, color: Color { r: 0, g: 0, b: 0, a: 255 } },
-                            ColorStop { at: 1.0, color: Color { r: 9, g: 9, b: 9, a: 255 } },
+                            ColorStop {
+                                at: 0.0,
+                                color: Color {
+                                    r: 0,
+                                    g: 0,
+                                    b: 0,
+                                    a: 255,
+                                },
+                            },
+                            ColorStop {
+                                at: 1.0,
+                                color: Color {
+                                    r: 9,
+                                    g: 9,
+                                    b: 9,
+                                    a: 255,
+                                },
+                            },
                         ],
                     }),
                     halign: HAlign::Right,

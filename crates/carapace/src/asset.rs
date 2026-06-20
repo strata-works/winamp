@@ -146,7 +146,11 @@ mod tests {
         img.save(base.join("assets/red.png")).unwrap();
         img.save(base.join("assets/sub/red.png")).unwrap();
         std::fs::write(base.join("assets/not_an_image.txt"), b"hello").unwrap();
-        std::fs::write(base.join("assets/face.ttf"), b"\x00\x01\x00\x00FAKEFONTBYTES").unwrap();
+        std::fs::write(
+            base.join("assets/face.ttf"),
+            b"\x00\x01\x00\x00FAKEFONTBYTES",
+        )
+        .unwrap();
         Tmp(base)
     }
 

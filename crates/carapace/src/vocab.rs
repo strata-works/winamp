@@ -25,10 +25,8 @@ pub trait BuildContext {
         &mut self,
         name: &str,
     ) -> Result<Arc<crate::asset::DecodedImage>, crate::asset::AssetError>;
-    fn font(
-        &mut self,
-        name: &str,
-    ) -> Result<Arc<crate::scene::FontData>, crate::asset::AssetError>;
+    fn font(&mut self, name: &str)
+    -> Result<Arc<crate::scene::FontData>, crate::asset::AssetError>;
 }
 
 /// A vocabulary entry a skin can construct: `id` is the Lua constructor name.
@@ -253,7 +251,10 @@ impl Primitive for TextPrim {
             (false, true) => TextContent::Bound(args.get("value")?),
         };
         let (font, font_name) = match args.get::<Option<String>>("font")? {
-            Some(name) => (Some(ctx.font(&name).map_err(BuildError::Asset)?), Some(name)),
+            Some(name) => (
+                Some(ctx.font(&name).map_err(BuildError::Asset)?),
+                Some(name),
+            ),
             None => (None, None),
         };
         let size: f32 = args.get::<Option<f32>>("size")?.unwrap_or(16.0);
@@ -458,7 +459,15 @@ mod tests {
         let t = tbl(&lua, "return { text='HI', x=5, y=6, color={r=1,g=2,b=3} }");
         match TextPrim.build(&t, &mut NoHandlers).unwrap() {
             Node::Text {
-                content, size, halign, valign, font, font_name, max_width, pos, ..
+                content,
+                size,
+                halign,
+                valign,
+                font,
+                font_name,
+                max_width,
+                pos,
+                ..
             } => {
                 assert_eq!(content, TextContent::Static("HI".to_string()));
                 assert_eq!(size, 16.0);
@@ -482,7 +491,13 @@ mod tests {
                halign='right', valign='middle', size=12, max_width=120 }",
         );
         match TextPrim.build(&t, &mut NoHandlers).unwrap() {
-            Node::Text { content, halign, valign, max_width, .. } => {
+            Node::Text {
+                content,
+                halign,
+                valign,
+                max_width,
+                ..
+            } => {
                 assert_eq!(content, TextContent::Bound("track_title".to_string()));
                 assert_eq!(halign, HAlign::Right);
                 assert_eq!(valign, VAlign::Middle);
@@ -500,12 +515,18 @@ mod tests {
             TextPrim.build(&neither, &mut NoHandlers),
             Err(BuildError::MissingField("text"))
         ));
-        let both = tbl(&lua, "return { text='a', value='b', x=0, y=0, color={r=0,g=0,b=0} }");
+        let both = tbl(
+            &lua,
+            "return { text='a', value='b', x=0, y=0, color={r=0,g=0,b=0} }",
+        );
         assert!(matches!(
             TextPrim.build(&both, &mut NoHandlers),
             Err(BuildError::BadType(_))
         ));
-        let bad_align = tbl(&lua, "return { text='a', x=0, y=0, color={r=0,g=0,b=0}, halign='up' }");
+        let bad_align = tbl(
+            &lua,
+            "return { text='a', x=0, y=0, color={r=0,g=0,b=0}, halign='up' }",
+        );
         assert!(matches!(
             TextPrim.build(&bad_align, &mut NoHandlers),
             Err(BuildError::BadType(_))
@@ -632,7 +653,8 @@ mod tests {
             fn font(
                 &mut self,
                 name: &str,
-            ) -> Result<std::sync::Arc<crate::scene::FontData>, crate::asset::AssetError> {
+            ) -> Result<std::sync::Arc<crate::scene::FontData>, crate::asset::AssetError>
+            {
                 Err(crate::asset::AssetError::Unresolved(name.to_string()))
             }
         }
