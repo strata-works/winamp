@@ -9,9 +9,10 @@ runtime without losing app state.
 
 > **Status: working engine, built phase by phase.** The core engine runs end-to-end —
 > a Lua-scripted skin renders to a live GPU window, hotspots fire host actions, dynamic
-> values animate, and skins hot-swap with state intact. As of **Phase 5a** skins can draw
-> real bitmap artwork: the demo renders the genuine Headspace WMP faceplate with live
-> play/seek. See [Current status](#current-status).
+> values animate, and skins hot-swap with state intact. As of **Phase 5c** skins draw real
+> bitmap artwork, gradient chrome, and laid-out text with live value-bound readouts: the
+> demo renders the genuine Headspace WMP faceplate with live play/seek and a live
+> track-title readout. See [Current status](#current-status).
 
 ## Motivation
 
@@ -137,9 +138,12 @@ engine. Phase 5 was decomposed into sub-projects (5a–5e).
   direct-to-surface render and the live `winit`/`wgpu` host app. CI + a software-render
   regression harness landed alongside.
 - **Phase 5a — asset loading + `image` primitive.** ✅ Real bitmap skins.
-- **Phase 5b — gradient fills.** ⏳ Next (Y2K chrome/sheen).
-- **Phase 5c–5e** — text + fonts (reuses the asset resolver); vocab ergonomics (shape
-  helpers, shared draw+hotspot geometry); the host-extension registration mechanism.
+- **Phase 5b — gradient fills.** ✅ `Paint` (solid + linear/radial/sweep) + color alpha.
+- **Phase 5c — text + fonts.** ✅ `text{}` primitive: parley layout, fonts via the asset
+  resolver (system fallback), value-bound strings, multi-line wrap, 2-D (halign × valign)
+  anchoring, `Paint`-filled (chrome numerals).
+- **Phase 5d–5e** — vocab ergonomics (shape helpers, shared draw+hotspot geometry); the
+  host-extension registration mechanism.
 - **Phase 6 — validation** against both a media-player and a system-monitor host, proving
   zero media-specific knowledge in the engine.
 

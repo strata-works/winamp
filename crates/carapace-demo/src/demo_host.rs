@@ -45,7 +45,9 @@ impl Host for DemoHost {
         match key {
             "playing" => Some(StateValue::Bool(self.playing)),
             "position" => Some(StateValue::Scalar(self.position)),
-            "track_title" => Some(StateValue::Str(std::sync::Arc::from(self.track_title.as_str()))),
+            "track_title" => Some(StateValue::Str(std::sync::Arc::from(
+                self.track_title.as_str(),
+            ))),
             _ => None,
         }
     }
