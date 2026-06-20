@@ -6,6 +6,7 @@ use carapace::state::StateValue;
 pub struct DemoHost {
     playing: bool,
     position: f32,
+    track_title: String,
 }
 
 impl DemoHost {
@@ -13,6 +14,7 @@ impl DemoHost {
         Self {
             playing: false,
             position: 0.0,
+            track_title: "Headspace — Track 01".to_string(),
         }
     }
 }
@@ -43,6 +45,7 @@ impl Host for DemoHost {
         match key {
             "playing" => Some(StateValue::Bool(self.playing)),
             "position" => Some(StateValue::Scalar(self.position)),
+            "track_title" => Some(StateValue::Str(std::sync::Arc::from(self.track_title.as_str()))),
             _ => None,
         }
     }

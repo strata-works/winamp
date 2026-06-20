@@ -9,3 +9,6 @@ fill{ path = {{x=270,y=8},{x=294,y=8},{x=294,y=32},{x=270,y=32}}, gradient = {
   type = "sweep", center = {x=282,y=20}, start_deg = 0, end_deg = 360,
   stops = { {at=0, color={r=255,g=90,b=90}}, {at=0.5, color={r=90,g=130,b=255}},
             {at=1, color={r=255,g=90,b=90}} } } }
+-- Wrapped multi-line label using the system fallback font (no bundled font named).
+text{ text = "carapace\nminimal skin", size = 12, x = 8, y = 8, max_width = 120,
+      color = {r = 230, g = 230, b = 230} }
