@@ -117,7 +117,7 @@ impl AssetResolver {
             return Ok(f.clone());
         }
         let bytes = self.bytes(name)?;
-        let font = Arc::new(crate::scene::FontData { bytes });
+        let font = Arc::new(crate::scene::FontData::new(bytes));
         self.font_cache
             .borrow_mut()
             .insert(name.to_string(), font.clone());

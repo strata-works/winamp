@@ -16,7 +16,7 @@ use crate::state::StateValue;
 
 // Everything that affects shaping. `valign` is excluded — it's a draw-time offset, not a
 // layout input — so vertically-different placements of identical text share one cached layout.
-type LayoutKey = (usize, u32, crate::scene::HAlign, Option<u32>, String);
+type LayoutKey = (u64, u32, crate::scene::HAlign, Option<u32>, String);
 
 pub struct RenderTarget<'a> {
     pub device: &'a wgpu::Device,
@@ -30,8 +30,10 @@ pub struct Renderer {
     inner: vello::Renderer,
     font_cx: FontContext,
     layout_cx: LayoutContext<Brush>,
-    // Arc<FontData> ptr -> registered parley family name. Keeps system fallback for None fonts.
-    families: HashMap<usize, String>,
+    // Content-addressed font id -> registered parley family name. Keeps system fallback for None
+    // fonts (id 0). Keying on content (not the Arc address) means a freed font's address being
+    // recycled by a different font across skin swaps can never alias the wrong family.
+    families: HashMap<u64, String>,
     // Cache of shaped layouts so unchanged text is never re-shaped per frame (perf-priority).
     layouts: HashMap<LayoutKey, parley::Layout<Brush>>,
 }
@@ -219,17 +221,15 @@ impl Renderer {
                         continue;
                     }
 
-                    // Register the skin font once (keyed by Arc ptr); None => system default family.
-                    let font_ptr = font
-                        .as_ref()
-                        .map(|f| std::sync::Arc::as_ptr(f) as *const () as usize)
-                        .unwrap_or(0);
+                    // Register the skin font once (keyed by content-addressed id); None => system
+                    // default family (id 0, reserved only for "no font" so it can't alias a real one).
+                    let font_id = font.as_ref().map(|f| f.id).unwrap_or(0);
                     let family = font.as_ref().map(|f| {
                         // Disjoint borrows of two distinct self fields — allowed since both are
                         // direct field accesses (not through a method).
                         let font_cx = &mut self.font_cx;
                         self.families
-                            .entry(font_ptr)
+                            .entry(font_id)
                             .or_insert_with(|| {
                                 let blob =
                                     vello::peniko::Blob::new(std::sync::Arc::new(f.bytes.to_vec()));
@@ -247,7 +247,7 @@ impl Renderer {
                     // Build + cache the parley layout. Key covers everything that affects shaping
                     // (valign excluded — it's a draw offset). On a hit, no re-shaping happens.
                     let key: LayoutKey = (
-                        font_ptr,
+                        font_id,
                         size.to_bits(),
                         *halign,
                         max_width.map(|w| w.to_bits()),
@@ -314,6 +314,10 @@ impl Renderer {
                             vs.draw_glyphs(run.font())
                                 .font_size(run.font_size())
                                 .brush(&brush)
+                                // Text gradient brush coords are glyph-block-local by design: the
+                                // `origin` translate applies to both glyphs and brush, so a `0..size`
+                                // gradient spans the text height regardless of `pos`. Intentional for
+                                // chrome numerals and what the reference skin assumes (not canvas-space).
                                 .transform(xform * origin)
                                 .draw(Fill::NonZero, glyphs);
                         }

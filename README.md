@@ -51,8 +51,8 @@ The load-bearing decisions:
   through a Lua script whose `_ENV` is *only* the vocabulary constructors plus an
   allowlisted set of host actions — no raw `host`/`io`/`os`/filesystem access.
 - **Domain-neutral base vocabulary, host-extensible.** The engine ships only generic
-  primitives (currently `fill`, `region` hotspots, value-bound `value_fill`, and `image`;
-  more to come). Anything domain-flavored — "transport control", "audio visualizer" — is
+  primitives (currently `fill`, `region` hotspots, value-bound `value_fill`, `image`, and
+  `text` — laid-out, value-bindable, `Paint`-filled; more to come). Anything domain-flavored — "transport control", "audio visualizer" — is
   registered by the host as an extension.
 - **Desktop-first, Rust + vello.** The host owns the window, event loop, and surface; the
   engine renders **direct-to-surface** (no readback) on a wall-clock delta. The 2D backend

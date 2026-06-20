@@ -69,6 +69,21 @@ pub enum VAlign {
 #[derive(Debug)]
 pub struct FontData {
     pub bytes: std::sync::Arc<[u8]>,
+    pub id: u64,
+}
+
+impl FontData {
+    /// Content-addressed id (hash of the bytes), stable across allocations so the renderer's
+    /// font/layout caches never confuse two different fonts that happen to reuse an address.
+    pub fn new(bytes: std::sync::Arc<[u8]>) -> Self {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        bytes.hash(&mut h);
+        Self {
+            id: h.finish(),
+            bytes,
+        }
+    }
 }
 
 pub type HandlerId = usize;
