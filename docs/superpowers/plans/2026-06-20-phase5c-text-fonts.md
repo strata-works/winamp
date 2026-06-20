@@ -128,6 +128,7 @@ git -c user.name="Daniel Agbemava" -c user.email="danagbemava@gmail.com" \
 
 **Files:**
 - Modify: `crates/carapace/src/scene.rs:48-77` (types + `Node`), `:113-130` (`summary()` arm)
+- Modify: `crates/carapace/src/render.rs` (temporary no-op `Node::Text` arm so the crate compiles; Task 5 replaces it)
 - Test: `crates/carapace/src/scene.rs` (tests mod at `:147`)
 
 **Interfaces:**
@@ -304,15 +305,23 @@ In `summary()` (`crates/carapace/src/scene.rs`), add a match arm after the `Node
                 }
 ```
 
-- [ ] **Step 6: Run the test**
+- [ ] **Step 6: Add a temporary no-op render arm so the crate compiles**
+
+Adding `Node::Text` makes `render.rs`'s `draw()` `match node` non-exhaustive, which breaks the whole-crate (and lib-test) build. Add a temporary no-op arm to the `match node` in `crates/carapace/src/render.rs` `draw()` (after the `Node::Image` arm). **Task 5 replaces this with the real text rendering.**
+
+```rust
+                Node::Text { .. } => {} // rendered in Phase 5c Task 5
+```
+
+- [ ] **Step 7: Run the test**
 
 Run: `cargo test -p carapace scene::tests::summary_describes_text_nodes`
-Expected: PASS. Also run `cargo test -p carapace --lib` to confirm existing summary tests still pass (they don't use `Text`, so unaffected).
+Expected: PASS. Also run `cargo test -p carapace --lib` to confirm existing summary tests still pass (they don't use `Text`, so unaffected) and the crate compiles with the no-op render arm.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add crates/carapace/src/scene.rs
+git add crates/carapace/src/scene.rs crates/carapace/src/render.rs
 git -c user.name="Daniel Agbemava" -c user.email="danagbemava@gmail.com" \
   commit -m "feat(scene): Node::Text data model + summary line"
 ```
@@ -783,7 +792,7 @@ fn identical_text_is_shaped_once_and_cached() {
 - [ ] **Step 4: Run it to verify it fails**
 
 Run: `cargo test -p carapace --features gpu-tests --test render_offscreen renders_bundled_font_text_in_fill_color`
-Expected: FAIL — `Node::Text` not handled in `render.rs` draw (it currently has no arm; with a non-exhaustive match this is a compile error, so the build fails until Step 6).
+Expected: FAIL on the assertion — the temporary `Node::Text { .. } => {}` no-op arm (from Task 2) draws nothing, so `red_ink` is 0 (and the cache test's `layout_cache_len()` is 0). Compiles, but the ink/cache assertions fail until the real arm lands.
 
 - [ ] **Step 5: Add parley state to `Renderer`**
 
@@ -854,7 +863,7 @@ fn text_of(read: &impl Fn(&str) -> Option<StateValue>, key: &str) -> String {
 }
 ```
 
-In `draw`, add a `Node::Text` arm to the `match node` (after the `Node::Image` arm). This consumes `&mut self` for `font_cx`/`layout_cx`/`families`, which `draw` already has:
+In `draw`, **replace the temporary `Node::Text { .. } => {}` no-op arm** (added in Task 2) in the `match node` with the real implementation below. This consumes `&mut self` for `font_cx`/`layout_cx`/`families`/`layouts`, which `draw` already has:
 
 ```rust
                 Node::Text {
