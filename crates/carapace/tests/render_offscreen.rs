@@ -153,6 +153,7 @@ fn renders_fill_and_value_fill_at_sentinel_pixels() {
                     b: 0,
                     a: 255,
                 },
+                direction: carapace::scene::FillDir::Right,
             },
         ],
     };

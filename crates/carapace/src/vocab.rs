@@ -159,6 +159,17 @@ fn maybe_hotspot(
     }
 }
 
+fn parse_direction(args: &Table) -> Result<crate::scene::FillDir, BuildError> {
+    use crate::scene::FillDir;
+    match args.get::<Option<String>>("direction")?.as_deref() {
+        None | Some("right") => Ok(FillDir::Right),
+        Some("left") => Ok(FillDir::Left),
+        Some("up") => Ok(FillDir::Up),
+        Some("down") => Ok(FillDir::Down),
+        Some(_) => Err(BuildError::BadType("direction must be right|left|up|down")),
+    }
+}
+
 fn parse_halign(args: &Table) -> Result<crate::scene::HAlign, BuildError> {
     use crate::scene::HAlign;
     match args.get::<Option<String>>("halign")?.as_deref() {
@@ -228,6 +239,7 @@ impl Primitive for ValueFillPrim {
             path: parse_path(args)?,
             value_key,
             color: parse_color(args)?,
+            direction: parse_direction(args)?,
         }])
     }
 }
@@ -621,6 +633,30 @@ mod tests {
             }
             other => panic!("expected Hotspot, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn value_fill_direction_parses_and_defaults() {
+        use crate::scene::FillDir;
+        let lua = Lua::new();
+        let mk = |s: &str| {
+            let t: Table = lua.load(s).eval().unwrap();
+            match one(ValueFillPrim.build(&t, &mut NoHandlers)) {
+                Node::ValueFill { direction, .. } => direction,
+                other => panic!("expected ValueFill, got {other:?}"),
+            }
+        };
+        let base = "return { path={{x=0,y=0},{x=1,y=0},{x=1,y=1}}, value='v', color={r=0,g=0,b=0}";
+        assert_eq!(mk(&format!("{base} }}")), FillDir::Right); // default
+        assert_eq!(mk(&format!("{base}, direction='up' }}")), FillDir::Up);
+        let bad: Table = lua
+            .load(format!("{base}, direction='sideways' }}"))
+            .eval()
+            .unwrap();
+        assert!(matches!(
+            ValueFillPrim.build(&bad, &mut NoHandlers),
+            Err(BuildError::BadType(_))
+        ));
     }
 
     #[test]

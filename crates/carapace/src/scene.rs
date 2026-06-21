@@ -52,6 +52,14 @@ pub enum TextContent {
     Bound(String),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum FillDir {
+    Right,
+    Left,
+    Up,
+    Down,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum HAlign {
     Left,
@@ -110,6 +118,7 @@ pub enum Node {
         path: Vec<Pt>,
         value_key: String,
         color: Color,
+        direction: FillDir,
     },
     Image {
         image: std::sync::Arc<crate::asset::DecodedImage>,
@@ -163,11 +172,22 @@ impl Scene {
                 },
                 Node::Hotspot { on_press, .. } => format!("hotspot handler={}", on_press),
                 Node::ValueFill {
-                    value_key, color, ..
-                } => format!(
-                    "value_fill key={} rgba={},{},{},{}",
-                    value_key, color.r, color.g, color.b, color.a
-                ),
+                    value_key,
+                    color,
+                    direction,
+                    ..
+                } => {
+                    let dir = match direction {
+                        FillDir::Right => "right",
+                        FillDir::Left => "left",
+                        FillDir::Up => "up",
+                        FillDir::Down => "down",
+                    };
+                    format!(
+                        "value_fill key={} dir={} rgba={},{},{},{}",
+                        value_key, dir, color.r, color.g, color.b, color.a
+                    )
+                }
                 Node::Image { image, dest } => format!(
                     "image {}x{} at {},{} dest {}x{}",
                     image.width,
@@ -302,13 +322,14 @@ mod tests {
                         b: 3,
                         a: 255,
                     },
+                    direction: FillDir::Right,
                 },
             ],
         };
         let expected = "canvas 300x120\n\
                         fill rgba=10,20,30,255\n\
                         hotspot handler=2\n\
-                        value_fill key=level rgba=1,2,3,255";
+                        value_fill key=level dir=right rgba=1,2,3,255";
         assert_eq!(scene.summary(), expected);
     }
 

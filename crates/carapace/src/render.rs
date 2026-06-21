@@ -171,6 +171,7 @@ impl Renderer {
                     path,
                     value_key,
                     color,
+                    ..
                 } => {
                     let v = value_of(&read_value, value_key);
                     let (x0, y0, x1, y1) = bbox(path);
