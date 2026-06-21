@@ -15,8 +15,24 @@ fn build(skin_dir: &str) -> usize {
 }
 
 #[test]
-fn classic_builds() {
-    assert!(build("classic") >= 4);
+fn classic_uses_shared_geometry_and_a_vertical_meter() {
+    use carapace::engine::Engine;
+    use carapace::scene::{FillDir, Node, Pt};
+    use carapace::vocab::VocabRegistry;
+    use carapace_demo::demo_host::DemoHost;
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("skins/classic");
+    let (_m, source) = carapace::skin::load_dir(&dir).unwrap();
+    let e = Engine::new(Box::new(DemoHost::new()), VocabRegistry::base(), source).unwrap();
+    let nodes = &e.scene().nodes;
+    // shared geometry: at least one Hotspot emitted by a fill{on_press}
+    assert!(nodes.iter().any(|n| matches!(n, Node::Hotspot { .. })), "has hotspots");
+    // a vertical meter
+    assert!(
+        nodes.iter().any(|n| matches!(n, Node::ValueFill { direction: FillDir::Up, .. })),
+        "has an upward value_fill meter"
+    );
+    // the play button (a fill{on_press}) is clickable at its center
+    assert!(e.scene().hit(Pt { x: 55.0, y: 55.0 }).is_some(), "play button hotspot is hittable");
 }
 
 #[test]
