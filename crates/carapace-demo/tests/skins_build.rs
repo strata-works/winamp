@@ -59,6 +59,10 @@ fn headspace_reference_builds_with_bitmap() {
         )),
         "reference skin now has gradient sheen/glossy accents"
     );
+    assert!(
+        nodes.iter().any(|n| matches!(n, Node::Text { .. })),
+        "reference skin has a text readout"
+    );
 }
 
 #[test]

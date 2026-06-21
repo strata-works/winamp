@@ -405,3 +405,258 @@ fn renders_linear_gradient_oriented_and_interpolating() {
         mid
     );
 }
+
+#[test]
+fn renders_bundled_font_text_in_fill_color() {
+    use carapace::scene::{FontData, HAlign, Node, TextContent, VAlign};
+    use std::sync::Arc;
+
+    let font = Arc::new(FontData::new(Arc::from(
+        include_bytes!("fonts/vt323.ttf").as_slice(),
+    )));
+    let o = offscreen(200, 80);
+    let mut r = Renderer::new(&o.device);
+    let scene = Scene {
+        canvas: (200, 80),
+        // Big solid-red glyphs near the top-left; bundled font + ASCII => no fallback.
+        nodes: vec![Node::Text {
+            content: TextContent::Static("HII".to_string()),
+            font: Some(font),
+            font_name: Some("vt323.ttf".to_string()),
+            size: 64.0,
+            paint: Paint::Solid(Color {
+                r: 255,
+                g: 0,
+                b: 0,
+                a: 255,
+            }),
+            halign: HAlign::Left,
+            valign: VAlign::Top,
+            max_width: None,
+            pos: Pt { x: 4.0, y: 4.0 },
+        }],
+    };
+    r.draw(
+        &scene,
+        |_k: &str| None,
+        &RenderTarget {
+            device: &o.device,
+            queue: &o.queue,
+            view: &o.view,
+            width: o.w,
+            height: o.h,
+        },
+    );
+    let data = readback(&o);
+    // Scan the top-left band where the glyphs sit; at least some pixels must be red-dominant
+    // (glyph ink), proving the font loaded and drew in the fill color.
+    let mut red_ink = 0;
+    for y in 4..70 {
+        for x in 4..150 {
+            let p = px(&data, 200, x, y);
+            if p[0] > 180 && p[1] < 60 && p[2] < 60 {
+                red_ink += 1;
+            }
+        }
+    }
+    assert!(red_ink > 80, "expected red glyph ink, found {red_ink} px");
+}
+
+#[test]
+fn renders_gradient_filled_text_interpolating_vertically() {
+    use carapace::scene::{FontData, HAlign, Node, TextContent, VAlign};
+    use std::sync::Arc;
+
+    let font = Arc::new(FontData::new(Arc::from(
+        include_bytes!("fonts/vt323.ttf").as_slice(),
+    )));
+    let o = offscreen(200, 80);
+    let mut r = Renderer::new(&o.device);
+    // A vertical red->blue gradient over a ~64px glyph block. The brush coords are
+    // glyph-block-local (see render.rs draw_glyphs comment), so 0..64 spans the glyph height
+    // from its top. Proves Paint::Gradient flows through draw_glyphs.
+    let scene = Scene {
+        canvas: (200, 80),
+        nodes: vec![Node::Text {
+            content: TextContent::Static("II".to_string()),
+            font: Some(font),
+            font_name: Some("vt323.ttf".to_string()),
+            size: 64.0,
+            paint: Paint::Gradient(Gradient::Linear {
+                from: Pt { x: 0.0, y: 0.0 },
+                to: Pt { x: 0.0, y: 64.0 },
+                stops: vec![
+                    ColorStop {
+                        at: 0.0,
+                        color: Color {
+                            r: 255,
+                            g: 0,
+                            b: 0,
+                            a: 255,
+                        },
+                    },
+                    ColorStop {
+                        at: 1.0,
+                        color: Color {
+                            r: 0,
+                            g: 0,
+                            b: 255,
+                            a: 255,
+                        },
+                    },
+                ],
+            }),
+            halign: HAlign::Left,
+            valign: VAlign::Top,
+            max_width: None,
+            pos: Pt { x: 4.0, y: 4.0 },
+        }],
+    };
+    r.draw(
+        &scene,
+        |_k: &str| None,
+        &RenderTarget {
+            device: &o.device,
+            queue: &o.queue,
+            view: &o.view,
+            width: o.w,
+            height: o.h,
+        },
+    );
+    let data = readback(&o);
+    // Scan glyph-ink pixels (non-background: any channel lit) in an upper band and a lower band.
+    // Upper band must contain red-dominant ink; lower band must contain blue-dominant ink.
+    let mut upper_red = false;
+    let mut lower_blue = false;
+    for y in 4..30 {
+        for x in 4..150 {
+            let p = px(&data, 200, x, y);
+            let lit = p[0] as u32 + p[1] as u32 + p[2] as u32 > 40;
+            if lit && p[0] as i32 > p[2] as i32 + 40 {
+                upper_red = true;
+            }
+        }
+    }
+    for y in 44..70 {
+        for x in 4..150 {
+            let p = px(&data, 200, x, y);
+            let lit = p[0] as u32 + p[1] as u32 + p[2] as u32 > 40;
+            if lit && p[2] as i32 > p[0] as i32 + 40 {
+                lower_blue = true;
+            }
+        }
+    }
+    assert!(upper_red, "upper glyph band should have red-dominant ink");
+    assert!(lower_blue, "lower glyph band should have blue-dominant ink");
+}
+
+#[test]
+fn renders_value_bound_text_from_string_state() {
+    use carapace::scene::{FontData, HAlign, Node, TextContent, VAlign};
+    use carapace::state::StateValue;
+    use std::sync::Arc;
+
+    let font = Arc::new(FontData::new(Arc::from(
+        include_bytes!("fonts/vt323.ttf").as_slice(),
+    )));
+    let o = offscreen(200, 80);
+    let mut r = Renderer::new(&o.device);
+    let scene = Scene {
+        canvas: (200, 80),
+        nodes: vec![Node::Text {
+            content: TextContent::Bound("title".to_string()),
+            font: Some(font),
+            font_name: Some("vt323.ttf".to_string()),
+            size: 64.0,
+            paint: Paint::Solid(Color {
+                r: 0,
+                g: 255,
+                b: 0,
+                a: 255,
+            }),
+            halign: HAlign::Left,
+            valign: VAlign::Top,
+            max_width: None,
+            pos: Pt { x: 4.0, y: 4.0 },
+        }],
+    };
+    let read = |k: &str| {
+        if k == "title" {
+            Some(StateValue::Str(Arc::from("WW")))
+        } else {
+            None
+        }
+    };
+    r.draw(
+        &scene,
+        read,
+        &RenderTarget {
+            device: &o.device,
+            queue: &o.queue,
+            view: &o.view,
+            width: o.w,
+            height: o.h,
+        },
+    );
+    let data = readback(&o);
+    let mut green_ink = 0;
+    for y in 4..70 {
+        for x in 4..150 {
+            let p = px(&data, 200, x, y);
+            if p[1] > 180 && p[0] < 60 && p[2] < 60 {
+                green_ink += 1;
+            }
+        }
+    }
+    assert!(
+        green_ink > 80,
+        "expected green ink from bound string state, found {green_ink}"
+    );
+}
+
+#[test]
+fn identical_text_is_shaped_once_and_cached() {
+    use carapace::scene::{FontData, HAlign, Node, TextContent, VAlign};
+    use std::sync::Arc;
+
+    let font = Arc::new(FontData::new(Arc::from(
+        include_bytes!("fonts/vt323.ttf").as_slice(),
+    )));
+    let mk = |y: f32, valign: VAlign| Node::Text {
+        // Same string/font/size/halign/max_width => one cache entry, even at different y/valign.
+        content: TextContent::Static("CACHE".to_string()),
+        font: Some(font.clone()),
+        font_name: Some("vt323.ttf".to_string()),
+        size: 24.0,
+        paint: Paint::Solid(Color {
+            r: 255,
+            g: 255,
+            b: 255,
+            a: 255,
+        }),
+        halign: HAlign::Left,
+        valign,
+        max_width: None,
+        pos: Pt { x: 4.0, y },
+    };
+    let o = offscreen(200, 120);
+    let mut r = Renderer::new(&o.device);
+    let scene = Scene {
+        canvas: (200, 120),
+        nodes: vec![mk(10.0, VAlign::Top), mk(60.0, VAlign::Bottom)],
+    };
+    let target = RenderTarget {
+        device: &o.device,
+        queue: &o.queue,
+        view: &o.view,
+        width: o.w,
+        height: o.h,
+    };
+    r.draw(&scene, |_k: &str| None, &target);
+    r.draw(&scene, |_k: &str| None, &target); // second frame: must reuse, not re-shape
+    assert_eq!(
+        r.layout_cache_len(),
+        1,
+        "identical text shares one cached layout"
+    );
+}

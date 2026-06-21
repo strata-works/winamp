@@ -9,9 +9,10 @@ runtime without losing app state.
 
 > **Status: working engine, built phase by phase.** The core engine runs end-to-end —
 > a Lua-scripted skin renders to a live GPU window, hotspots fire host actions, dynamic
-> values animate, and skins hot-swap with state intact. As of **Phase 5a** skins can draw
-> real bitmap artwork: the demo renders the genuine Headspace WMP faceplate with live
-> play/seek. See [Current status](#current-status).
+> values animate, and skins hot-swap with state intact. As of **Phase 5c** skins draw real
+> bitmap artwork, gradient chrome, and laid-out text with live value-bound readouts: the
+> demo renders the genuine Headspace WMP faceplate with live play/seek and a live
+> track-title readout. See [Current status](#current-status).
 
 ## Motivation
 
@@ -50,8 +51,8 @@ The load-bearing decisions:
   through a Lua script whose `_ENV` is *only* the vocabulary constructors plus an
   allowlisted set of host actions — no raw `host`/`io`/`os`/filesystem access.
 - **Domain-neutral base vocabulary, host-extensible.** The engine ships only generic
-  primitives (currently `fill`, `region` hotspots, value-bound `value_fill`, and `image`;
-  more to come). Anything domain-flavored — "transport control", "audio visualizer" — is
+  primitives (currently `fill`, `region` hotspots, value-bound `value_fill`, `image`, and
+  `text` — laid-out, value-bindable, `Paint`-filled; more to come). Anything domain-flavored — "transport control", "audio visualizer" — is
   registered by the host as an extension.
 - **Desktop-first, Rust + vello.** The host owns the window, event loop, and surface; the
   engine renders **direct-to-surface** (no readback) on a wall-clock delta. The 2D backend
@@ -103,7 +104,9 @@ state (`position`) and actions (`toggle_play`, `stop`). The engine knows nothing
 
 Requires a recent Rust toolchain (edition 2024; built against Rust 1.96). Dependency
 versions are pinned via a committed `Cargo.lock`; CI builds `--locked`. On macOS the GPU
-paths use Metal; on Linux, Vulkan.
+paths use Metal; on Linux, Vulkan. **Linux build dependency:** the text layer (parley/fontique)
+links system `fontconfig` for font fallback, so a Linux build needs the dev package
+(`libfontconfig1-dev` + `pkg-config`); macOS uses Core Text and needs nothing extra.
 
 ```sh
 # Full workspace test suite (hit-test kernel, engine, headless skin/scene tests).
@@ -137,9 +140,12 @@ engine. Phase 5 was decomposed into sub-projects (5a–5e).
   direct-to-surface render and the live `winit`/`wgpu` host app. CI + a software-render
   regression harness landed alongside.
 - **Phase 5a — asset loading + `image` primitive.** ✅ Real bitmap skins.
-- **Phase 5b — gradient fills.** ⏳ Next (Y2K chrome/sheen).
-- **Phase 5c–5e** — text + fonts (reuses the asset resolver); vocab ergonomics (shape
-  helpers, shared draw+hotspot geometry); the host-extension registration mechanism.
+- **Phase 5b — gradient fills.** ✅ `Paint` (solid + linear/radial/sweep) + color alpha.
+- **Phase 5c — text + fonts.** ✅ `text{}` primitive: parley layout, fonts via the asset
+  resolver (system fallback), value-bound strings, multi-line wrap, 2-D (halign × valign)
+  anchoring, `Paint`-filled (chrome numerals).
+- **Phase 5d–5e** — vocab ergonomics (shape helpers, shared draw+hotspot geometry); the
+  host-extension registration mechanism.
 - **Phase 6 — validation** against both a media-player and a system-monitor host, proving
   zero media-specific knowledge in the engine.
 

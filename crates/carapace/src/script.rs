@@ -48,6 +48,12 @@ impl BuildContext for SceneBuilder {
     ) -> Result<Arc<crate::asset::DecodedImage>, crate::asset::AssetError> {
         self.assets.image(name)
     }
+    fn font(
+        &mut self,
+        name: &str,
+    ) -> Result<Arc<crate::scene::FontData>, crate::asset::AssetError> {
+        self.assets.font(name)
+    }
 }
 
 fn lua_args_to_values(args: mlua::MultiValue) -> Vec<Value> {

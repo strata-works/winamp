@@ -1,12 +1,22 @@
+use std::collections::HashMap;
+
+use parley::{
+    Alignment, AlignmentOptions, FontContext, FontFamily, FontFamilyName, LayoutContext,
+    PositionedLayoutItem, StyleProperty,
+};
 use vello::kurbo::{Affine, BezPath, Point as KPoint, Rect};
 use vello::peniko::{
     Blob, Brush, Color as VColor, Fill, Gradient as PGradient, ImageAlphaType, ImageBrush,
     ImageData, ImageFormat, ImageQuality,
 };
-use vello::{AaConfig, RenderParams, Scene as VScene};
+use vello::{AaConfig, Glyph, RenderParams, Scene as VScene};
 
 use crate::scene::{Color, ColorStop, Gradient, Node, Paint, Pt, Scene};
 use crate::state::StateValue;
+
+// Everything that affects shaping. `valign` is excluded — it's a draw-time offset, not a
+// layout input — so vertically-different placements of identical text share one cached layout.
+type LayoutKey = (u64, u32, crate::scene::HAlign, Option<u32>, String);
 
 pub struct RenderTarget<'a> {
     pub device: &'a wgpu::Device,
@@ -18,6 +28,14 @@ pub struct RenderTarget<'a> {
 
 pub struct Renderer {
     inner: vello::Renderer,
+    font_cx: FontContext,
+    layout_cx: LayoutContext<Brush>,
+    // Content-addressed font id -> registered parley family name. Keeps system fallback for None
+    // fonts (id 0). Keying on content (not the Arc address) means a freed font's address being
+    // recycled by a different font across skin swaps can never alias the wrong family.
+    families: HashMap<u64, String>,
+    // Cache of shaped layouts so unchanged text is never re-shaped per frame (perf-priority).
+    layouts: HashMap<LayoutKey, parley::Layout<Brush>>,
 }
 
 fn vcolor(c: Color) -> VColor {
@@ -98,6 +116,13 @@ fn value_of(read: &impl Fn(&str) -> Option<StateValue>, key: &str) -> f64 {
     }
 }
 
+fn text_of(read: &impl Fn(&str) -> Option<StateValue>, key: &str) -> String {
+    match read(key) {
+        Some(StateValue::Str(s)) => s.to_string(),
+        _ => String::new(),
+    }
+}
+
 impl Renderer {
     pub fn new(device: &wgpu::Device) -> Self {
         let inner = vello::Renderer::new(
@@ -109,7 +134,18 @@ impl Renderer {
             },
         )
         .expect("create vello renderer");
-        Self { inner }
+        Self {
+            inner,
+            font_cx: FontContext::new(),
+            layout_cx: LayoutContext::new(),
+            families: HashMap::new(),
+            layouts: HashMap::new(),
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn layout_cache_len(&self) -> usize {
+        self.layouts.len()
     }
 
     pub fn draw(
@@ -165,6 +201,128 @@ impl Renderer {
                         xform * place,
                     );
                 }
+                Node::Text {
+                    content,
+                    font,
+                    size,
+                    paint,
+                    halign,
+                    valign,
+                    max_width,
+                    pos,
+                    ..
+                } => {
+                    use crate::scene::{HAlign, TextContent, VAlign};
+                    let s = match content {
+                        TextContent::Static(s) => s.clone(),
+                        TextContent::Bound(k) => text_of(&read_value, k),
+                    };
+                    if s.is_empty() {
+                        continue;
+                    }
+
+                    // Register the skin font once (keyed by content-addressed id); None => system
+                    // default family (id 0, reserved only for "no font" so it can't alias a real one).
+                    let font_id = font.as_ref().map(|f| f.id).unwrap_or(0);
+                    let family = font.as_ref().map(|f| {
+                        // Disjoint borrows of two distinct self fields — allowed since both are
+                        // direct field accesses (not through a method).
+                        let font_cx = &mut self.font_cx;
+                        self.families
+                            .entry(font_id)
+                            .or_insert_with(|| {
+                                let blob =
+                                    vello::peniko::Blob::new(std::sync::Arc::new(f.bytes.to_vec()));
+                                let registered = font_cx.collection.register_fonts(blob, None);
+                                let id = registered[0].0;
+                                font_cx
+                                    .collection
+                                    .family_name(id)
+                                    .unwrap_or("system-ui")
+                                    .to_string()
+                            })
+                            .clone()
+                    });
+
+                    // Build + cache the parley layout. Key covers everything that affects shaping
+                    // (valign excluded — it's a draw offset). On a hit, no re-shaping happens.
+                    let key: LayoutKey = (
+                        font_id,
+                        size.to_bits(),
+                        *halign,
+                        max_width.map(|w| w.to_bits()),
+                        s.clone(),
+                    );
+                    if !self.layouts.contains_key(&key) {
+                        let mut builder =
+                            self.layout_cx
+                                .ranged_builder(&mut self.font_cx, &s, 1.0, true);
+                        builder.push_default(StyleProperty::FontSize(*size));
+                        if let Some(fam) = &family {
+                            // Named family picks the registered skin font; absent => default
+                            // collection (system fonts) provides glyphs/fallback.
+                            builder.push_default(StyleProperty::FontFamily(FontFamily::Single(
+                                FontFamilyName::Named(std::borrow::Cow::Owned(fam.clone())),
+                            )));
+                        }
+                        let mut layout = builder.build(&s);
+                        layout.break_all_lines(*max_width);
+                        let align = match halign {
+                            HAlign::Left => Alignment::Start,
+                            HAlign::Center => Alignment::Center,
+                            HAlign::Right => Alignment::End,
+                        };
+                        layout.align(align, AlignmentOptions::default());
+                        self.layouts.insert(key.clone(), layout);
+                    }
+                    let layout = &self.layouts[&key];
+
+                    // 2-D anchor offset from the block's measured size.
+                    let block_w = max_width.unwrap_or(layout.width());
+                    let off_x = match halign {
+                        HAlign::Left => 0.0,
+                        HAlign::Center => -block_w / 2.0,
+                        HAlign::Right => -block_w,
+                    };
+                    let block_h = layout.height();
+                    let off_y = match valign {
+                        VAlign::Top => 0.0,
+                        VAlign::Middle => -block_h / 2.0,
+                        VAlign::Bottom => -block_h,
+                    };
+                    let origin =
+                        Affine::translate(((pos.x + off_x) as f64, (pos.y + off_y) as f64));
+                    let brush = paint_brush(paint);
+
+                    for line in layout.lines() {
+                        for item in line.items() {
+                            let PositionedLayoutItem::GlyphRun(glyph_run) = item else {
+                                continue;
+                            };
+                            let run = glyph_run.run();
+                            let mut gx = glyph_run.offset();
+                            let gy = glyph_run.baseline();
+                            let glyphs = glyph_run.glyphs().map(move |g| {
+                                let gl = Glyph {
+                                    id: g.id,
+                                    x: gx + g.x,
+                                    y: gy - g.y,
+                                };
+                                gx += g.advance;
+                                gl
+                            });
+                            vs.draw_glyphs(run.font())
+                                .font_size(run.font_size())
+                                .brush(&brush)
+                                // Text gradient brush coords are glyph-block-local by design: the
+                                // `origin` translate applies to both glyphs and brush, so a `0..size`
+                                // gradient spans the text height regardless of `pos`. Intentional for
+                                // chrome numerals and what the reference skin assumes (not canvas-space).
+                                .transform(xform * origin)
+                                .draw(Fill::NonZero, glyphs);
+                        }
+                    }
+                }
             }
         }
 
@@ -182,5 +340,18 @@ impl Renderer {
                 },
             )
             .expect("vello render_to_texture");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::value_of;
+    use crate::state::StateValue;
+    use std::sync::Arc;
+
+    #[test]
+    fn value_of_ignores_string_state() {
+        let read = |_: &str| Some(StateValue::Str(Arc::from("not a number")));
+        assert_eq!(value_of(&read, "k"), 0.0);
     }
 }

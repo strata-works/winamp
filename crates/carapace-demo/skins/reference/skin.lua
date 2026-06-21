@@ -21,3 +21,11 @@ region{ path = {{x=184,y=24},{x=212,y=24},{x=212,y=48},{x=184,y=48}},
 -- live seek bar bound to position, over the bitmap's seek groove
 value_fill{ path = {{x=78,y=216},{x=264,y=216},{x=264,y=230},{x=78,y=230}},
             value = "position", color = {r=120,g=230,b=80} }
+-- Gradient-chrome title label (static), centered on the header.
+text{ text = "HEADSPACE", font = "vt323.ttf", size = 22, x = 171, y = 6, halign = "center",
+      gradient = { type = "linear", from = {x=0,y=0}, to = {x=0,y=22},
+                   stops = { {at=0, color={r=235,g=245,b=255}},
+                             {at=1, color={r=120,g=150,b=210}} } } }
+-- Live value-bound readout: the current track title from host state, left-aligned over the display.
+text{ value = "track_title", font = "vt323.ttf", size = 16, x = 78, y = 196,
+      color = {r = 120, g = 230, b = 80} }
