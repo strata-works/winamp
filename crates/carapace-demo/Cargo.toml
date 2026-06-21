@@ -12,3 +12,6 @@ pollster = "0.4.0"
 [[bin]]
 name = "carapace-demo"
 path = "src/main.rs"
+
+[dev-dependencies]
+image = { version = "0.25.10", default-features = false, features = ["png"] }

@@ -303,6 +303,7 @@ name = "carapace-demo"
 version = "0.0.0"
 dependencies = [
  "carapace",
+ "image",
  "pollster",
  "wgpu",
  "winit",
