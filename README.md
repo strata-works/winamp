@@ -104,7 +104,9 @@ state (`position`) and actions (`toggle_play`, `stop`). The engine knows nothing
 
 Requires a recent Rust toolchain (edition 2024; built against Rust 1.96). Dependency
 versions are pinned via a committed `Cargo.lock`; CI builds `--locked`. On macOS the GPU
-paths use Metal; on Linux, Vulkan.
+paths use Metal; on Linux, Vulkan. **Linux build dependency:** the text layer (parley/fontique)
+links system `fontconfig` for font fallback, so a Linux build needs the dev package
+(`libfontconfig1-dev` + `pkg-config`); macOS uses Core Text and needs nothing extra.
 
 ```sh
 # Full workspace test suite (hit-test kernel, engine, headless skin/scene tests).
