@@ -76,7 +76,10 @@ mod tests {
         let pts = circle(5.0, 6.0, 3.0, 16);
         assert_eq!(pts.len(), 16);
         for p in &pts {
-            assert!((dist(*p, 5.0, 6.0) - 3.0).abs() < 1e-3, "point off the radius: {p:?}");
+            assert!(
+                (dist(*p, 5.0, 6.0) - 3.0).abs() < 1e-3,
+                "point off the radius: {p:?}"
+            );
         }
     }
 

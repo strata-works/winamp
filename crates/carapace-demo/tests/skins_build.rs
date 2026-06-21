@@ -25,14 +25,26 @@ fn classic_uses_shared_geometry_and_a_vertical_meter() {
     let e = Engine::new(Box::new(DemoHost::new()), VocabRegistry::base(), source).unwrap();
     let nodes = &e.scene().nodes;
     // shared geometry: at least one Hotspot emitted by a fill{on_press}
-    assert!(nodes.iter().any(|n| matches!(n, Node::Hotspot { .. })), "has hotspots");
+    assert!(
+        nodes.iter().any(|n| matches!(n, Node::Hotspot { .. })),
+        "has hotspots"
+    );
     // a vertical meter
     assert!(
-        nodes.iter().any(|n| matches!(n, Node::ValueFill { direction: FillDir::Up, .. })),
+        nodes.iter().any(|n| matches!(
+            n,
+            Node::ValueFill {
+                direction: FillDir::Up,
+                ..
+            }
+        )),
         "has an upward value_fill meter"
     );
     // the play button (a fill{on_press}) is clickable at its center
-    assert!(e.scene().hit(Pt { x: 55.0, y: 55.0 }).is_some(), "play button hotspot is hittable");
+    assert!(
+        e.scene().hit(Pt { x: 55.0, y: 55.0 }).is_some(),
+        "play button hotspot is hittable"
+    );
 }
 
 #[test]

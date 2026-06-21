@@ -584,7 +584,10 @@ mod tests {
     #[test]
     fn fill_without_on_press_emits_single_node() {
         let lua = Lua::new();
-        let t = tbl(&lua, "return { path = {{x=0,y=0},{x=10,y=0},{x=10,y=10}}, color = {r=1,g=2,b=3} }");
+        let t = tbl(
+            &lua,
+            "return { path = {{x=0,y=0},{x=10,y=0},{x=10,y=10}}, color = {r=1,g=2,b=3} }",
+        );
         let v = FillPrim.build(&t, &mut NoHandlers).unwrap();
         assert_eq!(v.len(), 1);
         assert!(matches!(v[0], Node::Fill { .. }));
@@ -610,17 +613,29 @@ mod tests {
         use std::sync::Arc;
         struct Ctx(Arc<DecodedImage>);
         impl BuildContext for Ctx {
-            fn register_handler(&mut self, _f: Function) -> HandlerId { 7 }
+            fn register_handler(&mut self, _f: Function) -> HandlerId {
+                7
+            }
             fn image(&mut self, _n: &str) -> Result<Arc<DecodedImage>, crate::asset::AssetError> {
                 Ok(self.0.clone())
             }
-            fn font(&mut self, n: &str) -> Result<Arc<crate::scene::FontData>, crate::asset::AssetError> {
+            fn font(
+                &mut self,
+                n: &str,
+            ) -> Result<Arc<crate::scene::FontData>, crate::asset::AssetError> {
                 Err(crate::asset::AssetError::Unresolved(n.to_string()))
             }
         }
-        let img = Arc::new(DecodedImage { rgba: vec![0; 4], width: 1, height: 1 });
+        let img = Arc::new(DecodedImage {
+            rgba: vec![0; 4],
+            width: 1,
+            height: 1,
+        });
         let lua = Lua::new();
-        let t = tbl(&lua, "return { asset='a.png', x=10, y=20, w=30, h=40, on_press=function() end }");
+        let t = tbl(
+            &lua,
+            "return { asset='a.png', x=10, y=20, w=30, h=40, on_press=function() end }",
+        );
         let v = ImagePrim.build(&t, &mut Ctx(img)).unwrap();
         assert_eq!(v.len(), 2);
         assert!(matches!(v[0], Node::Image { .. }));

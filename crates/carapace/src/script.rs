@@ -154,7 +154,10 @@ pub fn load(
         let h: f32 = a.get("h")?;
         let radius: f32 = a.get("radius")?;
         let segments: u32 = a.get::<Option<u32>>("segments")?.unwrap_or(8);
-        points_table(lua, &crate::shape::rounded_rect(x, y, w, h, radius, segments))
+        points_table(
+            lua,
+            &crate::shape::rounded_rect(x, y, w, h, radius, segments),
+        )
     })?;
     env.set("rounded_rect", rounded_rect)?;
 
@@ -299,8 +302,10 @@ mod tests {
     fn rect_helper_makes_a_clickable_fill() {
         let q = new_queue();
         let skin = load(
-            &src("fill{ path = rect{x=0,y=0,w=10,h=10}, color={r=0,g=0,b=0}, \
-                       on_press=function() host.toggle() end }"),
+            &src(
+                "fill{ path = rect{x=0,y=0,w=10,h=10}, color={r=0,g=0,b=0}, \
+                       on_press=function() host.toggle() end }",
+            ),
             &FixtureHost::new(),
             Rc::new(VocabRegistry::base()),
             q,
