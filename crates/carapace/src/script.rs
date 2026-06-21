@@ -94,10 +94,10 @@ pub fn load(
                 .find(|p| p.id() == id_for_closure)
                 .expect("primitive id stable for skin lifetime");
             let mut b = builder.borrow_mut();
-            let node = prim
+            let nodes = prim
                 .build(&args, &mut *b)
                 .map_err(|e| mlua::Error::external(format!("{e:?}")))?;
-            b.nodes.push(node);
+            b.nodes.extend(nodes);
             Ok(())
         })?;
         env.set(id, ctor)?;

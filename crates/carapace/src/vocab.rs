@@ -32,7 +32,7 @@ pub trait BuildContext {
 /// A vocabulary entry a skin can construct: `id` is the Lua constructor name.
 pub trait Primitive {
     fn id(&self) -> &str;
-    fn build(&self, args: &Table, ctx: &mut dyn BuildContext) -> Result<Node, BuildError>;
+    fn build(&self, args: &Table, ctx: &mut dyn BuildContext) -> Result<Vec<Node>, BuildError>;
 }
 
 pub fn parse_path(t: &Table) -> Result<Vec<Pt>, BuildError> {
@@ -169,11 +169,11 @@ impl Primitive for FillPrim {
     fn id(&self) -> &str {
         "fill"
     }
-    fn build(&self, args: &Table, _ctx: &mut dyn BuildContext) -> Result<Node, BuildError> {
-        Ok(Node::Fill {
+    fn build(&self, args: &Table, _ctx: &mut dyn BuildContext) -> Result<Vec<Node>, BuildError> {
+        Ok(vec![Node::Fill {
             path: parse_path(args)?,
             paint: parse_paint(args)?,
-        })
+        }])
     }
 }
 
@@ -182,16 +182,16 @@ impl Primitive for RegionPrim {
     fn id(&self) -> &str {
         "region"
     }
-    fn build(&self, args: &Table, ctx: &mut dyn BuildContext) -> Result<Node, BuildError> {
+    fn build(&self, args: &Table, ctx: &mut dyn BuildContext) -> Result<Vec<Node>, BuildError> {
         let path = parse_path(args)?;
         let on_press: Function = args
             .get("on_press")
             .map_err(|_| BuildError::MissingField("on_press"))?;
         let id = ctx.register_handler(on_press);
-        Ok(Node::Hotspot {
+        Ok(vec![Node::Hotspot {
             region: crate::scene::region_of(&path),
             on_press: id,
-        })
+        }])
     }
 }
 
@@ -200,15 +200,15 @@ impl Primitive for ValueFillPrim {
     fn id(&self) -> &str {
         "value_fill"
     }
-    fn build(&self, args: &Table, _ctx: &mut dyn BuildContext) -> Result<Node, BuildError> {
+    fn build(&self, args: &Table, _ctx: &mut dyn BuildContext) -> Result<Vec<Node>, BuildError> {
         let value_key: String = args
             .get("value")
             .map_err(|_| BuildError::MissingField("value"))?;
-        Ok(Node::ValueFill {
+        Ok(vec![Node::ValueFill {
             path: parse_path(args)?,
             value_key,
             color: parse_color(args)?,
-        })
+        }])
     }
 }
 
@@ -217,7 +217,7 @@ impl Primitive for ImagePrim {
     fn id(&self) -> &str {
         "image"
     }
-    fn build(&self, args: &Table, ctx: &mut dyn BuildContext) -> Result<Node, BuildError> {
+    fn build(&self, args: &Table, ctx: &mut dyn BuildContext) -> Result<Vec<Node>, BuildError> {
         let name: String = args
             .get("asset")
             .map_err(|_| BuildError::MissingField("asset"))?;
@@ -226,10 +226,10 @@ impl Primitive for ImagePrim {
         let y: f32 = args.get("y").map_err(|_| BuildError::MissingField("y"))?;
         let w: f32 = args.get("w").unwrap_or(image.width as f32);
         let h: f32 = args.get("h").unwrap_or(image.height as f32);
-        Ok(Node::Image {
+        Ok(vec![Node::Image {
             image,
             dest: crate::scene::ImageDest { x, y, w, h },
-        })
+        }])
     }
 }
 
@@ -238,7 +238,7 @@ impl Primitive for TextPrim {
     fn id(&self) -> &str {
         "text"
     }
-    fn build(&self, args: &Table, ctx: &mut dyn BuildContext) -> Result<Node, BuildError> {
+    fn build(&self, args: &Table, ctx: &mut dyn BuildContext) -> Result<Vec<Node>, BuildError> {
         use crate::scene::TextContent;
         let has_text = args.contains_key("text")?;
         let has_value = args.contains_key("value")?;
@@ -264,7 +264,7 @@ impl Primitive for TextPrim {
         let x: f32 = args.get("x").map_err(|_| BuildError::MissingField("x"))?;
         let y: f32 = args.get("y").map_err(|_| BuildError::MissingField("y"))?;
         let max_width: Option<f32> = args.get("max_width")?;
-        Ok(Node::Text {
+        Ok(vec![Node::Text {
             content,
             font,
             font_name,
@@ -274,7 +274,7 @@ impl Primitive for TextPrim {
             valign,
             max_width,
             pos: Pt { x, y },
-        })
+        }])
     }
 }
 
@@ -316,6 +316,13 @@ mod tests {
     use crate::scene::{Gradient, Paint};
     use mlua::Lua;
 
+    /// Extracts the single node a primitive emits (most prims emit exactly one).
+    fn one(r: Result<Vec<Node>, BuildError>) -> Node {
+        let v = r.unwrap();
+        assert_eq!(v.len(), 1, "expected exactly one node, got {}", v.len());
+        v.into_iter().next().unwrap()
+    }
+
     struct NoHandlers;
     impl BuildContext for NoHandlers {
         fn register_handler(&mut self, _f: Function) -> HandlerId {
@@ -346,8 +353,7 @@ mod tests {
             &lua,
             "return { path = {{x=0,y=0},{x=10,y=0},{x=10,y=10}}, color = {r=1,g=2,b=3} }",
         );
-        let node = FillPrim.build(&t, &mut NoHandlers).unwrap();
-        match node {
+        match one(FillPrim.build(&t, &mut NoHandlers)) {
             Node::Fill { paint, path } => {
                 assert_eq!(
                     paint,
@@ -399,7 +405,7 @@ mod tests {
             &lua,
             "return { path = {{x=0,y=0},{x=1,y=0},{x=1,y=1}}, value = 'level', color = {r=0,g=0,b=0} }",
         );
-        match ValueFillPrim.build(&t, &mut NoHandlers).unwrap() {
+        match one(ValueFillPrim.build(&t, &mut NoHandlers)) {
             Node::ValueFill { value_key, .. } => assert_eq!(value_key, "level"),
             other => panic!("expected ValueFill, got {other:?}"),
         }
@@ -435,7 +441,7 @@ mod tests {
             "return { path = {{x=0,y=0},{x=1,y=0},{x=1,y=1}}, on_press = function() end }",
         );
         let mut ctx = Counter(5);
-        match RegionPrim.build(&t, &mut ctx).unwrap() {
+        match one(RegionPrim.build(&t, &mut ctx)) {
             Node::Hotspot { on_press, .. } => assert_eq!(on_press, 5),
             other => panic!("expected Hotspot, got {other:?}"),
         }
@@ -457,7 +463,7 @@ mod tests {
         use crate::scene::{HAlign, TextContent, VAlign};
         let lua = Lua::new();
         let t = tbl(&lua, "return { text='HI', x=5, y=6, color={r=1,g=2,b=3} }");
-        match TextPrim.build(&t, &mut NoHandlers).unwrap() {
+        match one(TextPrim.build(&t, &mut NoHandlers)) {
             Node::Text {
                 content,
                 size,
@@ -490,7 +496,7 @@ mod tests {
             "return { value='track_title', x=0, y=0, color={r=0,g=0,b=0}, \
                halign='right', valign='middle', size=12, max_width=120 }",
         );
-        match TextPrim.build(&t, &mut NoHandlers).unwrap() {
+        match one(TextPrim.build(&t, &mut NoHandlers)) {
             Node::Text {
                 content,
                 halign,
@@ -547,7 +553,7 @@ mod tests {
                type='linear', from={x=0,y=0}, to={x=0,y=40}, \
                stops = { {at=1, color={r=9,g=9,b=9,a=0}}, {at=0, color={r=255,g=255,b=255,a=120}} } } }",
         );
-        match FillPrim.build(&t, &mut NoHandlers).unwrap() {
+        match one(FillPrim.build(&t, &mut NoHandlers)) {
             Node::Fill {
                 paint: Paint::Gradient(Gradient::Linear { from, to, stops }),
                 ..
@@ -580,7 +586,7 @@ mod tests {
                type='radial', center={x=5,y=6}, radius=7, \
                stops = { {at=0, color={r=0,g=0,b=0}}, {at=1, color={r=1,g=1,b=1}} } } }",
         );
-        match FillPrim.build(&radial, &mut NoHandlers).unwrap() {
+        match one(FillPrim.build(&radial, &mut NoHandlers)) {
             Node::Fill {
                 paint: Paint::Gradient(Gradient::Radial { center, radius, .. }),
                 ..
@@ -596,7 +602,7 @@ mod tests {
                type='sweep', center={x=2,y=3}, \
                stops = { {at=0, color={r=0,g=0,b=0}}, {at=1, color={r=1,g=1,b=1}} } } }",
         );
-        match FillPrim.build(&sweep, &mut NoHandlers).unwrap() {
+        match one(FillPrim.build(&sweep, &mut NoHandlers)) {
             Node::Fill {
                 paint:
                     Paint::Gradient(Gradient::Sweep {
@@ -669,7 +675,7 @@ mod tests {
             .load("return { asset='a.png', x=10, y=20 }")
             .eval()
             .unwrap();
-        match ImagePrim.build(&t, &mut Ctx(img.clone())).unwrap() {
+        match one(ImagePrim.build(&t, &mut Ctx(img.clone()))) {
             Node::Image { dest, .. } => {
                 assert_eq!((dest.x, dest.y, dest.w, dest.h), (10.0, 20.0, 4.0, 2.0));
             }
@@ -680,7 +686,7 @@ mod tests {
             .load("return { asset='a.png', x=0, y=0, w=40, h=30 }")
             .eval()
             .unwrap();
-        match ImagePrim.build(&t2, &mut Ctx(img)).unwrap() {
+        match one(ImagePrim.build(&t2, &mut Ctx(img))) {
             Node::Image { dest, .. } => assert_eq!((dest.w, dest.h), (40.0, 30.0)),
             other => panic!("expected Image, got {other:?}"),
         }
