@@ -144,6 +144,21 @@ fn parse_paint(args: &Table) -> Result<Paint, BuildError> {
     }
 }
 
+/// If `on_press` is present, register it and build a Hotspot over `region`.
+fn maybe_hotspot(
+    args: &Table,
+    region: hittest::Region,
+    ctx: &mut dyn BuildContext,
+) -> Result<Option<Node>, BuildError> {
+    match args.get::<Option<Function>>("on_press")? {
+        Some(f) => Ok(Some(Node::Hotspot {
+            region,
+            on_press: ctx.register_handler(f),
+        })),
+        None => Ok(None),
+    }
+}
+
 fn parse_halign(args: &Table) -> Result<crate::scene::HAlign, BuildError> {
     use crate::scene::HAlign;
     match args.get::<Option<String>>("halign")?.as_deref() {
@@ -169,11 +184,16 @@ impl Primitive for FillPrim {
     fn id(&self) -> &str {
         "fill"
     }
-    fn build(&self, args: &Table, _ctx: &mut dyn BuildContext) -> Result<Vec<Node>, BuildError> {
-        Ok(vec![Node::Fill {
-            path: parse_path(args)?,
+    fn build(&self, args: &Table, ctx: &mut dyn BuildContext) -> Result<Vec<Node>, BuildError> {
+        let path = parse_path(args)?;
+        let mut nodes = vec![Node::Fill {
+            path: path.clone(),
             paint: parse_paint(args)?,
-        }])
+        }];
+        if let Some(h) = maybe_hotspot(args, crate::scene::region_of(&path), ctx)? {
+            nodes.push(h);
+        }
+        Ok(nodes)
     }
 }
 
@@ -226,10 +246,20 @@ impl Primitive for ImagePrim {
         let y: f32 = args.get("y").map_err(|_| BuildError::MissingField("y"))?;
         let w: f32 = args.get("w").unwrap_or(image.width as f32);
         let h: f32 = args.get("h").unwrap_or(image.height as f32);
-        Ok(vec![Node::Image {
+        let mut nodes = vec![Node::Image {
             image,
             dest: crate::scene::ImageDest { x, y, w, h },
-        }])
+        }];
+        let corners = vec![
+            crate::scene::Pt { x, y },
+            crate::scene::Pt { x: x + w, y },
+            crate::scene::Pt { x: x + w, y: y + h },
+            crate::scene::Pt { x, y: y + h },
+        ];
+        if let Some(hs) = maybe_hotspot(args, crate::scene::region_of(&corners), ctx)? {
+            nodes.push(hs);
+        }
+        Ok(nodes)
     }
 }
 
@@ -537,6 +567,60 @@ mod tests {
             TextPrim.build(&bad_align, &mut NoHandlers),
             Err(BuildError::BadType(_))
         ));
+    }
+
+    #[test]
+    fn fill_without_on_press_emits_single_node() {
+        let lua = Lua::new();
+        let t = tbl(&lua, "return { path = {{x=0,y=0},{x=10,y=0},{x=10,y=10}}, color = {r=1,g=2,b=3} }");
+        let v = FillPrim.build(&t, &mut NoHandlers).unwrap();
+        assert_eq!(v.len(), 1);
+        assert!(matches!(v[0], Node::Fill { .. }));
+    }
+
+    #[test]
+    fn fill_with_on_press_emits_fill_then_hotspot() {
+        let lua = Lua::new();
+        let t = tbl(
+            &lua,
+            "return { path = {{x=0,y=0},{x=10,y=0},{x=10,y=10}}, color = {r=1,g=2,b=3}, \
+               on_press = function() end }",
+        );
+        let v = FillPrim.build(&t, &mut NoHandlers).unwrap();
+        assert_eq!(v.len(), 2, "fill + hotspot");
+        assert!(matches!(v[0], Node::Fill { .. }));
+        assert!(matches!(v[1], Node::Hotspot { .. }));
+    }
+
+    #[test]
+    fn image_with_on_press_emits_image_then_hotspot_from_dest_rect() {
+        use crate::asset::DecodedImage;
+        use std::sync::Arc;
+        struct Ctx(Arc<DecodedImage>);
+        impl BuildContext for Ctx {
+            fn register_handler(&mut self, _f: Function) -> HandlerId { 7 }
+            fn image(&mut self, _n: &str) -> Result<Arc<DecodedImage>, crate::asset::AssetError> {
+                Ok(self.0.clone())
+            }
+            fn font(&mut self, n: &str) -> Result<Arc<crate::scene::FontData>, crate::asset::AssetError> {
+                Err(crate::asset::AssetError::Unresolved(n.to_string()))
+            }
+        }
+        let img = Arc::new(DecodedImage { rgba: vec![0; 4], width: 1, height: 1 });
+        let lua = Lua::new();
+        let t = tbl(&lua, "return { asset='a.png', x=10, y=20, w=30, h=40, on_press=function() end }");
+        let v = ImagePrim.build(&t, &mut Ctx(img)).unwrap();
+        assert_eq!(v.len(), 2);
+        assert!(matches!(v[0], Node::Image { .. }));
+        match &v[1] {
+            Node::Hotspot { on_press, region } => {
+                assert_eq!(*on_press, 7);
+                // dest rect (10,20)-(40,60): a point inside hits, one outside misses.
+                assert!(region.contains(hittest::Point { x: 25.0, y: 40.0 }));
+                assert!(!region.contains(hittest::Point { x: 5.0, y: 5.0 }));
+            }
+            other => panic!("expected Hotspot, got {other:?}"),
+        }
     }
 
     #[test]
