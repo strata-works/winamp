@@ -9,10 +9,11 @@ runtime without losing app state.
 
 > **Status: working engine, built phase by phase.** The core engine runs end-to-end —
 > a Lua-scripted skin renders to a live GPU window, hotspots fire host actions, dynamic
-> values animate, and skins hot-swap with state intact. As of **Phase 5c** skins draw real
-> bitmap artwork, gradient chrome, and laid-out text with live value-bound readouts: the
-> demo renders the genuine Headspace WMP faceplate with live play/seek and a live
-> track-title readout. See [Current status](#current-status).
+> values animate, and skins hot-swap with state intact. As of **Phase 5d** skins draw real
+> bitmap artwork, gradient chrome, and laid-out text with live value-bound readouts, and
+> authors compose with shape helpers and single-declaration clickable controls: the demo
+> renders the genuine Headspace WMP faceplate with live play/seek and a live track-title
+> readout. See [Current status](#current-status).
 
 ## Motivation
 
