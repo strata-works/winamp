@@ -119,6 +119,45 @@ pub fn load(
     }
     env.set("host", host_tbl)?;
 
+    // Base geometry sugar: pure path-generators injected into the sandbox. They return a
+    // sequence of {x=,y=} usable in any `path=`; they emit no nodes and carry no capability.
+    fn points_table(lua: &Lua, pts: &[crate::scene::Pt]) -> mlua::Result<Table> {
+        let t = lua.create_table()?;
+        for (i, p) in pts.iter().enumerate() {
+            let pt = lua.create_table()?;
+            pt.set("x", p.x)?;
+            pt.set("y", p.y)?;
+            t.set(i + 1, pt)?;
+        }
+        Ok(t)
+    }
+    let circle = lua.create_function(|lua, a: Table| {
+        let cx: f32 = a.get("cx")?;
+        let cy: f32 = a.get("cy")?;
+        let r: f32 = a.get("r")?;
+        let segments: u32 = a.get::<Option<u32>>("segments")?.unwrap_or(48);
+        points_table(lua, &crate::shape::circle(cx, cy, r, segments))
+    })?;
+    env.set("circle", circle)?;
+    let rect = lua.create_function(|lua, a: Table| {
+        let x: f32 = a.get("x")?;
+        let y: f32 = a.get("y")?;
+        let w: f32 = a.get("w")?;
+        let h: f32 = a.get("h")?;
+        points_table(lua, &crate::shape::rect(x, y, w, h))
+    })?;
+    env.set("rect", rect)?;
+    let rounded_rect = lua.create_function(|lua, a: Table| {
+        let x: f32 = a.get("x")?;
+        let y: f32 = a.get("y")?;
+        let w: f32 = a.get("w")?;
+        let h: f32 = a.get("h")?;
+        let radius: f32 = a.get("radius")?;
+        let segments: u32 = a.get::<Option<u32>>("segments")?.unwrap_or(8);
+        points_table(lua, &crate::shape::rounded_rect(x, y, w, h, radius, segments))
+    })?;
+    env.set("rounded_rect", rounded_rect)?;
+
     // Run the skin once under the sandboxed env.  The env exposes only the registry
     // primitive constructors + the `host` table of allowlisted action shims; `io`, `os`,
     // `require`, `load`, and all other base globals are absent.  One deliberate subtlety:
@@ -235,6 +274,41 @@ mod tests {
             let r = load(&src(bad), &FixtureHost::new(), reg.clone(), new_queue());
             assert!(r.is_err(), "expected sandbox/registry to reject `{bad}`");
         }
+    }
+
+    #[test]
+    fn shape_helpers_produce_usable_paths() {
+        let q = new_queue();
+        // A circle path feeds `fill`; the fill builds with the tessellated polygon.
+        let skin = load(
+            &src("fill{ path = circle{cx=20, cy=20, r=10}, color = {r=1,g=2,b=3} }"),
+            &FixtureHost::new(),
+            Rc::new(VocabRegistry::base()),
+            q,
+        )
+        .unwrap();
+        match &skin.scene.nodes[0] {
+            crate::scene::Node::Fill { path, .. } => {
+                assert_eq!(path.len(), 48, "default circle segments");
+            }
+            other => panic!("expected Fill, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rect_helper_makes_a_clickable_fill() {
+        let q = new_queue();
+        let skin = load(
+            &src("fill{ path = rect{x=0,y=0,w=10,h=10}, color={r=0,g=0,b=0}, \
+                       on_press=function() host.toggle() end }"),
+            &FixtureHost::new(),
+            Rc::new(VocabRegistry::base()),
+            q,
+        )
+        .unwrap();
+        // fill + hotspot from the rect; the hotspot hit-tests inside the rect.
+        assert_eq!(skin.scene.nodes.len(), 2);
+        assert_eq!(skin.scene.hit(crate::scene::Pt { x: 5.0, y: 5.0 }), Some(0));
     }
 
     /// String methods on literals are reachable via the string metatable (accepted,
