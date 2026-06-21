@@ -55,7 +55,7 @@ fn offscreen(w: u32, h: u32) -> Offscreen {
 fn readback(o: &Offscreen) -> Vec<u8> {
     pollster::block_on(async {
         let unpadded = o.w * 4;
-        let padded = ((unpadded + 255) / 256) * 256;
+        let padded = unpadded.div_ceil(256) * 256;
         let buf = o.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("rb"),
             size: (padded * o.h) as u64,
