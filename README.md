@@ -7,13 +7,11 @@ Rust. It lets an application hand its entire surface over to a *skin* that defin
 own layout, appearance, and interactive hotspots, and lets users hot-swap skins at
 runtime without losing app state.
 
-> **Status: working engine, built phase by phase.** The core engine runs end-to-end —
-> a Lua-scripted skin renders to a live GPU window, hotspots fire host actions, dynamic
-> values animate, and skins hot-swap with state intact. As of **Phase 5e** (Phase 5
-> complete) skins draw real bitmap artwork, gradient chrome, and laid-out text with live
-> value-bound readouts; authors compose with shape helpers and single-declaration clickable
-> controls; and hosts register their own domain primitives (e.g. `transport{}`) with no
-> Lua glue — the demo's `transport` skin proves the seam. See [Current status](#current-status).
+> **Status: working engine, built phase by phase — Phases 0–6 complete.** The demo is a
+> borderless, transparent, shaped, draggable window where the skin *is* the interface; the
+> **H** key live-switches the whole window between a media player and a real `sysinfo`
+> system monitor on one engine, proving total window replacement and zero domain knowledge
+> (the only engine change was a transparent render base color). See [Current status](#current-status).
 
 ## Motivation
 
@@ -68,10 +66,11 @@ The load-bearing decisions:
 
 ## Current status
 
-The engine works end-to-end. Run `cargo run -p carapace-demo` and a real GPU window opens
-running a skin; **Tab** cycles through the bundled skins, clicks hit free-form hotspots
-that call back into the host, a value-bound seek bar advances on wall-clock time, and a
-skin swap preserves playback state.
+The engine works end-to-end. Run `cargo run -p carapace-demo` and a borderless, shaped,
+draggable GPU window opens running a skin; **Tab** cycles through the bundled skins, **H**
+live-switches the whole window between the media-player host and a real `sysinfo` system
+monitor, clicks hit free-form hotspots, a value-bound seek bar advances on wall-clock time,
+and a skin swap preserves playback state.
 
 What exists today:
 
@@ -79,7 +78,7 @@ What exists today:
 |-------|------------|
 | [`crates/hittest`](crates/hittest) | Dependency-free even-odd point-in-region kernel for concave + holed shapes. The decoupled hit-testing module; **no** rendering/GPU dependency. |
 | [`crates/carapace`](crates/carapace) | The engine: scene graph + hit-testing, host command queue, external state + value bindings, transactional skin swap, Lua scripting in a capability sandbox, the base vocabulary, sandboxed asset loading + image decode, and a vello/`wgpu` direct-to-surface renderer. |
-| [`crates/carapace-demo`](crates/carapace-demo) | A live host app (`winit` + `wgpu`) with a fake media-player host and three bundled skins, including the real Headspace bitmap. The reference embedder. |
+| [`crates/carapace-demo`](crates/carapace-demo) | A borderless dual-domain embedder (`winit` + `wgpu`): a media-player host and a real `sysinfo` system-monitor host share one engine; **H** live-switches between them. Three bundled skins, including the real Headspace bitmap. |
 
 **Phase 5a — asset loading + the `image` primitive: complete.** A type-agnostic,
 sandboxed `AssetResolver` scans a skin's `assets/` directory (Flutter-style: resolved =
@@ -119,8 +118,9 @@ links system `fontconfig` for font fallback, so a Linux build needs the dev pack
 # Full workspace test suite (hit-test kernel, engine, headless skin/scene tests).
 cargo test --workspace
 
-# Launch the live demo: a GPU window running a skin.
+# Launch the live demo: a borderless, shaped, draggable GPU window running a skin.
 #   Tab   cycle skins (classic / minimal / reference=real Headspace bitmap)
+#   H     live-switch between the media-player host and a real sysinfo system monitor
 #   click free-form hotspots fire host actions; the seek bar advances live
 #   state survives a skin swap
 cargo run -p carapace-demo
@@ -158,8 +158,11 @@ engine. Phase 5 was decomposed into sub-projects (5a–5e).
   (`VocabRegistry::register`) that binds its own actions via a Rust-side `host_action` handler —
   no Lua glue. The demo's `transport{}` (defined in the demo crate, not the engine) proves the
   seam. **Phase 5 is complete.**
-- **Phase 6 — validation** against both a media-player and a system-monitor host, proving
-  zero media-specific knowledge in the engine.
+- **Phase 6 — skin-as-window + cross-domain validation.** ✅ The demo renders the skin *as* a
+  borderless, transparent, shaped, draggable window (skin-drawn minimize/close), and the **H** key
+  live-switches the whole window between a media player and a real `sysinfo` system monitor on one
+  engine — proving total window replacement **and** zero domain knowledge (the only engine change
+  is a transparent render base color). **Phases 0–6 complete.**
 
 ## Repository layout
 
