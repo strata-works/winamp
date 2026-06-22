@@ -9,11 +9,11 @@ runtime without losing app state.
 
 > **Status: working engine, built phase by phase.** The core engine runs end-to-end —
 > a Lua-scripted skin renders to a live GPU window, hotspots fire host actions, dynamic
-> values animate, and skins hot-swap with state intact. As of **Phase 5d** skins draw real
-> bitmap artwork, gradient chrome, and laid-out text with live value-bound readouts, and
-> authors compose with shape helpers and single-declaration clickable controls: the demo
-> renders the genuine Headspace WMP faceplate with live play/seek and a live track-title
-> readout. See [Current status](#current-status).
+> values animate, and skins hot-swap with state intact. As of **Phase 5e** (Phase 5
+> complete) skins draw real bitmap artwork, gradient chrome, and laid-out text with live
+> value-bound readouts; authors compose with shape helpers and single-declaration clickable
+> controls; and hosts register their own domain primitives (e.g. `transport{}`) with no
+> Lua glue — the demo's `transport` skin proves the seam. See [Current status](#current-status).
 
 ## Motivation
 
@@ -55,6 +55,10 @@ The load-bearing decisions:
   primitives (currently `fill`, `region` hotspots, value-bound `value_fill`, `image`, and
   `text` — laid-out, value-bindable, `Paint`-filled; more to come). Anything domain-flavored — "transport control", "audio visualizer" — is
   registered by the host as an extension.
+  A host registers its own domain primitives through `VocabRegistry::register`; they appear in the
+  skin env exactly like built-ins and can bind the host's allowlisted actions directly (e.g. the
+  demo's `transport{}`). `carapace` re-exports `mlua` so an extension crate needs no direct `mlua`
+  dependency.
   Shapes (`circle`/`rect`/`rounded_rect`) are composable path-helpers, and any drawable can take
   an `on_press` to be both drawn and hit-testable from one declaration.
 - **Desktop-first, Rust + vello.** The host owns the window, event loop, and surface; the
@@ -150,7 +154,10 @@ engine. Phase 5 was decomposed into sub-projects (5a–5e).
 - **Phase 5d — vocab ergonomics.** ✅ Shape path-helpers (`circle`/`rect`/`rounded_rect`);
   `on_press` on drawables (a control is drawn + clickable from one declaration);
   `value_fill` direction (right/left/up/down) + clip-to-path.
-- **Phase 5e** — the host-extension registration mechanism.
+- **Phase 5e — host-extension mechanism.** ✅ A host registers a domain primitive
+  (`VocabRegistry::register`) that binds its own actions via a Rust-side `host_action` handler —
+  no Lua glue. The demo's `transport{}` (defined in the demo crate, not the engine) proves the
+  seam. **Phase 5 is complete.**
 - **Phase 6 — validation** against both a media-player and a system-monitor host, proving
   zero media-specific knowledge in the engine.
 

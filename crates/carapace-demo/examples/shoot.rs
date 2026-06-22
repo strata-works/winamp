@@ -13,6 +13,13 @@ use carapace::render::{RenderTarget, Renderer};
 use carapace::vocab::VocabRegistry;
 use carapace_demo::demo_host::DemoHost;
 
+/// Mirror the demo's registry so the shooter can render the host extension (`transport{}`).
+fn demo_registry() -> VocabRegistry {
+    let mut r = VocabRegistry::base();
+    r.register(Box::new(carapace_demo::transport::TransportPrim));
+    r
+}
+
 struct Offscreen {
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -117,7 +124,7 @@ fn shoot(skin: &str, out_dir: &Path) {
     let (w, h) = (manifest.canvas.width, manifest.canvas.height);
 
     let mut engine =
-        Engine::new(Box::new(DemoHost::new()), VocabRegistry::base(), source).expect("engine");
+        Engine::new(Box::new(DemoHost::new()), demo_registry(), source).expect("engine");
     // Advance a little so the position-bound seek bar shows progress.
     engine.handle_command(carapace::command::Command::HostAction {
         action: "toggle_play".to_string(),
@@ -148,7 +155,7 @@ fn shoot(skin: &str, out_dir: &Path) {
 fn main() {
     let out_dir = Path::new("/tmp/carapace-5c");
     std::fs::create_dir_all(out_dir).unwrap();
-    for skin in ["reference", "minimal", "classic"] {
+    for skin in ["reference", "minimal", "classic", "transport"] {
         shoot(skin, out_dir);
     }
 }

@@ -34,6 +34,20 @@ pub enum Command {
     },
 }
 
+impl std::fmt::Debug for Command {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Command::HostAction { action, args } => f
+                .debug_struct("HostAction")
+                .field("action", action)
+                .field("args", args)
+                .finish(),
+            Command::Swap(_) => f.debug_tuple("Swap").field(&"<SkinSource>").finish(),
+            Command::SwitchHost { .. } => f.write_str("SwitchHost { .. }"),
+        }
+    }
+}
+
 /// Shared command queue: skin handlers push HostAction; the host app pushes
 /// Swap/SwitchHost; the Engine drains it.
 pub type Queue = Rc<RefCell<Vec<Command>>>;
