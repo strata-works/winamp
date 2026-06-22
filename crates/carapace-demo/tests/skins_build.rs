@@ -136,6 +136,33 @@ fn transport_extension_builds_and_play_click_toggles_host() {
 }
 
 #[test]
+fn skins_declare_window_controls() {
+    use carapace::scene::Node;
+    // Every vector skin must build AND reference the window-control actions (a skin naming an
+    // un-allowlisted action fails to load), and expose hotspots for them.
+    for skin in ["classic", "minimal", "transport"] {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("skins")
+            .join(skin);
+        let (_m, source) = carapace::skin::load_dir(&dir).unwrap();
+        let mut reg = VocabRegistry::base();
+        reg.register(Box::new(carapace_demo::transport::TransportPrim));
+        let e = Engine::new(Box::new(DemoHost::new()), reg, source)
+            .unwrap_or_else(|err| panic!("{skin} failed to build: {err:?}"));
+        let hotspots = e
+            .scene()
+            .nodes
+            .iter()
+            .filter(|n| matches!(n, Node::Hotspot { .. }))
+            .count();
+        assert!(
+            hotspots >= 3,
+            "{skin} should have drag + min + close hotspots, found {hotspots}"
+        );
+    }
+}
+
+#[test]
 fn minimal_has_a_sweep_gradient() {
     use carapace::scene::{Gradient, Node, Paint};
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("skins/minimal");
