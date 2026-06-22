@@ -8,6 +8,7 @@ use carapace::render::{RenderTarget, Renderer};
 use carapace::scene::Pt;
 use carapace::vocab::VocabRegistry;
 use carapace_demo::demo_host::DemoHost;
+use carapace_demo::window::{WindowOp, WindowOutbox};
 
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, MouseButton, WindowEvent};
@@ -94,12 +95,19 @@ struct App {
     window: Option<Arc<Window>>,
     gpu: Option<Gpu>,
     renderer: Option<Renderer>,
+    window_outbox: WindowOutbox,
 }
 
 impl App {
     fn new() -> Self {
+        let window_outbox: WindowOutbox = Default::default();
         let (src, _canvas) = load_source(0);
-        let engine = Engine::new(Box::new(DemoHost::new()), demo_registry(), src).unwrap();
+        let engine = Engine::new(
+            Box::new(DemoHost::with_outbox(window_outbox.clone())),
+            demo_registry(),
+            src,
+        )
+        .unwrap();
         Self {
             skin_index: 0,
             engine,
@@ -108,6 +116,25 @@ impl App {
             window: None,
             gpu: None,
             renderer: None,
+            window_outbox,
+        }
+    }
+
+    fn apply_window_ops(&self, event_loop: &ActiveEventLoop) {
+        for op in self.window_outbox.borrow_mut().drain(..) {
+            match op {
+                WindowOp::BeginDrag => {
+                    if let Some(w) = &self.window {
+                        let _ = w.drag_window();
+                    }
+                }
+                WindowOp::Minimize => {
+                    if let Some(w) = &self.window {
+                        w.set_minimized(true);
+                    }
+                }
+                WindowOp::Close => event_loop.exit(),
+            }
         }
     }
 }
@@ -122,7 +149,8 @@ impl ApplicationHandler for App {
         // Size window from the initial skin canvas * scale.
         let (cw, ch) = self.engine.scene().canvas;
         let attrs = Window::default_attributes()
-            .with_title("carapace skin engine")
+            .with_decorations(false)
+            .with_transparent(true)
             .with_inner_size(winit::dpi::LogicalSize::new(
                 cw * INIT_SCALE,
                 ch * INIT_SCALE,
@@ -158,13 +186,26 @@ impl ApplicationHandler for App {
                 .first()
                 .expect("surface has no supported formats");
 
+            let alpha_mode = if caps
+                .alpha_modes
+                .contains(&wgpu::CompositeAlphaMode::PreMultiplied)
+            {
+                wgpu::CompositeAlphaMode::PreMultiplied
+            } else if caps
+                .alpha_modes
+                .contains(&wgpu::CompositeAlphaMode::PostMultiplied)
+            {
+                wgpu::CompositeAlphaMode::PostMultiplied
+            } else {
+                caps.alpha_modes[0]
+            };
             let config = wgpu::SurfaceConfiguration {
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
                 format: surface_format,
                 width: pw,
                 height: ph,
                 present_mode: wgpu::PresentMode::Fifo,
-                alpha_mode: caps.alpha_modes[0],
+                alpha_mode,
                 view_formats: vec![],
                 desired_maximum_frame_latency: 2,
             };
@@ -210,6 +251,7 @@ impl ApplicationHandler for App {
                 self.last = now;
 
                 self.engine.update(dt);
+                self.apply_window_ops(event_loop);
 
                 let (Some(gpu), Some(renderer)) = (self.gpu.as_mut(), self.renderer.as_mut())
                 else {
@@ -263,7 +305,7 @@ impl ApplicationHandler for App {
                             r: 0,
                             g: 0,
                             b: 0,
-                            a: 255,
+                            a: 0,
                         },
                     },
                 );
