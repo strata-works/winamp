@@ -8,6 +8,7 @@ use carapace::render::{RenderTarget, Renderer};
 use carapace::scene::Pt;
 use carapace::vocab::VocabRegistry;
 use carapace_demo::demo_host::DemoHost;
+use carapace_demo::sysmon_host::SysmonHost;
 use carapace_demo::window::{WindowOp, WindowOutbox};
 
 use winit::application::ApplicationHandler;
@@ -16,12 +17,13 @@ use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::keyboard::{Key, NamedKey};
 use winit::window::{Window, WindowId};
 
-const SKINS: [&str; 4] = [
+const MEDIA_SKINS: &[&str] = &[
     "skins/classic",
     "skins/minimal",
     "skins/reference",
     "skins/transport",
 ];
+const SYSMON_SKINS: &[&str] = &["skins/sysmon"];
 const INIT_SCALE: u32 = 3;
 
 fn skin_root() -> PathBuf {
@@ -31,11 +33,12 @@ fn skin_root() -> PathBuf {
 fn demo_registry() -> VocabRegistry {
     let mut r = VocabRegistry::base();
     r.register(Box::new(carapace_demo::transport::TransportPrim));
+    r.register(Box::new(carapace_demo::gauge::GaugePrim));
     r
 }
 
-fn load_source(i: usize) -> (SkinSource, (u32, u32)) {
-    let (_m, src) = carapace::skin::load_dir(&skin_root().join(SKINS[i])).expect("load skin");
+fn load_source_from(list: &[&str], i: usize) -> (SkinSource, (u32, u32)) {
+    let (_m, src) = carapace::skin::load_dir(&skin_root().join(list[i])).expect("load skin");
     let canvas = src.canvas;
     (src, canvas)
 }
@@ -89,6 +92,7 @@ impl Gpu {
 
 struct App {
     skin_index: usize,
+    sysmon: bool,
     engine: Engine,
     cursor: (f64, f64),
     last: Instant,
@@ -101,7 +105,7 @@ struct App {
 impl App {
     fn new() -> Self {
         let window_outbox: WindowOutbox = Default::default();
-        let (src, _canvas) = load_source(0);
+        let (src, _canvas) = load_source_from(MEDIA_SKINS, 0);
         let engine = Engine::new(
             Box::new(DemoHost::with_outbox(window_outbox.clone())),
             demo_registry(),
@@ -110,6 +114,7 @@ impl App {
         .unwrap();
         Self {
             skin_index: 0,
+            sysmon: false,
             engine,
             cursor: (0.0, 0.0),
             last: Instant::now(),
@@ -356,9 +361,34 @@ impl ApplicationHandler for App {
                 match event.logical_key {
                     Key::Named(NamedKey::Escape) => event_loop.exit(),
                     Key::Named(NamedKey::Tab) => {
-                        self.skin_index = (self.skin_index + 1) % SKINS.len();
-                        let (src, _) = load_source(self.skin_index);
+                        let list = if self.sysmon {
+                            SYSMON_SKINS
+                        } else {
+                            MEDIA_SKINS
+                        };
+                        self.skin_index = (self.skin_index + 1) % list.len();
+                        let (src, _) = load_source_from(list, self.skin_index);
                         self.engine.handle_command(Command::Swap(src));
+                        if let Some(w) = &self.window {
+                            w.request_redraw();
+                        }
+                    }
+                    Key::Character(c) if c == "h" || c == "H" => {
+                        self.sysmon = !self.sysmon;
+                        self.skin_index = 0;
+                        let list = if self.sysmon {
+                            SYSMON_SKINS
+                        } else {
+                            MEDIA_SKINS
+                        };
+                        let (src, _) = load_source_from(list, 0);
+                        let host: Box<dyn carapace::host::Host> = if self.sysmon {
+                            Box::new(SysmonHost::with_outbox(self.window_outbox.clone()))
+                        } else {
+                            Box::new(DemoHost::with_outbox(self.window_outbox.clone()))
+                        };
+                        self.engine
+                            .handle_command(Command::SwitchHost { host, skin: src });
                         if let Some(w) = &self.window {
                             w.request_redraw();
                         }
