@@ -2,11 +2,10 @@
 image{ asset = "headspace.png", x = 0, y = 0 }
 -- whole-backdrop drag region (interactive controls drawn later sit on top and win hit-testing)
 region{ path = rect{x=0, y=0, w=342, h=394}, on_press = function() host.begin_drag() end }
--- minimize / close glyphs, top-right
-text{ text = "_", x = 314, y = 6, size = 16, color = {r=220,g=255,b=220} }
-region{ path = rect{x=310, y=6, w=14, h=16}, on_press = function() host.minimize() end }
-text{ text = "x", x = 330, y = 6, size = 16, color = {r=255,g=160,b=160} }
-region{ path = rect{x=326, y=6, w=14, h=16}, on_press = function() host.close() end }
+-- minimize / close: invisible hotspots over the faceplate's OWN painted window buttons
+-- (the □ and X at top-center), so the chrome looks native — no drawn glyphs needed.
+region{ path = rect{x=154, y=4, w=16, h=16}, on_press = function() host.minimize() end }
+region{ path = rect{x=172, y=4, w=16, h=16}, on_press = function() host.close() end }
 
 -- Y2K glass sheen across the header band (translucent white, fading down).
 fill{ path = {{x=0,y=0},{x=342,y=0},{x=342,y=46},{x=0,y=46}}, gradient = {
