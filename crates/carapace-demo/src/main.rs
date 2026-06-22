@@ -15,11 +15,22 @@ use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::keyboard::{Key, NamedKey};
 use winit::window::{Window, WindowId};
 
-const SKINS: [&str; 3] = ["skins/classic", "skins/minimal", "skins/reference"];
+const SKINS: [&str; 4] = [
+    "skins/classic",
+    "skins/minimal",
+    "skins/reference",
+    "skins/transport",
+];
 const INIT_SCALE: u32 = 3;
 
 fn skin_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+}
+
+fn demo_registry() -> VocabRegistry {
+    let mut r = VocabRegistry::base();
+    r.register(Box::new(carapace_demo::transport::TransportPrim));
+    r
 }
 
 fn load_source(i: usize) -> (SkinSource, (u32, u32)) {
@@ -88,7 +99,7 @@ struct App {
 impl App {
     fn new() -> Self {
         let (src, _canvas) = load_source(0);
-        let engine = Engine::new(Box::new(DemoHost::new()), VocabRegistry::base(), src).unwrap();
+        let engine = Engine::new(Box::new(DemoHost::new()), demo_registry(), src).unwrap();
         Self {
             skin_index: 0,
             engine,

@@ -93,6 +93,48 @@ fn headspace_reference_builds_with_bitmap() {
     );
 }
 
+fn engine_with_transport(skin_dir: &str) -> carapace::engine::Engine {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("skins")
+        .join(skin_dir);
+    let (_m, source) = carapace::skin::load_dir(&dir).expect("load skin dir");
+    let mut reg = VocabRegistry::base();
+    reg.register(Box::new(carapace_demo::transport::TransportPrim));
+    Engine::new(Box::new(DemoHost::new()), reg, source).expect("skin builds")
+}
+
+#[test]
+fn transport_extension_builds_and_play_click_toggles_host() {
+    use carapace::engine::PointerEvent;
+    use carapace::scene::Node;
+    use carapace::state::StateValue;
+    use std::time::Duration;
+
+    let mut e = engine_with_transport("transport");
+    let nodes = e.scene().nodes.clone();
+    assert!(
+        nodes.iter().any(|n| matches!(n, Node::Hotspot { .. })),
+        "has a hotspot"
+    );
+    assert!(
+        nodes.iter().any(|n| matches!(n, Node::ValueFill { .. })),
+        "has a seek bar"
+    );
+
+    // play button rect = (20,20,40,40) -> center (40,40); clicking fires toggle_play.
+    assert_eq!(e.state("playing"), Some(StateValue::Bool(false)));
+    e.handle_pointer(
+        carapace::scene::Pt { x: 40.0, y: 40.0 },
+        PointerEvent::Press,
+    );
+    e.update(Duration::ZERO);
+    assert_eq!(
+        e.state("playing"),
+        Some(StateValue::Bool(true)),
+        "transport play toggled the host"
+    );
+}
+
 #[test]
 fn minimal_has_a_sweep_gradient() {
     use carapace::scene::{Gradient, Node, Paint};

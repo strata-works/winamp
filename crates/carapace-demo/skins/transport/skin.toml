@@ -1,0 +1,6 @@
+schema = 1
+id = "transport"
+name = "Transport (host extension)"
+engine = "^0.1"
+canvas = { width = 300, height = 140 }
+entry = "skin.lua"
