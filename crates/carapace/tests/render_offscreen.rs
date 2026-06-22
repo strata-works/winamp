@@ -153,6 +153,7 @@ fn renders_fill_and_value_fill_at_sentinel_pixels() {
                     b: 0,
                     a: 255,
                 },
+                direction: carapace::scene::FillDir::Right,
             },
         ],
     };
@@ -611,6 +612,98 @@ fn renders_value_bound_text_from_string_state() {
     assert!(
         green_ink > 80,
         "expected green ink from bound string state, found {green_ink}"
+    );
+}
+
+#[test]
+fn value_fill_up_fills_from_the_bottom() {
+    use carapace::scene::{Color, FillDir, Node, Scene};
+    use carapace::state::StateValue;
+    let o = offscreen(100, 100);
+    let mut r = Renderer::new(&o.device);
+    let scene = Scene {
+        canvas: (100, 100),
+        nodes: vec![Node::ValueFill {
+            path: rect(10.0, 0.0, 30.0, 100.0), // full-height bar
+            value_key: "v".to_string(),
+            color: Color {
+                r: 0,
+                g: 255,
+                b: 0,
+                a: 255,
+            },
+            direction: FillDir::Up,
+        }],
+    };
+    r.draw(
+        &scene,
+        |k| {
+            if k == "v" {
+                Some(StateValue::Scalar(0.5))
+            } else {
+                None
+            }
+        },
+        &RenderTarget {
+            device: &o.device,
+            queue: &o.queue,
+            view: &o.view,
+            width: o.w,
+            height: o.h,
+        },
+    );
+    let data = readback(&o);
+    assert_eq!(
+        px(&data, 100, 25, 80),
+        [0, 255, 0],
+        "bottom half filled (up, v=0.5)"
+    );
+    assert_eq!(px(&data, 100, 25, 20), [0, 0, 0], "top half empty");
+}
+
+#[test]
+fn value_fill_clips_to_a_non_rect_path() {
+    use carapace::scene::{Color, FillDir, Node, Scene};
+    use carapace::state::StateValue;
+    let o = offscreen(100, 100);
+    let mut r = Renderer::new(&o.device);
+    // A circle path filled fully (v=1.0). A pixel inside the bbox but OUTSIDE the circle
+    // (near a corner of the bounding box) must stay background — proving clip-to-path.
+    let scene = Scene {
+        canvas: (100, 100),
+        nodes: vec![Node::ValueFill {
+            path: carapace::shape::circle(50.0, 50.0, 40.0, 64),
+            value_key: "v".to_string(),
+            color: Color {
+                r: 0,
+                g: 255,
+                b: 0,
+                a: 255,
+            },
+            direction: FillDir::Right,
+        }],
+    };
+    r.draw(
+        &scene,
+        |_k| Some(StateValue::Scalar(1.0)),
+        &RenderTarget {
+            device: &o.device,
+            queue: &o.queue,
+            view: &o.view,
+            width: o.w,
+            height: o.h,
+        },
+    );
+    let data = readback(&o);
+    assert_eq!(
+        px(&data, 100, 50, 50),
+        [0, 255, 0],
+        "center of the circle is filled"
+    );
+    assert_eq!(
+        px(&data, 100, 12, 12),
+        [0, 0, 0],
+        "bbox corner outside the circle stays background"
     );
 }
 

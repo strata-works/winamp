@@ -5,6 +5,7 @@ pub mod host;
 pub mod render;
 pub mod scene;
 pub mod script;
+pub mod shape;
 pub mod skin;
 pub mod state;
 pub mod swap;

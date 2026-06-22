@@ -9,10 +9,11 @@ runtime without losing app state.
 
 > **Status: working engine, built phase by phase.** The core engine runs end-to-end —
 > a Lua-scripted skin renders to a live GPU window, hotspots fire host actions, dynamic
-> values animate, and skins hot-swap with state intact. As of **Phase 5c** skins draw real
-> bitmap artwork, gradient chrome, and laid-out text with live value-bound readouts: the
-> demo renders the genuine Headspace WMP faceplate with live play/seek and a live
-> track-title readout. See [Current status](#current-status).
+> values animate, and skins hot-swap with state intact. As of **Phase 5d** skins draw real
+> bitmap artwork, gradient chrome, and laid-out text with live value-bound readouts, and
+> authors compose with shape helpers and single-declaration clickable controls: the demo
+> renders the genuine Headspace WMP faceplate with live play/seek and a live track-title
+> readout. See [Current status](#current-status).
 
 ## Motivation
 
@@ -54,6 +55,8 @@ The load-bearing decisions:
   primitives (currently `fill`, `region` hotspots, value-bound `value_fill`, `image`, and
   `text` — laid-out, value-bindable, `Paint`-filled; more to come). Anything domain-flavored — "transport control", "audio visualizer" — is
   registered by the host as an extension.
+  Shapes (`circle`/`rect`/`rounded_rect`) are composable path-helpers, and any drawable can take
+  an `on_press` to be both drawn and hit-testable from one declaration.
 - **Desktop-first, Rust + vello.** The host owns the window, event loop, and surface; the
   engine renders **direct-to-surface** (no readback) on a wall-clock delta. The 2D backend
   is **vello** (chosen in Phase 0) over `wgpu`, leaving raw `wgpu` available underneath for
@@ -144,8 +147,10 @@ engine. Phase 5 was decomposed into sub-projects (5a–5e).
 - **Phase 5c — text + fonts.** ✅ `text{}` primitive: parley layout, fonts via the asset
   resolver (system fallback), value-bound strings, multi-line wrap, 2-D (halign × valign)
   anchoring, `Paint`-filled (chrome numerals).
-- **Phase 5d–5e** — vocab ergonomics (shape helpers, shared draw+hotspot geometry); the
-  host-extension registration mechanism.
+- **Phase 5d — vocab ergonomics.** ✅ Shape path-helpers (`circle`/`rect`/`rounded_rect`);
+  `on_press` on drawables (a control is drawn + clickable from one declaration);
+  `value_fill` direction (right/left/up/down) + clip-to-path.
+- **Phase 5e** — the host-extension registration mechanism.
 - **Phase 6 — validation** against both a media-player and a system-monitor host, proving
   zero media-specific knowledge in the engine.
 

@@ -171,11 +171,22 @@ impl Renderer {
                     path,
                     value_key,
                     color,
+                    direction,
                 } => {
+                    use crate::scene::FillDir;
                     let v = value_of(&read_value, value_key);
                     let (x0, y0, x1, y1) = bbox(path);
-                    let filled = Rect::new(x0, y0, x0 + (x1 - x0) * v, y1);
-                    vs.fill(Fill::NonZero, xform, vcolor(*color), None, &filled);
+                    let (w, h) = (x1 - x0, y1 - y0);
+                    let extent = match direction {
+                        FillDir::Right => Rect::new(x0, y0, x0 + w * v, y1),
+                        FillDir::Left => Rect::new(x1 - w * v, y0, x1, y1),
+                        FillDir::Up => Rect::new(x0, y1 - h * v, x1, y1),
+                        FillDir::Down => Rect::new(x0, y0, x1, y0 + h * v),
+                    };
+                    // Clip to the actual path, then fill the value-extent rect: result = path ∩ extent.
+                    vs.push_clip_layer(Fill::NonZero, xform, &bez(path));
+                    vs.fill(Fill::NonZero, xform, vcolor(*color), None, &extent);
+                    vs.pop_layer();
                 }
                 Node::Image { image, dest } => {
                     // sRGB RGBA8 blob -> vello ImageData, placed at dest, under canvas->surface scale.
