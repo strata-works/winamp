@@ -300,6 +300,7 @@ impl ApplicationHandler for App {
                 renderer.draw(
                     scene,
                     read_value,
+                    |_| None,
                     &RenderTarget {
                         device: &gpu.device,
                         queue: &gpu.queue,

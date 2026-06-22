@@ -37,6 +37,10 @@ pub struct Renderer {
     families: HashMap<u64, String>,
     // Cache of shaped layouts so unchanged text is never re-shaped per frame (perf-priority).
     layouts: HashMap<LayoutKey, parley::Layout<Brush>>,
+    // Composite pipeline: blits an embedder-supplied wgpu texture into a view{}'s rect.
+    composite_pipeline: wgpu::RenderPipeline,
+    composite_sampler: wgpu::Sampler,
+    composite_bgl: wgpu::BindGroupLayout,
 }
 
 fn vcolor(c: Color) -> VColor {
@@ -135,12 +139,79 @@ impl Renderer {
             },
         )
         .expect("create vello renderer");
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("view-composite"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("composite.wgsl").into()),
+        });
+        let composite_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("view-composite-bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("view-composite-pl"),
+            bind_group_layouts: &[Some(&composite_bgl)],
+            immediate_size: 0,
+        });
+        let composite_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("view-composite-pipeline"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleStrip,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: Default::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+        let composite_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("view-composite-sampler"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
         Self {
             inner,
             font_cx: FontContext::new(),
             layout_cx: LayoutContext::new(),
             families: HashMap::new(),
             layouts: HashMap::new(),
+            composite_pipeline,
+            composite_sampler,
+            composite_bgl,
         }
     }
 
@@ -149,10 +220,11 @@ impl Renderer {
         self.layouts.len()
     }
 
-    pub fn draw(
+    pub fn draw<'v>(
         &mut self,
         scene: &Scene,
         read_value: impl Fn(&str) -> Option<StateValue>,
+        view_tex: impl Fn(&str) -> Option<&'v wgpu::TextureView>,
         target: &RenderTarget,
     ) {
         let (cw, ch) = scene.canvas;
@@ -358,6 +430,80 @@ impl Renderer {
                 },
             )
             .expect("vello render_to_texture");
+
+        // Composite embedder-supplied content into each view's surface-space rect.
+        let mut srcs: Vec<(Rect, &'v wgpu::TextureView)> = Vec::new();
+        for node in &scene.nodes {
+            if let Node::View { id, dest } = node
+                && let Some(tex) = view_tex(id)
+            {
+                let r = Rect::new(
+                    dest.x as f64 * sx,
+                    dest.y as f64 * sy,
+                    (dest.x + dest.w) as f64 * sx,
+                    (dest.y + dest.h) as f64 * sy,
+                );
+                srcs.push((r, tex));
+            }
+        }
+        if !srcs.is_empty() {
+            let bgs: Vec<wgpu::BindGroup> = srcs
+                .iter()
+                .map(|(_, tex)| {
+                    target.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("view-composite-bg"),
+                        layout: &self.composite_bgl,
+                        entries: &[
+                            wgpu::BindGroupEntry {
+                                binding: 0,
+                                resource: wgpu::BindingResource::TextureView(tex),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 1,
+                                resource: wgpu::BindingResource::Sampler(&self.composite_sampler),
+                            },
+                        ],
+                    })
+                })
+                .collect();
+            let mut enc = target
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("view-composite-enc"),
+                });
+            {
+                let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("view-composite-pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: target.view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                rp.set_pipeline(&self.composite_pipeline);
+                for ((r, _), bg) in srcs.iter().zip(bgs.iter()) {
+                    rp.set_viewport(
+                        r.x0 as f32,
+                        r.y0 as f32,
+                        (r.x1 - r.x0) as f32,
+                        (r.y1 - r.y0) as f32,
+                        0.0,
+                        1.0,
+                    );
+                    rp.set_bind_group(0, bg, &[]);
+                    rp.draw(0..4, 0..1);
+                }
+            }
+            target.queue.submit(Some(enc.finish()));
+        }
     }
 }
 

@@ -36,7 +36,9 @@ fn offscreen(w: u32, h: u32) -> Offscreen {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_SRC,
+            usage: wgpu::TextureUsages::STORAGE_BINDING
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::RENDER_ATTACHMENT,
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -171,6 +173,7 @@ fn renders_fill_and_value_fill_at_sentinel_pixels() {
     r.draw(
         &scene,
         read,
+        |_| None,
         &RenderTarget {
             device: &o.device,
             queue: &o.queue,
@@ -260,6 +263,7 @@ fn renders_an_image_at_sentinel_pixels() {
     r.draw(
         &scene,
         read,
+        |_| None,
         &RenderTarget {
             device: &o.device,
             queue: &o.queue,
@@ -327,6 +331,7 @@ fn renders_translucent_fill_blended_over_background() {
     r.draw(
         &scene,
         read,
+        |_| None,
         &RenderTarget {
             device: &o.device,
             queue: &o.queue,
@@ -397,6 +402,7 @@ fn renders_linear_gradient_oriented_and_interpolating() {
     r.draw(
         &scene,
         read,
+        |_| None,
         &RenderTarget {
             device: &o.device,
             queue: &o.queue,
@@ -468,6 +474,7 @@ fn renders_bundled_font_text_in_fill_color() {
     r.draw(
         &scene,
         |_k: &str| None,
+        |_| None,
         &RenderTarget {
             device: &o.device,
             queue: &o.queue,
@@ -550,6 +557,7 @@ fn renders_gradient_filled_text_interpolating_vertically() {
     r.draw(
         &scene,
         |_k: &str| None,
+        |_| None,
         &RenderTarget {
             device: &o.device,
             queue: &o.queue,
@@ -631,6 +639,7 @@ fn renders_value_bound_text_from_string_state() {
     r.draw(
         &scene,
         read,
+        |_| None,
         &RenderTarget {
             device: &o.device,
             queue: &o.queue,
@@ -690,6 +699,7 @@ fn value_fill_up_fills_from_the_bottom() {
                 None
             }
         },
+        |_| None,
         &RenderTarget {
             device: &o.device,
             queue: &o.queue,
@@ -738,6 +748,7 @@ fn value_fill_clips_to_a_non_rect_path() {
     r.draw(
         &scene,
         |_k| Some(StateValue::Scalar(1.0)),
+        |_| None,
         &RenderTarget {
             device: &o.device,
             queue: &o.queue,
@@ -809,8 +820,8 @@ fn identical_text_is_shaped_once_and_cached() {
             a: 255,
         },
     };
-    r.draw(&scene, |_k: &str| None, &target);
-    r.draw(&scene, |_k: &str| None, &target); // second frame: must reuse, not re-shape
+    r.draw(&scene, |_k: &str| None, |_| None, &target);
+    r.draw(&scene, |_k: &str| None, |_| None, &target); // second frame: must reuse, not re-shape
     assert_eq!(
         r.layout_cache_len(),
         1,
@@ -839,6 +850,7 @@ fn transparent_base_color_leaves_undrawn_pixels_clear() {
     r.draw(
         &scene,
         |_k| None,
+        |_| None,
         &RenderTarget {
             device: &o.device,
             queue: &o.queue,
@@ -859,5 +871,147 @@ fn transparent_base_color_leaves_undrawn_pixels_clear() {
         alpha_at(&data, 100, 80, 80),
         0,
         "undrawn pixel is transparent (base alpha 0)"
+    );
+}
+
+// A solid-color source texture for a view (proves the composite accepts an ARBITRARY texture).
+fn solid_source(o: &Offscreen, w: u32, h: u32, rgba: [u8; 4]) -> wgpu::Texture {
+    let tex = o.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("view-src"),
+        size: wgpu::Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    let data = vec![rgba; (w * h) as usize].concat();
+    o.queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: &tex,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        &data,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(w * 4),
+            rows_per_image: Some(h),
+        },
+        wgpu::Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: 1,
+        },
+    );
+    tex
+}
+
+#[test]
+fn view_composites_supplied_texture_into_its_rect() {
+    use carapace::scene::{Color, ImageDest, Node, Paint, Scene};
+    let o = offscreen(100, 100);
+    let mut r = Renderer::new(&o.device);
+    let scene = Scene {
+        canvas: (100, 100),
+        nodes: vec![
+            Node::Fill {
+                path: rect(0.0, 0.0, 100.0, 100.0),
+                paint: Paint::Solid(Color {
+                    r: 10,
+                    g: 10,
+                    b: 10,
+                    a: 255,
+                }),
+            },
+            Node::View {
+                id: "v".to_string(),
+                dest: ImageDest {
+                    x: 30.0,
+                    y: 30.0,
+                    w: 40.0,
+                    h: 40.0,
+                },
+            },
+        ],
+    };
+    let src = solid_source(&o, 40, 40, [255, 0, 0, 255]);
+    let src_view = src.create_view(&wgpu::TextureViewDescriptor::default());
+    r.draw(
+        &scene,
+        |_| None,
+        |id| if id == "v" { Some(&src_view) } else { None },
+        &RenderTarget {
+            device: &o.device,
+            queue: &o.queue,
+            view: &o.view,
+            width: o.w,
+            height: o.h,
+            base_color: Color {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 255,
+            },
+        },
+    );
+    let data = readback(&o);
+    assert_eq!(
+        px(&data, 100, 50, 50),
+        [255, 0, 0],
+        "view rect shows the supplied texture"
+    );
+    assert_eq!(
+        px(&data, 100, 10, 10),
+        [10, 10, 10],
+        "outside the view shows the skin fill"
+    );
+}
+
+#[test]
+fn view_without_texture_leaves_the_hole() {
+    use carapace::scene::{Color, ImageDest, Node, Scene};
+    let o = offscreen(100, 100);
+    let mut r = Renderer::new(&o.device);
+    let scene = Scene {
+        canvas: (100, 100),
+        nodes: vec![Node::View {
+            id: "v".to_string(),
+            dest: ImageDest {
+                x: 30.0,
+                y: 30.0,
+                w: 40.0,
+                h: 40.0,
+            },
+        }],
+    };
+    r.draw(
+        &scene,
+        |_| None,
+        |_| None,
+        &RenderTarget {
+            device: &o.device,
+            queue: &o.queue,
+            view: &o.view,
+            width: o.w,
+            height: o.h,
+            base_color: Color {
+                r: 7,
+                g: 7,
+                b: 7,
+                a: 255,
+            },
+        },
+    );
+    assert_eq!(
+        px(&readback(&o), 100, 50, 50),
+        [7, 7, 7],
+        "no texture -> the hole stays the base color"
     );
 }
