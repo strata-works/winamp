@@ -31,7 +31,7 @@ text{ text = "HEADSPACE", font = "vt323.ttf", size = 22, x = 171, y = 6, halign 
                    stops = { {at=0, color={r=235,g=245,b=255}},
                              {at=1, color={r=120,g=150,b=210}} } } }
 -- the host-content region: the embedder paints a live monitor into the display screen
-view{ id = "display", x = 78, y = 50, w = 186, h = 150 }
+view{ id = "display", x = 66, y = 60, w = 210, h = 150 }
 -- Live value-bound readout: the current track title from host state, left-aligned over the display.
 text{ value = "track_title", font = "vt323.ttf", size = 16, x = 78, y = 196,
       color = {r = 120, g = 230, b = 80} }

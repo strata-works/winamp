@@ -18,10 +18,14 @@ use winit::keyboard::{Key, NamedKey};
 use winit::window::{Window, WindowId};
 
 const MONITOR_SKIN: &str = "\
-    fill{ path = rect{x=0,y=0,w=186,h=150}, color = {r=12,g=16,b=22} }\n\
-    gauge{ x = 16,  y = 20, value = 'cpu',  label = 'CPU' }\n\
-    gauge{ x = 76,  y = 20, value = 'mem',  label = 'MEM' }\n\
-    gauge{ x = 136, y = 20, value = 'swap', label = 'SWP' }\n";
+    fill{ path = rect{x=0,y=0,w=210,h=150}, color = {r=12,g=16,b=22} }\n\
+    gauge{ x = 18,  y = 20, value = 'cpu',  label = 'CPU' }\n\
+    gauge{ x = 85,  y = 20, value = 'mem',  label = 'MEM' }\n\
+    gauge{ x = 152, y = 20, value = 'swap', label = 'SWP' }\n";
+
+/// The monitor texture matches the reference skin's `view{ id="display" }` rect so the gauges
+/// composite 1:1 with no stretch.
+const MONITOR_SIZE: (u32, u32) = (210, 150);
 
 /// A self-contained sub-renderer that paints a live CPU/MEM/SWP gauge into an off-screen
 /// texture. The texture view is supplied to the main `Renderer::draw` as the `"display"` view.
@@ -41,16 +45,16 @@ impl Monitor {
         let engine = Engine::new(
             Box::new(carapace_demo::sysmon_host::SysmonHost::with_outbox(outbox)),
             reg,
-            carapace::command::SkinSource::inline(MONITOR_SKIN, (186, 150)),
+            carapace::command::SkinSource::inline(MONITOR_SKIN, MONITOR_SIZE),
         )
         .unwrap();
-        let (_tex, view) = Self::make_tex(device, 186, 150);
+        let (_tex, view) = Self::make_tex(device, MONITOR_SIZE.0, MONITOR_SIZE.1);
         Self {
             engine,
             renderer: Renderer::new(device),
             _tex,
             view,
-            size: (186, 150),
+            size: MONITOR_SIZE,
         }
     }
 
