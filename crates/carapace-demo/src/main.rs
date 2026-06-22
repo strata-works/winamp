@@ -17,6 +17,85 @@ use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::keyboard::{Key, NamedKey};
 use winit::window::{Window, WindowId};
 
+const MONITOR_SKIN: &str = "\
+    fill{ path = rect{x=0,y=0,w=186,h=150}, color = {r=12,g=16,b=22} }\n\
+    gauge{ x = 16,  y = 20, value = 'cpu',  label = 'CPU' }\n\
+    gauge{ x = 76,  y = 20, value = 'mem',  label = 'MEM' }\n\
+    gauge{ x = 136, y = 20, value = 'swap', label = 'SWP' }\n";
+
+/// A self-contained sub-renderer that paints a live CPU/MEM/SWP gauge into an off-screen
+/// texture. The texture view is supplied to the main `Renderer::draw` as the `"display"` view.
+struct Monitor {
+    engine: carapace::engine::Engine,
+    renderer: Renderer,
+    /// Held for ownership only — the TextureView references this texture's memory.
+    _tex: wgpu::Texture,
+    view: wgpu::TextureView,
+    size: (u32, u32),
+}
+
+impl Monitor {
+    fn new(device: &wgpu::Device, outbox: WindowOutbox) -> Self {
+        let mut reg = VocabRegistry::base();
+        reg.register(Box::new(carapace_demo::gauge::GaugePrim));
+        let engine = Engine::new(
+            Box::new(carapace_demo::sysmon_host::SysmonHost::with_outbox(outbox)),
+            reg,
+            carapace::command::SkinSource::inline(MONITOR_SKIN, (186, 150)),
+        )
+        .unwrap();
+        let (_tex, view) = Self::make_tex(device, 186, 150);
+        Self {
+            engine,
+            renderer: Renderer::new(device),
+            _tex,
+            view,
+            size: (186, 150),
+        }
+    }
+
+    fn make_tex(device: &wgpu::Device, w: u32, h: u32) -> (wgpu::Texture, wgpu::TextureView) {
+        let tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("monitor"),
+            size: wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+        (tex, view)
+    }
+
+    fn paint(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, dt: std::time::Duration) {
+        self.engine.update(dt);
+        self.renderer.draw(
+            self.engine.scene(),
+            |k| self.engine.state(k),
+            |_| None,
+            &RenderTarget {
+                device,
+                queue,
+                view: &self.view,
+                width: self.size.0,
+                height: self.size.1,
+                base_color: carapace::scene::Color {
+                    r: 12,
+                    g: 16,
+                    b: 22,
+                    a: 255,
+                },
+            },
+        );
+    }
+}
+
 const MEDIA_SKINS: &[&str] = &[
     "skins/classic",
     "skins/minimal",
@@ -73,8 +152,10 @@ impl Gpu {
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba8Unorm,
             // STORAGE_BINDING for vello render_to_texture; TEXTURE_BINDING so the blitter
-            // can sample it.
-            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+            // can sample it; RENDER_ATTACHMENT so the view-composite render pass can write to it.
+            usage: wgpu::TextureUsages::STORAGE_BINDING
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::RENDER_ATTACHMENT,
             view_formats: &[],
         });
         let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
@@ -99,6 +180,7 @@ struct App {
     window: Option<Arc<Window>>,
     gpu: Option<Gpu>,
     renderer: Option<Renderer>,
+    monitor: Option<Monitor>,
     window_outbox: WindowOutbox,
 }
 
@@ -121,6 +203,7 @@ impl App {
             window: None,
             gpu: None,
             renderer: None,
+            monitor: None,
             window_outbox,
         }
     }
@@ -232,10 +315,12 @@ impl ApplicationHandler for App {
         });
 
         let renderer = Renderer::new(&gpu.device);
+        let monitor = Monitor::new(&gpu.device, self.window_outbox.clone());
 
         self.window = Some(window.clone());
         self.gpu = Some(gpu);
         self.renderer = Some(renderer);
+        self.monitor = Some(monitor);
 
         window.request_redraw();
     }
@@ -257,6 +342,11 @@ impl ApplicationHandler for App {
 
                 self.engine.update(dt);
                 self.apply_window_ops(event_loop);
+
+                // Paint the monitor sub-render before borrowing self.engine immutably.
+                if let (Some(mon), Some(gpu)) = (self.monitor.as_mut(), self.gpu.as_ref()) {
+                    mon.paint(&gpu.device, &gpu.queue, dt);
+                }
 
                 let (Some(gpu), Some(renderer)) = (self.gpu.as_mut(), self.renderer.as_mut())
                 else {
@@ -294,13 +384,16 @@ impl ApplicationHandler for App {
                     .texture
                     .create_view(&wgpu::TextureViewDescriptor::default());
 
+                // Capture the monitor texture view before the immutable engine borrows.
+                let mon_view = self.monitor.as_ref().map(|m| &m.view);
+
                 // Render the scene into the intermediate Rgba8Unorm storage texture.
                 let scene = self.engine.scene();
                 let read_value = |k: &str| self.engine.state(k);
                 renderer.draw(
                     scene,
                     read_value,
-                    |_| None,
+                    |id| if id == "display" { mon_view } else { None },
                     &RenderTarget {
                         device: &gpu.device,
                         queue: &gpu.queue,
