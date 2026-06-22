@@ -8,7 +8,8 @@ own layout, appearance, and interactive hotspots, and lets users hot-swap skins 
 runtime without losing app state.
 
 > **Status: working engine, built phase by phase — Phases 0–6 complete.** The demo is a
-> borderless, transparent, shaped, draggable window where the skin *is* the interface; the
+> borderless, transparent, draggable window where the skin *is* the interface — vector skins
+> self-shape into rounded silhouettes (the Headspace bitmap floats as a borderless rectangle); the
 > **H** key live-switches the whole window between a media player and a real `sysinfo`
 > system monitor on one engine, proving total window replacement and zero domain knowledge
 > (the only engine change was a transparent render base color). See [Current status](#current-status).
@@ -66,8 +67,9 @@ The load-bearing decisions:
 
 ## Current status
 
-The engine works end-to-end. Run `cargo run -p carapace-demo` and a borderless, shaped,
-draggable GPU window opens running a skin; **Tab** cycles through the bundled skins, **H**
+The engine works end-to-end. Run `cargo run -p carapace-demo` and a borderless, draggable GPU
+window opens running a skin (vector skins self-shape into rounded silhouettes; the Headspace
+bitmap floats as a rectangle); **Tab** cycles through the bundled skins, **H**
 live-switches the whole window between the media-player host and a real `sysinfo` system
 monitor, clicks hit free-form hotspots, a value-bound seek bar advances on wall-clock time,
 and a skin swap preserves playback state.
@@ -118,7 +120,7 @@ links system `fontconfig` for font fallback, so a Linux build needs the dev pack
 # Full workspace test suite (hit-test kernel, engine, headless skin/scene tests).
 cargo test --workspace
 
-# Launch the live demo: a borderless, shaped, draggable GPU window running a skin.
+# Launch the live demo: a borderless, draggable GPU window — the skin is the window.
 #   Tab   cycle skins (classic / minimal / reference=real Headspace bitmap)
 #   H     live-switch between the media-player host and a real sysinfo system monitor
 #   click free-form hotspots fire host actions; the seek bar advances live
@@ -159,7 +161,8 @@ engine. Phase 5 was decomposed into sub-projects (5a–5e).
   no Lua glue. The demo's `transport{}` (defined in the demo crate, not the engine) proves the
   seam. **Phase 5 is complete.**
 - **Phase 6 — skin-as-window + cross-domain validation.** ✅ The demo renders the skin *as* a
-  borderless, transparent, shaped, draggable window (skin-drawn minimize/close), and the **H** key
+  borderless, transparent, draggable window — vector skins self-shape into rounded silhouettes
+  (the Headspace bitmap floats as a rectangle), with skin-drawn minimize/close — and the **H** key
   live-switches the whole window between a media player and a real `sysinfo` system monitor on one
   engine — proving total window replacement **and** zero domain knowledge (the only engine change
   is a transparent render base color). **Phases 0–6 complete.**
