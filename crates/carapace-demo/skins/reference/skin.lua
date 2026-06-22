@@ -7,11 +7,9 @@ region{ path = rect{x=0, y=0, w=342, h=394}, on_press = function() host.begin_dr
 region{ path = rect{x=154, y=4, w=16, h=16}, on_press = function() host.minimize() end }
 region{ path = rect{x=172, y=4, w=16, h=16}, on_press = function() host.close() end }
 
--- Y2K glass sheen across the header band (translucent white, fading down).
-fill{ path = {{x=0,y=0},{x=342,y=0},{x=342,y=46},{x=0,y=46}}, gradient = {
-  type = "linear", from = {x=0,y=0}, to = {x=0,y=46},
-  stops = { {at=0, color={r=255,g=255,b=255, a=110}},
-            {at=1, color={r=255,g=255,b=255, a=0}} } } }
+-- (The old full-width "glass sheen" linear gradient was removed: with the alpha-cut faceplate
+-- its top corners now fall on transparent pixels and showed as a white bar. The radial glossy
+-- below sits on the green dome, so it stays as the Y2K accent.)
 -- Radial glossy highlight over the play transport.
 fill{ path = {{x=148,y=18},{x=184,y=18},{x=184,y=54},{x=148,y=54}}, gradient = {
   type = "radial", center = {x=166,y=36}, radius = 18,
