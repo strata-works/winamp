@@ -25,22 +25,42 @@ impl From<BuildError> for ScriptError {
     }
 }
 
+/// What the builder collects while a skin runs (pre Lua-registry).
+enum HandlerSpec {
+    Lua(Function),
+    HostAction { action: String, args: Vec<Value> },
+}
+
+/// What a loaded skin stores; `fire` dispatches on the kind.
+enum Handler {
+    Lua(RegistryKey),
+    HostAction { action: String, args: Vec<Value> },
+}
+
 pub struct LoadedSkin {
     pub scene: Scene,
     lua: Lua,
-    handlers: Vec<RegistryKey>,
+    handlers: Vec<Handler>,
+    queue: Queue,
 }
 
 /// Collects nodes built by primitives and registers their Lua handlers.
 struct SceneBuilder {
     nodes: Vec<Node>,
-    handler_fns: Vec<Function>,
+    handlers: Vec<HandlerSpec>,
     assets: std::rc::Rc<crate::asset::AssetResolver>,
 }
 impl BuildContext for SceneBuilder {
     fn register_handler(&mut self, f: Function) -> HandlerId {
-        self.handler_fns.push(f);
-        self.handler_fns.len() - 1
+        self.handlers.push(HandlerSpec::Lua(f));
+        self.handlers.len() - 1
+    }
+    fn host_action(&mut self, action: &str, args: Vec<Value>) -> HandlerId {
+        self.handlers.push(HandlerSpec::HostAction {
+            action: action.to_string(),
+            args,
+        });
+        self.handlers.len() - 1
     }
     fn image(
         &mut self,
@@ -78,7 +98,7 @@ pub fn load(
     let env = lua.create_table()?;
     let builder = Rc::new(RefCell::new(SceneBuilder {
         nodes: Vec::new(),
-        handler_fns: Vec::new(),
+        handlers: Vec::new(),
         assets: source.assets.clone(),
     }));
 
@@ -170,16 +190,19 @@ pub fn load(
     // so we accept and document them as part of the sandbox contract.
     lua.load(&source.lua_src).set_environment(env).exec()?;
 
-    let (nodes, handler_fns) = {
+    let (nodes, specs) = {
         let mut b = builder.borrow_mut();
         (
             std::mem::take(&mut b.nodes),
-            std::mem::take(&mut b.handler_fns),
+            std::mem::take(&mut b.handlers),
         )
     };
-    let handlers = handler_fns
+    let handlers = specs
         .into_iter()
-        .map(|f| lua.create_registry_value(f))
+        .map(|s| match s {
+            HandlerSpec::Lua(f) => Ok(Handler::Lua(lua.create_registry_value(f)?)),
+            HandlerSpec::HostAction { action, args } => Ok(Handler::HostAction { action, args }),
+        })
         .collect::<mlua::Result<Vec<_>>>()?;
 
     Ok(LoadedSkin {
@@ -189,13 +212,24 @@ pub fn load(
         },
         lua,
         handlers,
+        queue,
     })
 }
 
 impl LoadedSkin {
     pub fn fire(&self, id: HandlerId) -> Result<(), ScriptError> {
-        let f: Function = self.lua.registry_value(&self.handlers[id])?;
-        f.call::<()>(())?;
+        match &self.handlers[id] {
+            Handler::Lua(key) => {
+                let f: Function = self.lua.registry_value(key)?;
+                f.call::<()>(())?;
+            }
+            Handler::HostAction { action, args } => {
+                self.queue.borrow_mut().push(Command::HostAction {
+                    action: action.clone(),
+                    args: args.clone(),
+                });
+            }
+        }
         Ok(())
     }
 }
@@ -314,6 +348,53 @@ mod tests {
         // fill + hotspot from the rect; the hotspot hit-tests inside the rect.
         assert_eq!(skin.scene.nodes.len(), 2);
         assert_eq!(skin.scene.hit(crate::scene::Pt { x: 5.0, y: 5.0 }), Some(0));
+    }
+
+    #[test]
+    fn host_action_handler_enqueues_directly_without_lua() {
+        use crate::command::Command;
+        use crate::scene::{Node, Pt, region_of};
+        use crate::vocab::{BuildContext, BuildError, Primitive};
+        use mlua::Table;
+
+        // A minimal host extension: binds a host action via host_action (no Lua function).
+        struct PingPrim;
+        impl Primitive for PingPrim {
+            fn id(&self) -> &str {
+                "ping"
+            }
+            fn build(
+                &self,
+                _a: &Table,
+                ctx: &mut dyn BuildContext,
+            ) -> Result<Vec<Node>, BuildError> {
+                let path = vec![
+                    Pt { x: 0.0, y: 0.0 },
+                    Pt { x: 10.0, y: 0.0 },
+                    Pt { x: 10.0, y: 10.0 },
+                    Pt { x: 0.0, y: 10.0 },
+                ];
+                let id = ctx.host_action("toggle", vec![]);
+                Ok(vec![Node::Hotspot {
+                    region: region_of(&path),
+                    on_press: id,
+                }])
+            }
+        }
+
+        let mut reg = VocabRegistry::base();
+        reg.register(Box::new(PingPrim));
+        let q = new_queue();
+        let skin = load(&src("ping{}"), &FixtureHost::new(), Rc::new(reg), q.clone()).unwrap();
+        assert!(q.borrow().is_empty());
+        skin.fire(0).unwrap();
+        match &q.borrow()[0] {
+            Command::HostAction { action, args } => {
+                assert_eq!(action, "toggle");
+                assert!(args.is_empty());
+            }
+            other => panic!("expected HostAction enqueued directly, got {other:?}"),
+        }
     }
 
     /// String methods on literals are reachable via the string metatable (accepted,

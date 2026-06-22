@@ -21,6 +21,7 @@ impl From<mlua::Error> for BuildError {
 /// Lets a primitive register a Lua handler (for hotspots) and receive a HandlerId.
 pub trait BuildContext {
     fn register_handler(&mut self, f: Function) -> HandlerId;
+    fn host_action(&mut self, action: &str, args: Vec<crate::host::Value>) -> HandlerId;
     fn image(
         &mut self,
         name: &str,
@@ -370,6 +371,9 @@ mod tests {
         fn register_handler(&mut self, _f: Function) -> HandlerId {
             0
         }
+        fn host_action(&mut self, _action: &str, _args: Vec<crate::host::Value>) -> HandlerId {
+            0
+        }
         fn image(
             &mut self,
             name: &str,
@@ -461,6 +465,9 @@ mod tests {
                 let id = self.0;
                 self.0 += 1;
                 id
+            }
+            fn host_action(&mut self, _action: &str, _args: Vec<crate::host::Value>) -> HandlerId {
+                0
             }
             fn image(
                 &mut self,
@@ -615,6 +622,9 @@ mod tests {
         impl BuildContext for Ctx {
             fn register_handler(&mut self, _f: Function) -> HandlerId {
                 7
+            }
+            fn host_action(&mut self, _action: &str, _args: Vec<crate::host::Value>) -> HandlerId {
+                0
             }
             fn image(&mut self, _n: &str) -> Result<Arc<DecodedImage>, crate::asset::AssetError> {
                 Ok(self.0.clone())
@@ -783,6 +793,9 @@ mod tests {
         struct Ctx(Arc<DecodedImage>);
         impl BuildContext for Ctx {
             fn register_handler(&mut self, _f: Function) -> HandlerId {
+                0
+            }
+            fn host_action(&mut self, _action: &str, _args: Vec<crate::host::Value>) -> HandlerId {
                 0
             }
             fn image(

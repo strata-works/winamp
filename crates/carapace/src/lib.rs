@@ -11,5 +11,9 @@ pub mod state;
 pub mod swap;
 pub mod vocab;
 
+/// Re-exported so host extensions can implement `vocab::Primitive` (whose `build` takes an
+/// `mlua::Table`) without depending on `mlua` directly and version-matching the engine.
+pub use mlua;
+
 #[doc(hidden)]
 pub mod fixture;
