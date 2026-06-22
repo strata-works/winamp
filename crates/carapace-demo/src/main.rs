@@ -8,6 +8,8 @@ use carapace::render::{RenderTarget, Renderer};
 use carapace::scene::Pt;
 use carapace::vocab::VocabRegistry;
 use carapace_demo::demo_host::DemoHost;
+use carapace_demo::sysmon_host::SysmonHost;
+use carapace_demo::window::{WindowOp, WindowOutbox};
 
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, MouseButton, WindowEvent};
@@ -15,12 +17,13 @@ use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::keyboard::{Key, NamedKey};
 use winit::window::{Window, WindowId};
 
-const SKINS: [&str; 4] = [
+const MEDIA_SKINS: &[&str] = &[
     "skins/classic",
     "skins/minimal",
     "skins/reference",
     "skins/transport",
 ];
+const SYSMON_SKINS: &[&str] = &["skins/sysmon"];
 const INIT_SCALE: u32 = 3;
 
 fn skin_root() -> PathBuf {
@@ -30,11 +33,12 @@ fn skin_root() -> PathBuf {
 fn demo_registry() -> VocabRegistry {
     let mut r = VocabRegistry::base();
     r.register(Box::new(carapace_demo::transport::TransportPrim));
+    r.register(Box::new(carapace_demo::gauge::GaugePrim));
     r
 }
 
-fn load_source(i: usize) -> (SkinSource, (u32, u32)) {
-    let (_m, src) = carapace::skin::load_dir(&skin_root().join(SKINS[i])).expect("load skin");
+fn load_source_from(list: &[&str], i: usize) -> (SkinSource, (u32, u32)) {
+    let (_m, src) = carapace::skin::load_dir(&skin_root().join(list[i])).expect("load skin");
     let canvas = src.canvas;
     (src, canvas)
 }
@@ -88,26 +92,54 @@ impl Gpu {
 
 struct App {
     skin_index: usize,
+    sysmon: bool,
     engine: Engine,
     cursor: (f64, f64),
     last: Instant,
     window: Option<Arc<Window>>,
     gpu: Option<Gpu>,
     renderer: Option<Renderer>,
+    window_outbox: WindowOutbox,
 }
 
 impl App {
     fn new() -> Self {
-        let (src, _canvas) = load_source(0);
-        let engine = Engine::new(Box::new(DemoHost::new()), demo_registry(), src).unwrap();
+        let window_outbox: WindowOutbox = Default::default();
+        let (src, _canvas) = load_source_from(MEDIA_SKINS, 0);
+        let engine = Engine::new(
+            Box::new(DemoHost::with_outbox(window_outbox.clone())),
+            demo_registry(),
+            src,
+        )
+        .unwrap();
         Self {
             skin_index: 0,
+            sysmon: false,
             engine,
             cursor: (0.0, 0.0),
             last: Instant::now(),
             window: None,
             gpu: None,
             renderer: None,
+            window_outbox,
+        }
+    }
+
+    fn apply_window_ops(&self, event_loop: &ActiveEventLoop) {
+        for op in self.window_outbox.borrow_mut().drain(..) {
+            match op {
+                WindowOp::BeginDrag => {
+                    if let Some(w) = &self.window {
+                        let _ = w.drag_window();
+                    }
+                }
+                WindowOp::Minimize => {
+                    if let Some(w) = &self.window {
+                        w.set_minimized(true);
+                    }
+                }
+                WindowOp::Close => event_loop.exit(),
+            }
         }
     }
 }
@@ -122,7 +154,8 @@ impl ApplicationHandler for App {
         // Size window from the initial skin canvas * scale.
         let (cw, ch) = self.engine.scene().canvas;
         let attrs = Window::default_attributes()
-            .with_title("carapace skin engine")
+            .with_decorations(false)
+            .with_transparent(true)
             .with_inner_size(winit::dpi::LogicalSize::new(
                 cw * INIT_SCALE,
                 ch * INIT_SCALE,
@@ -158,13 +191,26 @@ impl ApplicationHandler for App {
                 .first()
                 .expect("surface has no supported formats");
 
+            let alpha_mode = if caps
+                .alpha_modes
+                .contains(&wgpu::CompositeAlphaMode::PreMultiplied)
+            {
+                wgpu::CompositeAlphaMode::PreMultiplied
+            } else if caps
+                .alpha_modes
+                .contains(&wgpu::CompositeAlphaMode::PostMultiplied)
+            {
+                wgpu::CompositeAlphaMode::PostMultiplied
+            } else {
+                caps.alpha_modes[0]
+            };
             let config = wgpu::SurfaceConfiguration {
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
                 format: surface_format,
                 width: pw,
                 height: ph,
                 present_mode: wgpu::PresentMode::Fifo,
-                alpha_mode: caps.alpha_modes[0],
+                alpha_mode,
                 view_formats: vec![],
                 desired_maximum_frame_latency: 2,
             };
@@ -210,6 +256,7 @@ impl ApplicationHandler for App {
                 self.last = now;
 
                 self.engine.update(dt);
+                self.apply_window_ops(event_loop);
 
                 let (Some(gpu), Some(renderer)) = (self.gpu.as_mut(), self.renderer.as_mut())
                 else {
@@ -259,6 +306,12 @@ impl ApplicationHandler for App {
                         view: &gpu.intermediate.1,
                         width: gpu.config.width,
                         height: gpu.config.height,
+                        base_color: carapace::scene::Color {
+                            r: 0,
+                            g: 0,
+                            b: 0,
+                            a: 0,
+                        },
                     },
                 );
 
@@ -308,9 +361,34 @@ impl ApplicationHandler for App {
                 match event.logical_key {
                     Key::Named(NamedKey::Escape) => event_loop.exit(),
                     Key::Named(NamedKey::Tab) => {
-                        self.skin_index = (self.skin_index + 1) % SKINS.len();
-                        let (src, _) = load_source(self.skin_index);
+                        let list = if self.sysmon {
+                            SYSMON_SKINS
+                        } else {
+                            MEDIA_SKINS
+                        };
+                        self.skin_index = (self.skin_index + 1) % list.len();
+                        let (src, _) = load_source_from(list, self.skin_index);
                         self.engine.handle_command(Command::Swap(src));
+                        if let Some(w) = &self.window {
+                            w.request_redraw();
+                        }
+                    }
+                    Key::Character(c) if c == "h" || c == "H" => {
+                        self.sysmon = !self.sysmon;
+                        self.skin_index = 0;
+                        let list = if self.sysmon {
+                            SYSMON_SKINS
+                        } else {
+                            MEDIA_SKINS
+                        };
+                        let (src, _) = load_source_from(list, 0);
+                        let host: Box<dyn carapace::host::Host> = if self.sysmon {
+                            Box::new(SysmonHost::with_outbox(self.window_outbox.clone()))
+                        } else {
+                            Box::new(DemoHost::with_outbox(self.window_outbox.clone()))
+                        };
+                        self.engine
+                            .handle_command(Command::SwitchHost { host, skin: src });
                         if let Some(w) = &self.window {
                             w.request_redraw();
                         }

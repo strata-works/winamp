@@ -17,6 +17,7 @@ use carapace_demo::demo_host::DemoHost;
 fn demo_registry() -> VocabRegistry {
     let mut r = VocabRegistry::base();
     r.register(Box::new(carapace_demo::transport::TransportPrim));
+    r.register(Box::new(carapace_demo::gauge::GaugePrim));
     r
 }
 
@@ -123,13 +124,20 @@ fn shoot(skin: &str, out_dir: &Path) {
     let (manifest, source) = carapace::skin::load_dir(&dir).expect("load skin dir");
     let (w, h) = (manifest.canvas.width, manifest.canvas.height);
 
-    let mut engine =
-        Engine::new(Box::new(DemoHost::new()), demo_registry(), source).expect("engine");
-    // Advance a little so the position-bound seek bar shows progress.
-    engine.handle_command(carapace::command::Command::HostAction {
-        action: "toggle_play".to_string(),
-        args: vec![],
-    });
+    // Pick the domain's host so bound metrics resolve (sysmon -> SysmonHost, else DemoHost).
+    let host: Box<dyn carapace::host::Host> = if skin == "sysmon" {
+        Box::new(carapace_demo::sysmon_host::SysmonHost::new())
+    } else {
+        Box::new(DemoHost::new())
+    };
+    let mut engine = Engine::new(host, demo_registry(), source).expect("engine");
+    // Advance a little so position/metric-bound fills show progress.
+    if skin != "sysmon" {
+        engine.handle_command(carapace::command::Command::HostAction {
+            action: "toggle_play".to_string(),
+            args: vec![],
+        });
+    }
     engine.update(Duration::from_secs(3));
 
     let o = offscreen(w, h);
@@ -143,6 +151,12 @@ fn shoot(skin: &str, out_dir: &Path) {
             view: &o.view,
             width: o.w,
             height: o.h,
+            base_color: carapace::scene::Color {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 255,
+            },
         },
     );
     let data = readback(&o);
@@ -155,7 +169,7 @@ fn shoot(skin: &str, out_dir: &Path) {
 fn main() {
     let out_dir = Path::new("/tmp/carapace-5c");
     std::fs::create_dir_all(out_dir).unwrap();
-    for skin in ["reference", "minimal", "classic", "transport"] {
+    for skin in ["reference", "minimal", "classic", "transport", "sysmon"] {
         shoot(skin, out_dir);
     }
 }

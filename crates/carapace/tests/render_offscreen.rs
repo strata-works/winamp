@@ -107,6 +107,10 @@ fn px(data: &[u8], w: u32, x: u32, y: u32) -> [u8; 3] {
     [data[i], data[i + 1], data[i + 2]]
 }
 
+fn alpha_at(data: &[u8], w: u32, x: u32, y: u32) -> u8 {
+    data[((y * w + x) * 4 + 3) as usize]
+}
+
 fn rect(x0: f32, y0: f32, x1: f32, y1: f32) -> Vec<Pt> {
     vec![
         Pt { x: x0, y: y0 },
@@ -173,6 +177,12 @@ fn renders_fill_and_value_fill_at_sentinel_pixels() {
             view: &o.view,
             width: o.w,
             height: o.h,
+            base_color: carapace::scene::Color {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 255,
+            },
         },
     );
     let data = readback(&o);
@@ -256,6 +266,12 @@ fn renders_an_image_at_sentinel_pixels() {
             view: &o.view,
             width: o.w,
             height: o.h,
+            base_color: carapace::scene::Color {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 255,
+            },
         },
     );
     let data = readback(&o);
@@ -317,6 +333,12 @@ fn renders_translucent_fill_blended_over_background() {
             view: &o.view,
             width: o.w,
             height: o.h,
+            base_color: carapace::scene::Color {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 255,
+            },
         },
     );
     let data = readback(&o);
@@ -381,6 +403,12 @@ fn renders_linear_gradient_oriented_and_interpolating() {
             view: &o.view,
             width: o.w,
             height: o.h,
+            base_color: carapace::scene::Color {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 255,
+            },
         },
     );
     let data = readback(&o);
@@ -446,6 +474,12 @@ fn renders_bundled_font_text_in_fill_color() {
             view: &o.view,
             width: o.w,
             height: o.h,
+            base_color: carapace::scene::Color {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 255,
+            },
         },
     );
     let data = readback(&o);
@@ -522,6 +556,12 @@ fn renders_gradient_filled_text_interpolating_vertically() {
             view: &o.view,
             width: o.w,
             height: o.h,
+            base_color: carapace::scene::Color {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 255,
+            },
         },
     );
     let data = readback(&o);
@@ -597,6 +637,12 @@ fn renders_value_bound_text_from_string_state() {
             view: &o.view,
             width: o.w,
             height: o.h,
+            base_color: carapace::scene::Color {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 255,
+            },
         },
     );
     let data = readback(&o);
@@ -650,6 +696,12 @@ fn value_fill_up_fills_from_the_bottom() {
             view: &o.view,
             width: o.w,
             height: o.h,
+            base_color: carapace::scene::Color {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 255,
+            },
         },
     );
     let data = readback(&o);
@@ -692,6 +744,12 @@ fn value_fill_clips_to_a_non_rect_path() {
             view: &o.view,
             width: o.w,
             height: o.h,
+            base_color: carapace::scene::Color {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 255,
+            },
         },
     );
     let data = readback(&o);
@@ -744,6 +802,12 @@ fn identical_text_is_shaped_once_and_cached() {
         view: &o.view,
         width: o.w,
         height: o.h,
+        base_color: carapace::scene::Color {
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 255,
+        },
     };
     r.draw(&scene, |_k: &str| None, &target);
     r.draw(&scene, |_k: &str| None, &target); // second frame: must reuse, not re-shape
@@ -751,5 +815,49 @@ fn identical_text_is_shaped_once_and_cached() {
         r.layout_cache_len(),
         1,
         "identical text shares one cached layout"
+    );
+}
+
+#[test]
+fn transparent_base_color_leaves_undrawn_pixels_clear() {
+    use carapace::scene::{Color, Node, Paint, Scene};
+    let o = offscreen(100, 100);
+    let mut r = Renderer::new(&o.device);
+    // One opaque fill in the top-left; the rest of the canvas is the transparent base.
+    let scene = Scene {
+        canvas: (100, 100),
+        nodes: vec![Node::Fill {
+            path: rect(0.0, 0.0, 20.0, 20.0),
+            paint: Paint::Solid(Color {
+                r: 255,
+                g: 0,
+                b: 0,
+                a: 255,
+            }),
+        }],
+    };
+    r.draw(
+        &scene,
+        |_k| None,
+        &RenderTarget {
+            device: &o.device,
+            queue: &o.queue,
+            view: &o.view,
+            width: o.w,
+            height: o.h,
+            base_color: Color {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 0,
+            },
+        },
+    );
+    let data = readback(&o);
+    assert_eq!(alpha_at(&data, 100, 10, 10), 255, "drawn pixel is opaque");
+    assert_eq!(
+        alpha_at(&data, 100, 80, 80),
+        0,
+        "undrawn pixel is transparent (base alpha 0)"
     );
 }

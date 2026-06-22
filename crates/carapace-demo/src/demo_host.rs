@@ -3,19 +3,37 @@ use std::time::Duration;
 use carapace::host::{ActionSpec, Host, Value};
 use carapace::state::StateValue;
 
+use crate::window::{WINDOW_ACTIONS, WindowOutbox, handle_window_action};
+
 pub struct DemoHost {
     playing: bool,
     position: f32,
     track_title: String,
+    window: WindowOutbox,
+    actions: Vec<ActionSpec>,
 }
 
+const DOMAIN_ACTIONS: &[ActionSpec] = &[
+    ActionSpec {
+        name: "toggle_play",
+    },
+    ActionSpec { name: "stop" },
+];
+
 impl DemoHost {
-    pub fn new() -> Self {
+    pub fn with_outbox(window: WindowOutbox) -> Self {
+        let mut actions = DOMAIN_ACTIONS.to_vec();
+        actions.extend_from_slice(WINDOW_ACTIONS);
         Self {
             playing: false,
             position: 0.0,
             track_title: "Headspace — Track 01".to_string(),
+            window,
+            actions,
         }
+    }
+    pub fn new() -> Self {
+        Self::with_outbox(WindowOutbox::default())
     }
 }
 
@@ -24,13 +42,6 @@ impl Default for DemoHost {
         Self::new()
     }
 }
-
-const ACTIONS: &[ActionSpec] = &[
-    ActionSpec {
-        name: "toggle_play",
-    },
-    ActionSpec { name: "stop" },
-];
 
 impl Host for DemoHost {
     fn name(&self) -> &str {
@@ -52,9 +63,12 @@ impl Host for DemoHost {
         }
     }
     fn actions(&self) -> &[ActionSpec] {
-        ACTIONS
+        &self.actions
     }
     fn invoke(&mut self, action: &str, _args: &[Value]) {
+        if handle_window_action(action, &self.window) {
+            return;
+        }
         match action {
             "toggle_play" => self.playing = !self.playing,
             "stop" => {
@@ -80,5 +94,17 @@ mod tests {
         h.invoke("stop", &[]);
         assert_eq!(h.get("position"), Some(StateValue::Scalar(0.0)));
         assert_eq!(h.get("playing"), Some(StateValue::Bool(false)));
+    }
+
+    #[test]
+    fn window_action_is_recorded_to_the_outbox() {
+        use crate::window::{WindowOp, WindowOutbox};
+        let out: WindowOutbox = Default::default();
+        let mut h = DemoHost::with_outbox(out.clone());
+        h.invoke("minimize", &[]);
+        assert_eq!(&*out.borrow(), &[WindowOp::Minimize]);
+        // domain actions still work
+        h.invoke("toggle_play", &[]);
+        assert_eq!(h.get("playing"), Some(StateValue::Bool(true)));
     }
 }
