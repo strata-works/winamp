@@ -88,6 +88,12 @@ fn benches(c: &mut Criterion) {
                     view: &view,
                     width: 342,
                     height: 394,
+                    base_color: carapace::scene::Color {
+                        r: 0,
+                        g: 0,
+                        b: 0,
+                        a: 255,
+                    },
                 },
             );
         });

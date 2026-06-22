@@ -259,6 +259,12 @@ impl ApplicationHandler for App {
                         view: &gpu.intermediate.1,
                         width: gpu.config.width,
                         height: gpu.config.height,
+                        base_color: carapace::scene::Color {
+                            r: 0,
+                            g: 0,
+                            b: 0,
+                            a: 255,
+                        },
                     },
                 );
 

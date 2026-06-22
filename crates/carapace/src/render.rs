@@ -24,6 +24,7 @@ pub struct RenderTarget<'a> {
     pub view: &'a wgpu::TextureView,
     pub width: u32,
     pub height: u32,
+    pub base_color: crate::scene::Color,
 }
 
 pub struct Renderer {
@@ -344,7 +345,12 @@ impl Renderer {
                 &vs,
                 target.view,
                 &RenderParams {
-                    base_color: VColor::from_rgba8(0, 0, 0, 255),
+                    base_color: VColor::from_rgba8(
+                        target.base_color.r,
+                        target.base_color.g,
+                        target.base_color.b,
+                        target.base_color.a,
+                    ),
                     width: target.width,
                     height: target.height,
                     antialiasing_method: AaConfig::Area,

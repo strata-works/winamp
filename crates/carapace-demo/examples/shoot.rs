@@ -143,6 +143,12 @@ fn shoot(skin: &str, out_dir: &Path) {
             view: &o.view,
             width: o.w,
             height: o.h,
+            base_color: carapace::scene::Color {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 255,
+            },
         },
     );
     let data = readback(&o);
