@@ -276,6 +276,24 @@ impl Primitive for ImagePrim {
     }
 }
 
+struct ViewPrim;
+impl Primitive for ViewPrim {
+    fn id(&self) -> &str {
+        "view"
+    }
+    fn build(&self, args: &Table, _ctx: &mut dyn BuildContext) -> Result<Vec<Node>, BuildError> {
+        let id: String = args.get("id").map_err(|_| BuildError::MissingField("id"))?;
+        let x: f32 = args.get("x").map_err(|_| BuildError::MissingField("x"))?;
+        let y: f32 = args.get("y").map_err(|_| BuildError::MissingField("y"))?;
+        let w: f32 = args.get("w").map_err(|_| BuildError::MissingField("w"))?;
+        let h: f32 = args.get("h").map_err(|_| BuildError::MissingField("h"))?;
+        Ok(vec![Node::View {
+            id,
+            dest: crate::scene::ImageDest { x, y, w, h },
+        }])
+    }
+}
+
 struct TextPrim;
 impl Primitive for TextPrim {
     fn id(&self) -> &str {
@@ -349,6 +367,7 @@ impl VocabRegistry {
         r.register(Box::new(ValueFillPrim));
         r.register(Box::new(ImagePrim));
         r.register(Box::new(TextPrim));
+        r.register(Box::new(ViewPrim));
         r
     }
 }
@@ -685,8 +704,36 @@ mod tests {
     }
 
     #[test]
-    fn base_registry_now_has_five() {
-        assert_eq!(VocabRegistry::base().iter().count(), 5);
+    fn view_prim_builds_view_node() {
+        let lua = Lua::new();
+        let t = tbl(&lua, "return { id='display', x=10, y=20, w=100, h=80 }");
+        match one(ViewPrim.build(&t, &mut NoHandlers)) {
+            Node::View { id, dest } => {
+                assert_eq!(id, "display");
+                assert_eq!((dest.x, dest.y, dest.w, dest.h), (10.0, 20.0, 100.0, 80.0));
+            }
+            other => panic!("expected View, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn view_prim_requires_id_and_geometry() {
+        let lua = Lua::new();
+        let no_id = tbl(&lua, "return { x=0, y=0, w=1, h=1 }");
+        assert!(matches!(
+            ViewPrim.build(&no_id, &mut NoHandlers),
+            Err(BuildError::MissingField("id"))
+        ));
+        let no_w = tbl(&lua, "return { id='d', x=0, y=0, h=1 }");
+        assert!(matches!(
+            ViewPrim.build(&no_w, &mut NoHandlers),
+            Err(BuildError::MissingField("w"))
+        ));
+    }
+
+    #[test]
+    fn base_registry_now_has_six() {
+        assert_eq!(VocabRegistry::base().iter().count(), 6);
     }
 
     #[test]

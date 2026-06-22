@@ -189,6 +189,7 @@ impl Renderer {
                     vs.fill(Fill::NonZero, xform, vcolor(*color), None, &extent);
                     vs.pop_layer();
                 }
+                Node::View { .. } => {} // composited in the live-host-view-region render task
                 Node::Image { image, dest } => {
                     // sRGB RGBA8 blob -> vello ImageData, placed at dest, under canvas->surface scale.
                     let blob = Blob::new(std::sync::Arc::new(image.rgba.clone()));
