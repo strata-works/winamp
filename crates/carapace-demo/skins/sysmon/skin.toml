@@ -1,0 +1,6 @@
+schema = 1
+id = "sysmon"
+name = "System Monitor"
+engine = "^0.1"
+canvas = { width = 300, height = 140 }
+entry = "skin.lua"

@@ -163,6 +163,36 @@ fn skins_declare_window_controls() {
 }
 
 #[test]
+fn sysmon_skin_builds_gauges() {
+    use carapace::scene::{FillDir, Node};
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("skins/sysmon");
+    let (_m, source) = carapace::skin::load_dir(&dir).unwrap();
+    let mut reg = VocabRegistry::base();
+    reg.register(Box::new(carapace_demo::gauge::GaugePrim));
+    let e = Engine::new(
+        Box::new(carapace_demo::sysmon_host::SysmonHost::new()),
+        reg,
+        source,
+    )
+    .unwrap();
+    let up_meters = e
+        .scene()
+        .nodes
+        .iter()
+        .filter(|n| {
+            matches!(
+                n,
+                Node::ValueFill {
+                    direction: FillDir::Up,
+                    ..
+                }
+            )
+        })
+        .count();
+    assert!(up_meters >= 3, "cpu/mem/swap gauges, found {up_meters}");
+}
+
+#[test]
 fn minimal_has_a_sweep_gradient() {
     use carapace::scene::{Gradient, Node, Paint};
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("skins/minimal");
