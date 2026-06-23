@@ -96,6 +96,14 @@ impl Engine {
         &self.skin.anchors
     }
 
+    /// Resolve the design scene to a logical scene for the given window logical size, using the
+    /// skin's per-element anchors. The result's `canvas` equals the logical size, so the renderer
+    /// applies only the DPI scale. Frame skins call this on resize; gadget skins render the design
+    /// scene directly.
+    pub fn layout(&self, logical_w: f32, logical_h: f32) -> Scene {
+        crate::layout::resolve_scene(&self.skin.scene, &self.skin.anchors, (logical_w, logical_h))
+    }
+
     pub fn state(&self, key: &str) -> Option<StateValue> {
         self.host.get(key)
     }
