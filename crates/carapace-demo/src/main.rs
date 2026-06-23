@@ -235,6 +235,7 @@ fn demo_registry() -> VocabRegistry {
 struct SkinMeta {
     resizable: bool,
     min_size: Option<(u32, u32)>,
+    max_size: Option<(u32, u32)>,
 }
 
 fn load_source_from(list: &[&str], i: usize) -> (SkinSource, (u32, u32), SkinMeta) {
@@ -246,6 +247,7 @@ fn load_source_from(list: &[&str], i: usize) -> (SkinSource, (u32, u32), SkinMet
         SkinMeta {
             resizable: m.resizable,
             min_size: m.min_size,
+            max_size: m.max_size,
         },
     )
 }
@@ -379,6 +381,9 @@ impl ApplicationHandler for App {
                 .with_inner_size(winit::dpi::LogicalSize::new(cw, ch));
             if let Some((mw, mh)) = self.meta.min_size {
                 attrs = attrs.with_min_inner_size(winit::dpi::LogicalSize::new(mw, mh));
+            }
+            if let Some((mw, mh)) = self.meta.max_size {
+                attrs = attrs.with_max_inner_size(winit::dpi::LogicalSize::new(mw, mh));
             }
         } else {
             attrs = attrs
@@ -727,8 +732,14 @@ fn apply_window_archetype(window: &Option<Arc<Window>>, meta: &SkinMeta, canvas:
             if let Some((mw, mh)) = meta.min_size {
                 w.set_min_inner_size(Some(winit::dpi::LogicalSize::new(mw, mh)));
             }
+            if let Some((mw, mh)) = meta.max_size {
+                w.set_max_inner_size(Some(winit::dpi::LogicalSize::new(mw, mh)));
+            } else {
+                w.set_max_inner_size::<winit::dpi::LogicalSize<u32>>(None);
+            }
         } else {
             w.set_min_inner_size::<winit::dpi::LogicalSize<u32>>(None);
+            w.set_max_inner_size::<winit::dpi::LogicalSize<u32>>(None);
             let (cw, ch) = canvas;
             let _ = w.request_inner_size(winit::dpi::LogicalSize::new(
                 cw * INIT_SCALE,
