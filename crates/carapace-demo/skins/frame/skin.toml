@@ -1,7 +1,7 @@
 schema = 1
 id = "frame"
 name = "Frame"
-engine = "carapace"
+engine = "^0.1"
 entry = "skin.lua"
 canvas = { width = 480, height = 320 }
 resizable = true

@@ -105,14 +105,14 @@ impl Monitor {
 const APP_SHELL: &str = "\
     fill{ path = rect{x=0,y=0,w=456,h=272}, color = {r=18,g=20,b=26} }\n\
     fill{ path = rect{x=0,y=0,w=456,h=24}, color = {r=40,g=46,b=60}, anchor={'left','right','top'} }\n\
-    text{ text='Name', font='vt323.ttf', size=14, x=64, y=4, color={r=170,g=185,b=210}, anchor={'left','top'} }\n\
+    text{ text='Name', size=14, x=64, y=4, color={r=170,g=185,b=210}, anchor={'left','top'} }\n\
     fill{ path = rect{x=0,y=24,w=120,h=248}, color = {r=24,g=28,b=38}, anchor={'left','top','bottom'} }\n\
-    text{ text='Places', font='vt323.ttf', size=13, x=12, y=32, color={r=150,g=165,b=190}, anchor={'left','top'} }\n\
-    text{ text='~/Music', font='vt323.ttf', size=13, x=12, y=52, color={r=130,g=200,b=150}, anchor={'left','top'} }\n\
-    text{ text='~/Docs',  font='vt323.ttf', size=13, x=12, y=72, color={r=130,g=200,b=150}, anchor={'left','top'} }\n\
-    text{ text='track-01.mp3   3.2M', font='vt323.ttf', size=13, x=132, y=32, color={r=200,g=210,b=225}, anchor={'left','right','top'} }\n\
-    text{ text='track-02.mp3   4.1M', font='vt323.ttf', size=13, x=132, y=52, color={r=200,g=210,b=225}, anchor={'left','right','top'} }\n\
-    text{ text='notes.txt      812B', font='vt323.ttf', size=13, x=132, y=72, color={r=200,g=210,b=225}, anchor={'left','right','top'} }\n";
+    text{ text='Places', size=13, x=12, y=32, color={r=150,g=165,b=190}, anchor={'left','top'} }\n\
+    text{ text='~/Music', size=13, x=12, y=52, color={r=130,g=200,b=150}, anchor={'left','top'} }\n\
+    text{ text='~/Docs',  size=13, x=12, y=72, color={r=130,g=200,b=150}, anchor={'left','top'} }\n\
+    text{ text='track-01.mp3   3.2M', size=13, x=132, y=32, color={r=200,g=210,b=225}, anchor={'left','right','top'} }\n\
+    text{ text='track-02.mp3   4.1M', size=13, x=132, y=52, color={r=200,g=210,b=225}, anchor={'left','right','top'} }\n\
+    text{ text='notes.txt      812B', size=13, x=132, y=72, color={r=200,g=210,b=225}, anchor={'left','right','top'} }\n";
 
 /// Design size of the app-shell skin (matches the `view{ id="app" }` design rect).
 const APP_SHELL_SIZE: (u32, u32) = (456, 272);
@@ -508,8 +508,7 @@ impl ApplicationHandler for App {
                     .unwrap_or(1.0);
 
                 if self.meta.resizable
-                    && let (Some(shell), Some(gpu)) =
-                        (self.app_shell.as_mut(), self.gpu.as_ref())
+                    && let (Some(shell), Some(gpu)) = (self.app_shell.as_mut(), self.gpu.as_ref())
                 {
                     let phys_w = gpu.config.width;
                     let phys_h = gpu.config.height;
