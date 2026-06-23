@@ -1,0 +1,9 @@
+schema = 1
+id = "frame"
+name = "Frame"
+engine = "carapace"
+entry = "skin.lua"
+canvas = { width = 480, height = 320 }
+resizable = true
+min_size = [320, 220]
+asset_dir = "assets"
