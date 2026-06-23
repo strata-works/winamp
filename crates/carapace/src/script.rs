@@ -39,6 +39,7 @@ enum Handler {
 
 pub struct LoadedSkin {
     pub scene: Scene,
+    pub anchors: Vec<crate::layout::Anchors>,
     lua: Lua,
     handlers: Vec<Handler>,
     queue: Queue,
@@ -47,6 +48,7 @@ pub struct LoadedSkin {
 /// Collects nodes built by primitives and registers their Lua handlers.
 struct SceneBuilder {
     nodes: Vec<Node>,
+    anchors: Vec<crate::layout::Anchors>,
     handlers: Vec<HandlerSpec>,
     assets: std::rc::Rc<crate::asset::AssetResolver>,
 }
@@ -88,6 +90,25 @@ fn lua_args_to_values(args: mlua::MultiValue) -> Vec<Value> {
         .collect()
 }
 
+fn parse_anchors(args: &Table) -> mlua::Result<crate::layout::Anchors> {
+    use crate::layout::Anchors;
+    let edges: Vec<String> = match args.get::<Option<Table>>("anchor")? {
+        Some(t) => t
+            .sequence_values::<String>()
+            .filter_map(|v| v.ok())
+            .collect(),
+        None => return Ok(Anchors::TOP_LEFT),
+    };
+    let refs: Vec<&str> = edges.iter().map(|s| s.as_str()).collect();
+    let mut a = Anchors::from_edges(&refs);
+    if let Some(m) = args.get::<Option<Table>>("min")? {
+        let w: f32 = m.get::<Option<f32>>("w")?.unwrap_or(0.0);
+        let h: f32 = m.get::<Option<f32>>("h")?.unwrap_or(0.0);
+        a.min = Some((w, h));
+    }
+    Ok(a)
+}
+
 pub fn load(
     source: &SkinSource,
     host: &dyn Host,
@@ -98,6 +119,7 @@ pub fn load(
     let env = lua.create_table()?;
     let builder = Rc::new(RefCell::new(SceneBuilder {
         nodes: Vec::new(),
+        anchors: Vec::new(),
         handlers: Vec::new(),
         assets: source.assets.clone(),
     }));
@@ -117,6 +139,10 @@ pub fn load(
             let nodes = prim
                 .build(&args, &mut *b)
                 .map_err(|e| mlua::Error::external(format!("{e:?}")))?;
+            let anchors = parse_anchors(&args)?;
+            for _ in &nodes {
+                b.anchors.push(anchors);
+            }
             b.nodes.extend(nodes);
             Ok(())
         })?;
@@ -190,10 +216,11 @@ pub fn load(
     // so we accept and document them as part of the sandbox contract.
     lua.load(&source.lua_src).set_environment(env).exec()?;
 
-    let (nodes, specs) = {
+    let (nodes, builder_anchors, specs) = {
         let mut b = builder.borrow_mut();
         (
             std::mem::take(&mut b.nodes),
+            std::mem::take(&mut b.anchors),
             std::mem::take(&mut b.handlers),
         )
     };
@@ -210,6 +237,7 @@ pub fn load(
             nodes,
             canvas: source.canvas,
         },
+        anchors: builder_anchors,
         lua,
         handlers,
         queue,

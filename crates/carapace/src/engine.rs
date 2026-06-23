@@ -91,6 +91,11 @@ impl Engine {
         &self.skin.scene
     }
 
+    /// The per-node anchors parallel to `scene().nodes`, for the layout pass.
+    pub fn scene_anchors(&self) -> &[crate::layout::Anchors] {
+        &self.skin.anchors
+    }
+
     pub fn state(&self, key: &str) -> Option<StateValue> {
         self.host.get(key)
     }
