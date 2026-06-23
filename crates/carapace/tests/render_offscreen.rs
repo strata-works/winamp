@@ -1017,6 +1017,59 @@ fn view_without_texture_leaves_the_hole() {
 }
 
 #[test]
+fn gadget_path_still_uniform_scales() {
+    // Prove the gadget render path (canvas != surface size → uniform scale) is unchanged
+    // by frame-skin work. Canvas 100×100 rendered into a 300×300 surface = 3× uniform scale.
+    // A red fill over canvas rect 20,20..50,50 maps to surface rect 60,60..150,150.
+    // Sentinel: surface pixel (90,90) must be red; surface pixel (5,5) must be base black.
+    let o = offscreen(300, 300);
+    let mut r = Renderer::new(&o.device);
+    let scene = Scene {
+        canvas: (100, 100),
+        nodes: vec![Node::Fill {
+            path: rect(20.0, 20.0, 50.0, 50.0),
+            paint: Paint::Solid(Color {
+                r: 255,
+                g: 0,
+                b: 0,
+                a: 255,
+            }),
+        }],
+    };
+    r.draw(
+        &scene,
+        |_k| None,
+        |_| None,
+        &RenderTarget {
+            device: &o.device,
+            queue: &o.queue,
+            view: &o.view,
+            width: o.w,
+            height: o.h,
+            base_color: carapace::scene::Color {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 255,
+            },
+        },
+    );
+    let data = readback(&o);
+    // canvas (30,30) → surface (90,90) at 3× uniform scale: must be inside the red fill
+    assert_eq!(
+        px(&data, 300, 90, 90),
+        [255, 0, 0],
+        "canvas (30,30) → surface (90,90) at 3× must be red"
+    );
+    // canvas (1.67,1.67) → surface (5,5): outside the fill, base black
+    assert_eq!(
+        px(&data, 300, 5, 5),
+        [0, 0, 0],
+        "surface (5,5) is outside the fill — must be base black"
+    );
+}
+
+#[test]
 fn frame_keeps_corners_fixed_and_stretches_edges() {
     use carapace::asset::DecodedImage;
     use carapace::scene::{FrameCenter, ImageDest, Slice};
