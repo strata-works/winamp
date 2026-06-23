@@ -276,6 +276,55 @@ impl Primitive for ImagePrim {
     }
 }
 
+struct FramePrim;
+impl Primitive for FramePrim {
+    fn id(&self) -> &str {
+        "frame"
+    }
+    fn build(&self, args: &Table, ctx: &mut dyn BuildContext) -> Result<Vec<Node>, BuildError> {
+        let name: String = args
+            .get("asset")
+            .map_err(|_| BuildError::MissingField("asset"))?;
+        let image = ctx.image(&name).map_err(BuildError::Asset)?;
+        let x: f32 = args.get("x").map_err(|_| BuildError::MissingField("x"))?;
+        let y: f32 = args.get("y").map_err(|_| BuildError::MissingField("y"))?;
+        let w: f32 = args.get("w").map_err(|_| BuildError::MissingField("w"))?;
+        let h: f32 = args.get("h").map_err(|_| BuildError::MissingField("h"))?;
+        let st: Table = args
+            .get("slice")
+            .map_err(|_| BuildError::MissingField("slice"))?;
+        let slice = crate::scene::Slice {
+            left: st
+                .get("left")
+                .map_err(|_| BuildError::MissingField("slice.left"))?,
+            right: st
+                .get("right")
+                .map_err(|_| BuildError::MissingField("slice.right"))?,
+            top: st
+                .get("top")
+                .map_err(|_| BuildError::MissingField("slice.top"))?,
+            bottom: st
+                .get("bottom")
+                .map_err(|_| BuildError::MissingField("slice.bottom"))?,
+        };
+        let center = match args
+            .get::<Option<String>>("center")
+            .ok()
+            .flatten()
+            .as_deref()
+        {
+            Some("hollow") => crate::scene::FrameCenter::Hollow,
+            _ => crate::scene::FrameCenter::Stretch,
+        };
+        Ok(vec![Node::Frame {
+            image,
+            dest: crate::scene::ImageDest { x, y, w, h },
+            slice,
+            center,
+        }])
+    }
+}
+
 struct ViewPrim;
 impl Primitive for ViewPrim {
     fn id(&self) -> &str {
@@ -366,6 +415,7 @@ impl VocabRegistry {
         r.register(Box::new(RegionPrim));
         r.register(Box::new(ValueFillPrim));
         r.register(Box::new(ImagePrim));
+        r.register(Box::new(FramePrim));
         r.register(Box::new(TextPrim));
         r.register(Box::new(ViewPrim));
         r
@@ -732,8 +782,8 @@ mod tests {
     }
 
     #[test]
-    fn base_registry_now_has_six() {
-        assert_eq!(VocabRegistry::base().iter().count(), 6);
+    fn base_registry_now_has_seven() {
+        assert_eq!(VocabRegistry::base().iter().count(), 7);
     }
 
     #[test]

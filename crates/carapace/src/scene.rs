@@ -104,6 +104,20 @@ pub struct ImageDest {
     pub h: f32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Slice {
+    pub left: f32,
+    pub right: f32,
+    pub top: f32,
+    pub bottom: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum FrameCenter {
+    Stretch,
+    Hollow,
+}
+
 #[derive(Clone, Debug)]
 pub enum Node {
     Fill {
@@ -123,6 +137,12 @@ pub enum Node {
     Image {
         image: std::sync::Arc<crate::asset::DecodedImage>,
         dest: ImageDest,
+    },
+    Frame {
+        image: std::sync::Arc<crate::asset::DecodedImage>,
+        dest: ImageDest,
+        slice: Slice,
+        center: FrameCenter,
     },
     View {
         id: String,
@@ -200,6 +220,24 @@ impl Scene {
                     dest.y as i64,
                     dest.w as i64,
                     dest.h as i64
+                ),
+                Node::Frame {
+                    image,
+                    slice,
+                    center,
+                    ..
+                } => format!(
+                    "frame {}x{} slice {},{},{},{} center={}",
+                    image.width,
+                    image.height,
+                    slice.left as i64,
+                    slice.right as i64,
+                    slice.top as i64,
+                    slice.bottom as i64,
+                    match center {
+                        FrameCenter::Stretch => "stretch",
+                        FrameCenter::Hollow => "hollow",
+                    }
                 ),
                 Node::View { id, .. } => format!("view id={id}"),
                 Node::Text {

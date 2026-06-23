@@ -96,12 +96,14 @@ fn node_bbox(node: &Node) -> Option<Rect> {
         }
     }
     match node {
-        Node::Image { dest, .. } | Node::View { dest, .. } => Some(Rect {
-            x: dest.x,
-            y: dest.y,
-            w: dest.w,
-            h: dest.h,
-        }),
+        Node::Image { dest, .. } | Node::View { dest, .. } | Node::Frame { dest, .. } => {
+            Some(Rect {
+                x: dest.x,
+                y: dest.y,
+                w: dest.w,
+                h: dest.h,
+            })
+        }
         Node::Fill { path, .. } | Node::ValueFill { path, .. } => path_bbox(path),
         Node::Hotspot { region, .. } => {
             let pts: Vec<Pt> = region
@@ -139,7 +141,7 @@ fn transform_node(node: &Node, from: Rect, to: Rect) -> Node {
     let map_path = |path: &[Pt]| path.iter().map(|p| map(*p)).collect::<Vec<_>>();
     let mut n = node.clone();
     match &mut n {
-        Node::Image { dest, .. } | Node::View { dest, .. } => {
+        Node::Image { dest, .. } | Node::View { dest, .. } | Node::Frame { dest, .. } => {
             *dest = ImageDest {
                 x: to.x,
                 y: to.y,

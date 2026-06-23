@@ -262,6 +262,100 @@ impl Renderer {
                     vs.pop_layer();
                 }
                 Node::View { .. } => {} // composited in the live-host-view-region render task
+                Node::Frame {
+                    image,
+                    dest,
+                    slice,
+                    center,
+                } => {
+                    use crate::scene::FrameCenter;
+                    let blob = Blob::new(std::sync::Arc::new(image.rgba.clone()));
+                    let vimg = ImageData {
+                        data: blob,
+                        format: ImageFormat::Rgba8,
+                        alpha_type: ImageAlphaType::Alpha,
+                        width: image.width,
+                        height: image.height,
+                    };
+                    let iw = image.width as f64;
+                    let ih = image.height as f64;
+                    let dw = dest.w as f64;
+                    let dh = dest.h as f64;
+
+                    // Clamp insets so opposing corners never overlap in source or dest.
+                    let mut sl = slice.left as f64;
+                    let mut sr = slice.right as f64;
+                    let mut st = slice.top as f64;
+                    let mut sb = slice.bottom as f64;
+
+                    let clamp_pair = |a: &mut f64, b: &mut f64, limit: f64| {
+                        if *a + *b > limit && *a + *b > 0.0 {
+                            let k = limit / (*a + *b);
+                            *a *= k;
+                            *b *= k;
+                        }
+                    };
+                    {
+                        let mut sl2 = sl;
+                        let mut sr2 = sr;
+                        clamp_pair(&mut sl2, &mut sr2, iw.min(dw));
+                        sl = sl2;
+                        sr = sr2;
+                    }
+                    {
+                        let mut st2 = st;
+                        let mut sb2 = sb;
+                        clamp_pair(&mut st2, &mut sb2, ih.min(dh));
+                        st = st2;
+                        sb = sb2;
+                    }
+
+                    // Columns: (src_x, src_w, dst_x, dst_w) for left | center | right
+                    let dx = dest.x as f64;
+                    let dy = dest.y as f64;
+                    let cols = [
+                        (0.0, sl, dx, sl),
+                        (sl, iw - sl - sr, dx + sl, dw - sl - sr),
+                        (iw - sr, sr, dx + dw - sr, sr),
+                    ];
+                    let rows = [
+                        (0.0, st, dy, st),
+                        (st, ih - st - sb, dy + st, dh - st - sb),
+                        (ih - sb, sb, dy + dh - sb, sb),
+                    ];
+
+                    for (ri, &(srcy, srch, dsty, dsth)) in rows.iter().enumerate() {
+                        for (ci, &(srcx, srcw, dstx, dstw)) in cols.iter().enumerate() {
+                            let is_center = ri == 1 && ci == 1;
+                            if is_center && matches!(center, FrameCenter::Hollow) {
+                                continue;
+                            }
+                            if srcw <= 0.0 || srch <= 0.0 || dstw <= 0.0 || dsth <= 0.0 {
+                                continue;
+                            }
+                            vs.push_clip_layer(
+                                Fill::NonZero,
+                                xform,
+                                &bez(&crate::shape::rect(
+                                    dstx as f32,
+                                    dsty as f32,
+                                    dstw as f32,
+                                    dsth as f32,
+                                )),
+                            );
+                            let place = Affine::translate((dstx, dsty))
+                                * Affine::scale_non_uniform(dstw / srcw, dsth / srch)
+                                * Affine::translate((-srcx, -srcy));
+                            vs.draw_image(
+                                ImageBrush::new(vimg.clone())
+                                    .with_quality(ImageQuality::Medium)
+                                    .as_ref(),
+                                xform * place,
+                            );
+                            vs.pop_layer();
+                        }
+                    }
+                }
                 Node::Image { image, dest } => {
                     // sRGB RGBA8 blob -> vello ImageData, placed at dest, under canvas->surface scale.
                     let blob = Blob::new(std::sync::Arc::new(image.rgba.clone()));
