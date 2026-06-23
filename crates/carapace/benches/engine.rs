@@ -82,6 +82,7 @@ fn benches(c: &mut Criterion) {
             r.draw(
                 e.scene(),
                 |k| e.state(k),
+                |_| None,
                 &carapace::render::RenderTarget {
                     device: &device,
                     queue: &queue,

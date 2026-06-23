@@ -124,6 +124,10 @@ pub enum Node {
         image: std::sync::Arc<crate::asset::DecodedImage>,
         dest: ImageDest,
     },
+    View {
+        id: String,
+        dest: ImageDest,
+    },
     Text {
         content: TextContent,
         font: Option<std::sync::Arc<FontData>>,
@@ -197,6 +201,7 @@ impl Scene {
                     dest.w as i64,
                     dest.h as i64
                 ),
+                Node::View { id, .. } => format!("view id={id}"),
                 Node::Text {
                     content,
                     font_name,
@@ -240,6 +245,17 @@ impl Scene {
             });
         }
         lines.join("\n")
+    }
+
+    /// The host-content regions a skin declares, in canvas coords — the embedder fills these.
+    pub fn views(&self) -> Vec<(String, ImageDest)> {
+        self.nodes
+            .iter()
+            .filter_map(|n| match n {
+                Node::View { id, dest } => Some((id.clone(), *dest)),
+                _ => None,
+            })
+            .collect()
     }
 
     /// Topmost hotspot containing `p` (later nodes draw on top → iterate in reverse).
@@ -460,6 +476,35 @@ mod tests {
              text \"HI\" font=vt323.ttf size=18 halign=center valign=top rgba=1,2,3,255\n\
              text value=track_title font=system size=12 halign=right valign=middle gradient=linear stops=2"
         );
+    }
+
+    #[test]
+    fn views_accessor_and_summary() {
+        let scene = Scene {
+            canvas: (300, 200),
+            nodes: vec![Node::View {
+                id: "display".to_string(),
+                dest: ImageDest {
+                    x: 10.0,
+                    y: 20.0,
+                    w: 100.0,
+                    h: 80.0,
+                },
+            }],
+        };
+        assert_eq!(
+            scene.views(),
+            vec![(
+                "display".to_string(),
+                ImageDest {
+                    x: 10.0,
+                    y: 20.0,
+                    w: 100.0,
+                    h: 80.0
+                }
+            )]
+        );
+        assert_eq!(scene.summary(), "canvas 300x200\nview id=display");
     }
 
     #[test]

@@ -145,6 +145,7 @@ fn shoot(skin: &str, out_dir: &Path) {
     r.draw(
         engine.scene(),
         |k| engine.state(k),
+        |_| None,
         &RenderTarget {
             device: &o.device,
             queue: &o.queue,

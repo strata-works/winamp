@@ -7,12 +7,14 @@ Rust. It lets an application hand its entire surface over to a *skin* that defin
 own layout, appearance, and interactive hotspots, and lets users hot-swap skins at
 runtime without losing app state.
 
-> **Status: working engine, built phase by phase — Phases 0–6 complete.** The demo is a
-> borderless, transparent, draggable window where the skin *is* the interface — vector skins
-> self-shape into rounded silhouettes (the Headspace bitmap floats as a borderless rectangle); the
-> **H** key live-switches the whole window between a media player and a real `sysinfo`
-> system monitor on one engine, proving total window replacement and zero domain knowledge
-> (the only engine change was a transparent render base color). See [Current status](#current-status).
+> **Status: working engine, built phase by phase — Phases 0–6 complete, plus the live
+> host-view region (`view{}` primitive).** The demo is a borderless, transparent, draggable
+> window where the skin *is* the interface — vector skins self-shape into rounded silhouettes
+> (the Headspace bitmap floats as a borderless rectangle); the **H** key live-switches the whole
+> window between a media player and a real `sysinfo` system monitor on one engine, proving total
+> window replacement and zero domain knowledge (the only engine change was a transparent render
+> base color); and the Headspace skin hosts a live CPU / MEM / SWP system monitor painted into a
+> declared `view{}` region each frame. See [Current status](#current-status).
 
 ## Motivation
 
@@ -50,9 +52,10 @@ The load-bearing decisions:
 - **Embedded Lua scripting in a capability sandbox.** Skins bind to host actions/state
   through a Lua script whose `_ENV` is *only* the vocabulary constructors plus an
   allowlisted set of host actions — no raw `host`/`io`/`os`/filesystem access.
-- **Domain-neutral base vocabulary, host-extensible.** The engine ships only generic
-  primitives (currently `fill`, `region` hotspots, value-bound `value_fill`, `image`, and
-  `text` — laid-out, value-bindable, `Paint`-filled; more to come). Anything domain-flavored — "transport control", "audio visualizer" — is
+- **Domain-neutral base vocabulary, host-extensible.** The engine ships six generic
+  base primitives: `fill` (background), `region` hotspots, value-bound `value_fill`,
+  `image`, `text` — laid-out, value-bindable, `Paint`-filled — and `view` (live host-content
+  region; see below). Anything domain-flavored — "transport control", "audio visualizer" — is
   registered by the host as an extension.
   A host registers its own domain primitives through `VocabRegistry::register`; they appear in the
   skin env exactly like built-ins and can bind the host's allowlisted actions directly (e.g. the
@@ -107,6 +110,32 @@ value_fill{ path = { ... seek bar ... }, value = "position",         -- bound to
 The bitmap supplies the look; Lua supplies placement and interactivity; the host supplies
 state (`position`) and actions (`toggle_play`, `stop`). The engine knows nothing about
 "playback" — those are just an allowlisted action name and a bound state key.
+
+### The `view{}` primitive — live host-content region
+
+A skin can declare one or more host-content regions with `view{}`:
+
+```lua
+view{ id = "display", x = 78, y = 50, w = 186, h = 150 }
+```
+
+`view{}` declares a named rectangular cutout inside the skin canvas. The engine
+exposes the collected rects via `Scene::views()`. The embedder renders its own
+pixels — a video frame, a visualizer, a system monitor, anything — into a
+`wgpu::TextureView` on the **same wgpu device** (zero-copy; no CPU readback),
+and passes a lookup closure to `Renderer::draw`. The engine composites the
+supplied texture into the rect, framing it with the surrounding skin chrome. If
+the embedder supplies no texture for a view, the rect is left transparent.
+
+The Headspace skin in the demo declares a `view{ id = "display", … }` and the
+demo embedder paints a live CPU / MEM / SWP system-monitor readout into it each
+frame — the same seam by which any host embeds carapace and "wears" a skin around
+its own live content.
+
+**What this is not.** `view{}` is a same-process, same-device GPU-texture
+transport. It does not embed foreign-process apps (no OS-window reparenting).
+Responsive / resizable layout inside a view is not part of this primitive; the
+view rect is a fixed declared geometry, exactly like the other base primitives.
 
 ## Building & running
 
@@ -166,6 +195,12 @@ engine. Phase 5 was decomposed into sub-projects (5a–5e).
   live-switches the whole window between a media player and a real `sysinfo` system monitor on one
   engine — proving total window replacement **and** zero domain knowledge (the only engine change
   is a transparent render base color). **Phases 0–6 complete.**
+- **Live host-view region (`view{}` primitive).** ✅ A skin declares a named rectangular
+  cutout; the embedder supplies a `wgpu::TextureView` (same device, zero-copy) and carapace
+  composites it into the rect, framing it with skin chrome. `Scene::views()` exposes the
+  rects; `Renderer::draw` accepts an embedder-provided texture lookup. The Headspace skin in
+  the demo hosts a live CPU / MEM / SWP system-monitor painted into the `"display"` view each
+  frame. GPU render-correctness covered by dedicated offscreen tests.
 
 ## Repository layout
 

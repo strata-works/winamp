@@ -73,7 +73,7 @@ mod tests {
     fn registers_and_builds_a_vertical_gauge_with_label() {
         let mut reg = VocabRegistry::base();
         reg.register(Box::new(GaugePrim));
-        assert_eq!(reg.iter().count(), 6); // base 5 + gauge
+        assert_eq!(reg.iter().count(), 7); // base 6 + gauge
 
         let lua = carapace::mlua::Lua::new();
         let t: carapace::mlua::Table = lua
