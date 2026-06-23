@@ -27,6 +27,15 @@ pub struct Manifest {
     pub entry: String,
     #[serde(default = "default_asset_dir")]
     pub asset_dir: String,
+    /// Whether the skin window should be resizable (frame-skin archetype).
+    #[serde(default)]
+    pub resizable: bool,
+    /// Minimum window size in logical pixels; `[width, height]` in the TOML.
+    #[serde(default)]
+    pub min_size: Option<(u32, u32)>,
+    /// Maximum window size in logical pixels; `[width, height]` in the TOML.
+    #[serde(default)]
+    pub max_size: Option<(u32, u32)>,
 }
 
 #[derive(Debug)]
