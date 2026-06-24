@@ -343,6 +343,79 @@ impl Primitive for ViewPrim {
     }
 }
 
+struct ListPrim;
+impl ListPrim {
+    /// Parse one row-template cell. `ctx` resolves an optional per-cell font asset.
+    fn parse_cell(
+        t: &Table,
+        ctx: &mut dyn BuildContext,
+    ) -> Result<crate::scene::RowCell, BuildError> {
+        let bind: String = t
+            .get("bind")
+            .map_err(|_| BuildError::MissingField("bind"))?;
+        let x_from_left: Option<f32> = t.get("x")?;
+        let x_from_right: Option<f32> = t.get("right")?;
+        if x_from_left.is_none() && x_from_right.is_none() {
+            return Err(BuildError::MissingField("x or right"));
+        }
+        let y: f32 = t.get::<Option<f32>>("y")?.unwrap_or(0.0);
+        let size: f32 = t.get::<Option<f32>>("size")?.unwrap_or(16.0);
+        let color = parse_color(t)?;
+        let halign = parse_halign(t)?;
+        let (font, font_name) = match t.get::<Option<String>>("font")? {
+            Some(name) => (
+                Some(ctx.font(&name).map_err(BuildError::Asset)?),
+                Some(name),
+            ),
+            None => (None, None),
+        };
+        Ok(crate::scene::RowCell {
+            bind,
+            x_from_left,
+            x_from_right,
+            y,
+            size,
+            color,
+            halign,
+            font,
+            font_name,
+        })
+    }
+}
+impl Primitive for ListPrim {
+    fn id(&self) -> &str {
+        "list"
+    }
+    fn build(&self, args: &Table, ctx: &mut dyn BuildContext) -> Result<Vec<Node>, BuildError> {
+        let collection: String = args
+            .get("collection")
+            .map_err(|_| BuildError::MissingField("collection"))?;
+        let x: f32 = args.get("x").map_err(|_| BuildError::MissingField("x"))?;
+        let y: f32 = args.get("y").map_err(|_| BuildError::MissingField("y"))?;
+        let w: f32 = args.get("w").map_err(|_| BuildError::MissingField("w"))?;
+        let h: f32 = args.get("h").map_err(|_| BuildError::MissingField("h"))?;
+        let row_height: f32 = args
+            .get("row_height")
+            .map_err(|_| BuildError::MissingField("row_height"))?;
+        let on_select: Option<String> = args.get("on_select")?;
+        let tpl_table: Table = args
+            .get("template")
+            .map_err(|_| BuildError::MissingField("template"))?;
+        let mut template = Vec::new();
+        for entry in tpl_table.sequence_values::<Table>() {
+            template.push(Self::parse_cell(&entry?, ctx)?);
+        }
+        Ok(vec![Node::List {
+            collection,
+            region: crate::scene::ImageDest { x, y, w, h },
+            row_height,
+            on_select,
+            count: 0,
+            template,
+        }])
+    }
+}
+
 struct TextPrim;
 impl Primitive for TextPrim {
     fn id(&self) -> &str {
@@ -418,6 +491,7 @@ impl VocabRegistry {
         r.register(Box::new(FramePrim));
         r.register(Box::new(TextPrim));
         r.register(Box::new(ViewPrim));
+        r.register(Box::new(ListPrim));
         r
     }
 }
@@ -782,8 +856,8 @@ mod tests {
     }
 
     #[test]
-    fn base_registry_now_has_seven() {
-        assert_eq!(VocabRegistry::base().iter().count(), 7);
+    fn base_registry_now_has_eight() {
+        assert_eq!(VocabRegistry::base().iter().count(), 8);
     }
 
     #[test]

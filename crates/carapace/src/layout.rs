@@ -104,6 +104,12 @@ fn node_bbox(node: &Node) -> Option<Rect> {
                 h: dest.h,
             })
         }
+        Node::List { region, .. } => Some(Rect {
+            x: region.x,
+            y: region.y,
+            w: region.w,
+            h: region.h,
+        }),
         Node::Fill { path, .. } | Node::ValueFill { path, .. } => path_bbox(path),
         Node::Hotspot { region, .. } => {
             let pts: Vec<Pt> = region
@@ -143,6 +149,14 @@ fn transform_node(node: &Node, from: Rect, to: Rect) -> Node {
     match &mut n {
         Node::Image { dest, .. } | Node::View { dest, .. } | Node::Frame { dest, .. } => {
             *dest = ImageDest {
+                x: to.x,
+                y: to.y,
+                w: to.w,
+                h: to.h,
+            };
+        }
+        Node::List { region, .. } => {
+            *region = ImageDest {
                 x: to.x,
                 y: to.y,
                 w: to.w,
@@ -193,5 +207,46 @@ pub fn resolve_scene(design: &Scene, anchors: &[Anchors], logical: (f32, f32)) -
             logical.0.round().max(1.0) as u32,
             logical.1.round().max(1.0) as u32,
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scene::{ImageDest, Node, Scene};
+
+    #[test]
+    fn list_region_stretches_under_full_anchors() {
+        let design = Scene {
+            canvas: (200, 100),
+            nodes: vec![Node::List {
+                collection: "c".to_string(),
+                region: ImageDest {
+                    x: 10.0,
+                    y: 10.0,
+                    w: 180.0,
+                    h: 80.0,
+                },
+                row_height: 20.0,
+                on_select: None,
+                count: 0,
+                template: vec![],
+            }],
+        };
+        let anchors = vec![Anchors {
+            left: true,
+            right: true,
+            top: true,
+            bottom: true,
+            min: None,
+        }];
+        let resolved = resolve_scene(&design, &anchors, (300.0, 140.0));
+        match &resolved.nodes[0] {
+            Node::List { region, .. } => {
+                assert_eq!(region.w, 280.0, "w stretched by +100");
+                assert_eq!(region.h, 120.0, "h stretched by +40");
+            }
+            other => panic!("expected List, got {other:?}"),
+        }
     }
 }

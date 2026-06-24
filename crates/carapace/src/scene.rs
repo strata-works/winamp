@@ -118,6 +118,48 @@ pub enum FrameCenter {
     Hollow,
 }
 
+pub type RowTemplate = Vec<RowCell>;
+
+/// One text cell of a list row template, in row-relative coords. Built once at parse time.
+#[derive(Clone, Debug)]
+pub struct RowCell {
+    pub bind: String,
+    /// Horizontal placement: from the region's left edge, or from its right edge. Exactly one.
+    pub x_from_left: Option<f32>,
+    pub x_from_right: Option<f32>,
+    pub y: f32,
+    pub size: f32,
+    pub color: Color,
+    pub halign: HAlign,
+    pub font: Option<std::sync::Arc<FontData>>,
+    pub font_name: Option<String>,
+}
+
+impl RowCell {
+    /// The concrete Text node for this cell in a row, positioned within `region`.
+    pub fn to_node(&self, region: &ImageDest, row_top: f32, value: &str) -> Node {
+        let x = match (self.x_from_left, self.x_from_right) {
+            (Some(l), _) => region.x + l,
+            (None, Some(r)) => region.x + region.w - r,
+            (None, None) => region.x,
+        };
+        Node::Text {
+            content: TextContent::Static(value.to_string()),
+            font: self.font.clone(),
+            font_name: self.font_name.clone(),
+            size: self.size,
+            paint: Paint::Solid(self.color),
+            halign: self.halign,
+            valign: VAlign::Top,
+            max_width: None,
+            pos: Pt {
+                x,
+                y: row_top + self.y,
+            },
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum Node {
     Fill {
@@ -147,6 +189,15 @@ pub enum Node {
     View {
         id: String,
         dest: ImageDest,
+    },
+    List {
+        collection: String,
+        region: ImageDest,
+        row_height: f32,
+        on_select: Option<String>,
+        /// Visible row count, set during layout expansion; 0 in the design scene.
+        count: usize,
+        template: RowTemplate,
     },
     Text {
         content: TextContent,
@@ -240,6 +291,9 @@ impl Scene {
                     }
                 ),
                 Node::View { id, .. } => format!("view id={id}"),
+                Node::List {
+                    collection, count, ..
+                } => format!("list collection={collection} rows={count}"),
                 Node::Text {
                     content,
                     font_name,
@@ -294,6 +348,34 @@ impl Scene {
                 _ => None,
             })
             .collect()
+    }
+
+    /// Topmost list row under `p`: `(on_select action, row index)`. Lists draw later → reverse.
+    pub fn hit_row(&self, p: Pt) -> Option<(String, usize)> {
+        for node in self.nodes.iter().rev() {
+            let Node::List {
+                region,
+                row_height,
+                on_select,
+                count,
+                ..
+            } = node
+            else {
+                continue;
+            };
+            let Some(action) = on_select else { continue };
+            if *row_height <= 0.0 || *count == 0 {
+                continue;
+            }
+            if p.x < region.x || p.x > region.x + region.w || p.y < region.y {
+                continue;
+            }
+            let idx = ((p.y - region.y) / row_height).floor() as usize;
+            if idx < *count {
+                return Some((action.clone(), idx));
+            }
+        }
+        None
     }
 
     /// Topmost hotspot containing `p` (later nodes draw on top → iterate in reverse).
@@ -543,6 +625,80 @@ mod tests {
             )]
         );
         assert_eq!(scene.summary(), "canvas 300x200\nview id=display");
+    }
+
+    #[test]
+    fn summary_describes_list_nodes() {
+        let scene = Scene {
+            canvas: (200, 100),
+            nodes: vec![Node::List {
+                collection: "entries".to_string(),
+                region: ImageDest {
+                    x: 10.0,
+                    y: 20.0,
+                    w: 100.0,
+                    h: 60.0,
+                },
+                row_height: 20.0,
+                on_select: Some("open_entry".to_string()),
+                count: 3,
+                template: vec![],
+            }],
+        };
+        assert_eq!(
+            scene.summary(),
+            "canvas 200x100\nlist collection=entries rows=3"
+        );
+    }
+
+    fn list_scene(count: usize, on_select: Option<&str>) -> Scene {
+        Scene {
+            canvas: (200, 100),
+            nodes: vec![Node::List {
+                collection: "c".to_string(),
+                region: ImageDest {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 100.0,
+                    h: 80.0,
+                },
+                row_height: 20.0,
+                on_select: on_select.map(|s| s.to_string()),
+                count,
+                template: vec![],
+            }],
+        }
+    }
+
+    #[test]
+    fn hit_row_maps_y_to_index() {
+        let s = list_scene(3, Some("open"));
+        assert_eq!(
+            s.hit_row(Pt { x: 50.0, y: 10.0 }),
+            Some(("open".to_string(), 0))
+        );
+        assert_eq!(
+            s.hit_row(Pt { x: 50.0, y: 30.0 }),
+            Some(("open".to_string(), 1))
+        );
+        assert_eq!(
+            s.hit_row(Pt { x: 50.0, y: 50.0 }),
+            Some(("open".to_string(), 2))
+        );
+    }
+
+    #[test]
+    fn hit_row_misses_beyond_count_and_outside_region() {
+        let s = list_scene(3, Some("open"));
+        assert_eq!(s.hit_row(Pt { x: 50.0, y: 70.0 }), None, "row 3 >= count");
+        assert_eq!(s.hit_row(Pt { x: 50.0, y: -5.0 }), None, "above region");
+        assert_eq!(s.hit_row(Pt { x: 150.0, y: 10.0 }), None, "right of region");
+    }
+
+    #[test]
+    fn hit_row_none_without_on_select() {
+        let s = list_scene(3, None);
+        assert_eq!(s.hit_row(Pt { x: 50.0, y: 10.0 }), None);
     }
 
     #[test]

@@ -54,10 +54,10 @@ The load-bearing decisions:
 - **Embedded Lua scripting in a capability sandbox.** Skins bind to host actions/state
   through a Lua script whose `_ENV` is *only* the vocabulary constructors plus an
   allowlisted set of host actions — no raw `host`/`io`/`os`/filesystem access.
-- **Domain-neutral base vocabulary, host-extensible.** The engine ships seven generic
+- **Domain-neutral base vocabulary, host-extensible.** The engine ships eight generic
   base primitives: `fill` (background), `region` hotspots, value-bound `value_fill`,
-  `image`, `frame` (9-slice stretchable chrome), `text`, and `view` (live host-content
-  region; see below). Anything domain-flavored — "transport control", "audio visualizer" — is
+  `image`, `frame` (9-slice stretchable chrome), `text`, `view` (live host-content
+  region; see below), and `list` (dynamic host-driven list; see below). Anything domain-flavored — "transport control", "audio visualizer" — is
   registered by the host as an extension.
   A host registers its own domain primitives through `VocabRegistry::register`; they appear in the
   skin env exactly like built-ins and can bind the host's allowlisted actions directly (e.g. the
@@ -205,14 +205,41 @@ covered by a dedicated offscreen regression test (`gadget_path_still_uniform_sca
 
 **What the frame demo shows.** The bundled `frame` skin demonstrates a resizable window
 with a 9-slice bitmap title bar and border, anchor-resolved controls (close button pinned
-to top-right), and a stretching interior. A `view{}` region in the interior hosts a
-reflowing file-browser app-shell that reflows as the window is resized — the shell redraws
-at each new size by supplying a fresh texture.
+to top-right), and a stretching interior. A `view{}` region in the interior hosts a live,
+two-pane read-only **file browser**: a shortcuts column and a directory listing, both driven
+by `list{}` over a `FileBrowserHost`. Clicks inside the `view{}` region are translated into
+the nested shell engine's coordinate space by the demo and forwarded to it; the engine
+reuses scene hit-testing and host actions — no new input primitive was required.
 
-**What the frame demo does not do.** The hosted app-shell is a static visual — it is **not
-yet interactive**: there is no click-routing into the shell content, no navigation, no live
-file-list, and no audio. Those are planned for a later phase. The engine does not embed
-foreign-process windows and has no audio subsystem.
+**What the frame demo does not do.** The file browser is read-only: there is no scroll,
+no selection highlight, no file opening, and no filesystem writes. The engine does not
+embed foreign-process windows and has no audio subsystem.
+
+### The `list{}` primitive — dynamic host-driven lists
+
+A skin can render a dynamic, variable-length list of rows with `list{}`:
+
+```lua
+list{
+  collection = "entries",          -- collection name; host answers Host::rows("entries")
+  x = 160, y = 30, w = 280, h = 340,
+  row_height = 22,
+  on_select  = "open_entry",       -- host action invoked with the row index on click
+  template   = {                   -- one or more cells per row (plain data tables)
+    { bind = "name", x = 4, y = 2, size = 13, color = { r=220, g=220, b=220 } },
+  },
+}
+```
+
+The engine calls `Host::rows(collection)` each frame and expands the `template` — a list of
+`{ bind, x|right, y, size, color, halign }` cells — into one row per item, clamped to the
+visible region. Clicking a row invokes the `on_select` host action with the row index.
+Template cells are plain data tables, **not** `text{}` calls; constructors emit scene nodes
+as a side effect and cannot be used inside a template.
+
+`list{}` carries no scrolling, selection highlight, or multi-column sort — those remain
+out of scope. It is the base seam by which a host exposes a flat, read-only collection to
+a skin.
 
 ## Building & running
 
@@ -286,8 +313,9 @@ engine. Phase 5 was decomposed into sub-projects (5a–5e).
   composites corners (fixed), edges (stretched), and center (`"stretch"` | `"hollow"`). The
   engine resolves anchors to logical rects in a GPU-free layout pass; gadget skins render
   pixel-identically (uniform scale path unchanged). The bundled `frame` demo skin hosts a
-  reflowing app-shell through the `view{}` seam — the shell is **not yet interactive** (no
-  navigation or live data; planned for a later phase).
+  live, two-pane read-only file browser through the `view{}` seam — powered by the new
+  `list{}` primitive, input routing into the nested shell engine, and a `FileBrowserHost`
+  (read-only; no scroll, no selection highlight, no file opening).
 
 ## Repository layout
 
