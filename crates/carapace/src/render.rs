@@ -262,6 +262,7 @@ impl Renderer {
                     vs.pop_layer();
                 }
                 Node::View { .. } => {} // composited in the live-host-view-region render task
+                Node::List { .. } => {} // expands to Text rows during layout; nothing to draw here
                 Node::Frame {
                     image,
                     dest,

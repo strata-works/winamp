@@ -118,6 +118,23 @@ pub enum FrameCenter {
     Hollow,
 }
 
+pub type RowTemplate = Vec<RowCell>;
+
+/// One text cell of a list row template, in row-relative coords. Built once at parse time.
+#[derive(Clone, Debug)]
+pub struct RowCell {
+    pub bind: String,
+    /// Horizontal placement: from the region's left edge, or from its right edge. Exactly one.
+    pub x_from_left: Option<f32>,
+    pub x_from_right: Option<f32>,
+    pub y: f32,
+    pub size: f32,
+    pub color: Color,
+    pub halign: HAlign,
+    pub font: Option<std::sync::Arc<FontData>>,
+    pub font_name: Option<String>,
+}
+
 #[derive(Clone, Debug)]
 pub enum Node {
     Fill {
@@ -147,6 +164,15 @@ pub enum Node {
     View {
         id: String,
         dest: ImageDest,
+    },
+    List {
+        collection: String,
+        region: ImageDest,
+        row_height: f32,
+        on_select: Option<String>,
+        /// Visible row count, set during layout expansion; 0 in the design scene.
+        count: usize,
+        template: RowTemplate,
     },
     Text {
         content: TextContent,
@@ -240,6 +266,9 @@ impl Scene {
                     }
                 ),
                 Node::View { id, .. } => format!("view id={id}"),
+                Node::List {
+                    collection, count, ..
+                } => format!("list collection={collection} rows={count}"),
                 Node::Text {
                     content,
                     font_name,
@@ -543,6 +572,30 @@ mod tests {
             )]
         );
         assert_eq!(scene.summary(), "canvas 300x200\nview id=display");
+    }
+
+    #[test]
+    fn summary_describes_list_nodes() {
+        let scene = Scene {
+            canvas: (200, 100),
+            nodes: vec![Node::List {
+                collection: "entries".to_string(),
+                region: ImageDest {
+                    x: 10.0,
+                    y: 20.0,
+                    w: 100.0,
+                    h: 60.0,
+                },
+                row_height: 20.0,
+                on_select: Some("open_entry".to_string()),
+                count: 3,
+                template: vec![],
+            }],
+        };
+        assert_eq!(
+            scene.summary(),
+            "canvas 200x100\nlist collection=entries rows=3"
+        );
     }
 
     #[test]
