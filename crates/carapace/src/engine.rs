@@ -57,11 +57,18 @@ impl Engine {
         p: Pt,
         _kind: PointerEvent,
     ) {
-        let hit = self.layout(logical_w, logical_h).hit(p);
-        if let Some(id) = hit
-            && let Err(e) = self.skin.fire(id)
-        {
-            eprintln!("carapace: handler error: {e:?}");
+        let scene = self.layout(logical_w, logical_h);
+        if let Some(id) = scene.hit(p) {
+            if let Err(e) = self.skin.fire(id) {
+                eprintln!("carapace: handler error: {e:?}");
+            }
+            return;
+        }
+        if let Some((action, index)) = scene.hit_row(p) {
+            self.queue.borrow_mut().push(Command::HostAction {
+                action,
+                args: vec![crate::host::Value::Num(index as f64)],
+            });
         }
     }
 

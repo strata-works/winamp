@@ -83,3 +83,59 @@ fn layout_expands_rows_and_clamps_to_visible() {
         "first 4 rows expanded in order"
     );
 }
+
+use std::cell::RefCell;
+use std::rc::Rc;
+
+struct RecordHost {
+    rows: Vec<Row>,
+    last: Rc<RefCell<Option<(String, f64)>>>,
+}
+impl Host for RecordHost {
+    fn name(&self) -> &str {
+        "record"
+    }
+    fn tick(&mut self, _dt: Duration) {}
+    fn get(&self, _key: &str) -> Option<StateValue> {
+        None
+    }
+    fn actions(&self) -> &[ActionSpec] {
+        &[ActionSpec { name: "open" }]
+    }
+    fn invoke(&mut self, action: &str, args: &[Value]) {
+        let n = match args.first() {
+            Some(Value::Num(n)) => *n,
+            _ => -1.0,
+        };
+        *self.last.borrow_mut() = Some((action.to_string(), n));
+    }
+    fn rows(&self, _collection: &str) -> Vec<Row> {
+        self.rows.clone()
+    }
+}
+
+#[test]
+fn clicking_a_row_invokes_on_select_with_index() {
+    let last = Rc::new(RefCell::new(None));
+    let host = RecordHost {
+        rows: vec![name_row("a"), name_row("b"), name_row("c")],
+        last: last.clone(),
+    };
+    let mut engine = Engine::new(
+        Box::new(host),
+        VocabRegistry::base(),
+        SkinSource::inline(SKIN, (100, 100)),
+    )
+    .unwrap();
+
+    // Row 1 spans y in [20, 40); click at y=30, within the region's x-range.
+    engine.handle_pointer_resolved(
+        100.0,
+        100.0,
+        carapace::scene::Pt { x: 50.0, y: 30.0 },
+        carapace::engine::PointerEvent::Press,
+    );
+    engine.update(Duration::from_millis(0));
+
+    assert_eq!(*last.borrow(), Some(("open".to_string(), 1.0)));
+}
