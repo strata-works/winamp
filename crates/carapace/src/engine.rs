@@ -69,6 +69,13 @@ impl Engine {
                 action,
                 args: vec![crate::host::Value::Num(index as f64)],
             });
+            return;
+        }
+        if let Some((action, fraction)) = scene.hit_scrub(p) {
+            self.queue.borrow_mut().push(Command::HostAction {
+                action,
+                args: vec![crate::host::Value::Num(fraction as f64)],
+            });
         }
     }
 

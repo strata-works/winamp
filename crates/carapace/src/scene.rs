@@ -388,6 +388,32 @@ impl Scene {
         None
     }
 
+    /// Topmost scrub bar under `p`: `(on_seek action, click fraction 0..1)`. Reverse order.
+    pub fn hit_scrub(&self, p: Pt) -> Option<(String, f32)> {
+        for node in self.nodes.iter().rev() {
+            let Node::Scrub {
+                region, on_seek, ..
+            } = node
+            else {
+                continue;
+            };
+            if p.x < region.x
+                || p.x > region.x + region.w
+                || p.y < region.y
+                || p.y > region.y + region.h
+            {
+                continue;
+            }
+            let frac = if region.w > 0.0 {
+                ((p.x - region.x) / region.w).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            return Some((on_seek.clone(), frac));
+        }
+        None
+    }
+
     /// Topmost hotspot containing `p` (later nodes draw on top → iterate in reverse).
     pub fn hit(&self, p: Pt) -> Option<HandlerId> {
         for node in self.nodes.iter().rev() {
@@ -737,6 +763,53 @@ mod tests {
             scene.summary(),
             "canvas 300x100\nscrub value=position on_seek=seek"
         );
+    }
+
+    fn scrub_scene() -> Scene {
+        Scene {
+            canvas: (200, 50),
+            nodes: vec![Node::Scrub {
+                region: ImageDest {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 100.0,
+                    h: 20.0,
+                },
+                value_key: "position".to_string(),
+                direction: FillDir::Right,
+                color: Color {
+                    r: 0,
+                    g: 0,
+                    b: 0,
+                    a: 255,
+                },
+                on_seek: "seek".to_string(),
+            }],
+        }
+    }
+
+    #[test]
+    fn hit_scrub_maps_x_to_fraction() {
+        let s = scrub_scene();
+        assert_eq!(
+            s.hit_scrub(Pt { x: 0.0, y: 10.0 }),
+            Some(("seek".to_string(), 0.0))
+        );
+        assert_eq!(
+            s.hit_scrub(Pt { x: 50.0, y: 10.0 }),
+            Some(("seek".to_string(), 0.5))
+        );
+        assert_eq!(
+            s.hit_scrub(Pt { x: 100.0, y: 10.0 }),
+            Some(("seek".to_string(), 1.0))
+        );
+    }
+
+    #[test]
+    fn hit_scrub_misses_outside_region() {
+        let s = scrub_scene();
+        assert_eq!(s.hit_scrub(Pt { x: 50.0, y: 30.0 }), None, "below region");
+        assert_eq!(s.hit_scrub(Pt { x: -1.0, y: 10.0 }), None, "left of region");
     }
 
     #[test]
