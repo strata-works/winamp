@@ -6,6 +6,8 @@ use std::time::Instant;
 // AudioBackend/AudioError consumed by music_player_host (Task 4) + main wiring (Task 7).
 mod audio;
 mod file_browser_host;
+#[allow(dead_code)] // MusicPlayerHost wired as the media host in Task 7.
+mod music_player_host;
 
 use carapace::command::{Command, SkinSource};
 use carapace::engine::{Engine, PointerEvent};
