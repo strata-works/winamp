@@ -69,7 +69,23 @@ Node::List {
 }
 ```
 
-`RowTemplate` is a small set of row-relative visual nodes (initially `Text`, extensible to `ValueFill`) built once at parse time from the `template = { … }` Lua table. A `Text` template node uses `bind = "<cellkey>"`, which resolves against **the current row's cells** at expansion — distinct from `TextContent::Bound`, which reads global `get()`.
+`RowTemplate` is `Vec<RowCell>` — a small set of row-relative text cells, built once at parse time from the `template = { … }` Lua table.
+
+> **Authoring constraint (from the Lua model):** registered constructors like `text{}` emit scene nodes as a *side effect* (they return nil and push into the scene builder). So template entries are **plain data tables**, not `text{}` calls — `ListPrim` parses them directly. Each cell carries a `bind` (cell key), horizontal placement (`x` from the region's left edge, **or** `right` from its right edge — for right-aligned columns that track the edge on resize), `y`, `size`, `color`, optional `halign`, and optional `font`. A cell's `bind` resolves against **the current row's cells** at expansion — distinct from `TextContent::Bound`, which reads global `get()`.
+
+```rust
+pub struct RowCell {
+    pub bind: String,
+    pub x_from_left: Option<f32>,   // exactly one of x_from_left / x_from_right is Some
+    pub x_from_right: Option<f32>,
+    pub y: f32,
+    pub size: f32,
+    pub color: Color,
+    pub halign: HAlign,
+    pub font: Option<Arc<FontData>>,
+    pub font_name: Option<String>,
+}
+```
 
 Lua authoring (declarative, no per-frame Lua execution, per the performance-priority memory):
 
@@ -78,8 +94,8 @@ list{
   collection = "entries", x = 132, y = 28, w = 320, h = 270, row_height = 20,
   anchor = { "left", "right", "top", "bottom" }, on_select = "open_entry",
   template = {
-    text{ bind = "name", size = 13, x = 4,   y = 3, color = {r=200,g=210,b=225} },
-    text{ bind = "size", size = 13, x = 316, y = 3, halign = "right", color = {r=150,g=160,b=175} },
+    { bind = "name", size = 13, x     = 4, y = 3, color = {r=200,g=210,b=225} },
+    { bind = "size", size = 13, right = 4, y = 3, halign = "right", color = {r=150,g=160,b=175} },
   },
 }
 ```
@@ -158,6 +174,8 @@ Read failures (permission denied, vanished dir) degrade to an empty listing rath
 ### 6. Demo wiring
 
 The inline `APP_SHELL` static-text skin in `crates/carapace-demo/src/main.rs` is replaced by a two-`list{}` file-browser skin (left = `shortcuts`, right = `entries`, plus a chrome path line bound to `current_path`) in **one** nested app engine hosted by the existing `view{ id="app" }`. The shell engine swaps `DemoHost` → `FileBrowserHost<StdFs>` rooted at a sensible demo directory (e.g. the user's home or the repo root).
+
+Two wiring details the demo must handle: (1) the shell engine currently never has `update()` called (only the outer engine is ticked) — the redraw loop must call `shell.engine.update(dt)` each frame so queued navigation host-actions drain; (2) on a left-click the demo resolves the outer `app` view rect, and if the cursor is inside it, forwards the click to the **shell** engine (`inner = outer_logical − view_rect.origin`) instead of the outer engine.
 
 ## Testing strategy
 
