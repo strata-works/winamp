@@ -2,6 +2,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
+#[allow(dead_code)]
+// AudioBackend/AudioError consumed by music_player_host (Task 4) + main wiring (Task 7).
+mod audio;
 mod file_browser_host;
 
 use carapace::command::{Command, SkinSource};
