@@ -135,6 +135,31 @@ pub struct RowCell {
     pub font_name: Option<String>,
 }
 
+impl RowCell {
+    /// The concrete Text node for this cell in a row, positioned within `region`.
+    pub fn to_node(&self, region: &ImageDest, row_top: f32, value: &str) -> Node {
+        let x = match (self.x_from_left, self.x_from_right) {
+            (Some(l), _) => region.x + l,
+            (None, Some(r)) => region.x + region.w - r,
+            (None, None) => region.x,
+        };
+        Node::Text {
+            content: TextContent::Static(value.to_string()),
+            font: self.font.clone(),
+            font_name: self.font_name.clone(),
+            size: self.size,
+            paint: Paint::Solid(self.color),
+            halign: self.halign,
+            valign: VAlign::Top,
+            max_width: None,
+            pos: Pt {
+                x,
+                y: row_top + self.y,
+            },
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum Node {
     Fill {
