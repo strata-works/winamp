@@ -2,11 +2,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
-#[allow(dead_code)]
-// AudioBackend/AudioError consumed by music_player_host (Task 4) + main wiring (Task 7).
+// AudioBackend/AudioError consumed by music_player_host + main wiring.
 mod audio;
 mod file_browser_host;
-#[allow(dead_code)] // MusicPlayerHost wired as the media host in Task 7.
 mod music_player_host;
 
 use carapace::command::{Command, SkinSource};
@@ -14,7 +12,6 @@ use carapace::engine::{Engine, PointerEvent};
 use carapace::render::{RenderTarget, Renderer};
 use carapace::scene::Pt;
 use carapace::vocab::VocabRegistry;
-use carapace_demo::demo_host::DemoHost;
 use carapace_demo::sysmon_host::SysmonHost;
 use carapace_demo::window::{WindowOp, WindowOutbox};
 
@@ -257,6 +254,37 @@ fn skin_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
+/// Construct a `MusicPlayerHost` with the bundled demo clips. Falls back to
+/// `NullAudio` (silent, no panic) when no audio output device is available.
+fn make_music_player_host(outbox: WindowOutbox) -> music_player_host::MusicPlayerHost {
+    let audio_dir = skin_root().join("skins/reference/assets/audio");
+    let playlist = vec![
+        music_player_host::Track {
+            title: "Headspace — Track 01".to_string(),
+            path: audio_dir.join("track-01.wav"),
+            duration: None,
+        },
+        music_player_host::Track {
+            title: "Headspace — Track 02".to_string(),
+            path: audio_dir.join("track-02.wav"),
+            duration: None,
+        },
+        music_player_host::Track {
+            title: "Headspace — Track 03".to_string(),
+            path: audio_dir.join("track-03.wav"),
+            duration: None,
+        },
+    ];
+    let backend: Box<dyn audio::AudioBackend> = match audio::RodioBackend::new() {
+        Ok(b) => Box::new(b),
+        Err(e) => {
+            eprintln!("carapace-demo: no audio device ({e:?}); player is silent");
+            Box::new(audio::NullAudio)
+        }
+    };
+    music_player_host::MusicPlayerHost::new(backend, playlist, outbox)
+}
+
 /// Map an outer-logical point into a view region's local coords, or None if outside.
 /// The nested shell reflows to the view's logical size, so the mapping is a pure translate.
 fn view_local(p: Pt, dest: &carapace::scene::ImageDest) -> Option<Pt> {
@@ -366,7 +394,7 @@ impl App {
         let window_outbox: WindowOutbox = Default::default();
         let (src, _canvas, meta) = load_source_from(MEDIA_SKINS, 0);
         let engine = Engine::new(
-            Box::new(DemoHost::with_outbox(window_outbox.clone())),
+            Box::new(make_music_player_host(window_outbox.clone())),
             demo_registry(),
             src,
         )
@@ -794,7 +822,7 @@ impl ApplicationHandler for App {
                         let host: Box<dyn carapace::host::Host> = if self.sysmon {
                             Box::new(SysmonHost::with_outbox(self.window_outbox.clone()))
                         } else {
-                            Box::new(DemoHost::with_outbox(self.window_outbox.clone()))
+                            Box::new(make_music_player_host(self.window_outbox.clone()))
                         };
                         self.engine
                             .handle_command(Command::SwitchHost { host, skin: src });

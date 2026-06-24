@@ -2,6 +2,8 @@ use std::path::Path;
 use std::time::Duration;
 
 /// What can go wrong loading/decoding a track. Logged, never panics.
+// The String payload is only used via Debug formatting; `Unsupported` is reserved.
+#[allow(dead_code)]
 #[derive(Debug)]
 pub enum AudioError {
     Open(String),
