@@ -67,9 +67,9 @@ mod tests {
 
     #[test]
     fn registers_into_a_vocab_registry() {
-        // The seam: an external crate's primitive registers like a built-in (base 6 + this = 7).
+        // The seam: an external crate's primitive registers like a built-in (base 7 + this = 8).
         let mut reg = VocabRegistry::base();
         reg.register(Box::new(TransportPrim));
-        assert_eq!(reg.iter().count(), 7);
+        assert_eq!(reg.iter().count(), 8);
     }
 }

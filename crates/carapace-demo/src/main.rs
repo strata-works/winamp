@@ -100,11 +100,122 @@ impl Monitor {
     }
 }
 
+/// Inline skin for the nested app-shell shown inside the frame skin's `view{ id="app" }`.
+/// Design size matches the view's design rect (456×272).
+const APP_SHELL: &str = "\
+    fill{ path = rect{x=0,y=0,w=456,h=272}, color = {r=18,g=20,b=26} }\n\
+    fill{ path = rect{x=0,y=0,w=456,h=24}, color = {r=40,g=46,b=60}, anchor={'left','right','top'} }\n\
+    text{ text='Name', size=14, x=64, y=4, color={r=170,g=185,b=210}, anchor={'left','top'} }\n\
+    fill{ path = rect{x=0,y=24,w=120,h=248}, color = {r=24,g=28,b=38}, anchor={'left','top','bottom'} }\n\
+    text{ text='Places', size=13, x=12, y=32, color={r=150,g=165,b=190}, anchor={'left','top'} }\n\
+    text{ text='~/Music', size=13, x=12, y=52, color={r=130,g=200,b=150}, anchor={'left','top'} }\n\
+    text{ text='~/Docs',  size=13, x=12, y=72, color={r=130,g=200,b=150}, anchor={'left','top'} }\n\
+    text{ text='track-01.mp3   3.2M', size=13, x=132, y=32, color={r=200,g=210,b=225}, anchor={'left','right','top'} }\n\
+    text{ text='track-02.mp3   4.1M', size=13, x=132, y=52, color={r=200,g=210,b=225}, anchor={'left','right','top'} }\n\
+    text{ text='notes.txt      812B', size=13, x=132, y=72, color={r=200,g=210,b=225}, anchor={'left','right','top'} }\n";
+
+/// Design size of the app-shell skin (matches the `view{ id="app" }` design rect).
+const APP_SHELL_SIZE: (u32, u32) = (456, 272);
+
+/// A self-contained sub-renderer that paints the file-browser app-shell into an off-screen
+/// texture. The texture is resized each frame to the resolved physical size of the `"app"` view,
+/// and the shell engine is reflowed to the logical size so DPI scaling is correct.
+struct AppShell {
+    engine: Engine,
+    renderer: Renderer,
+    /// Held for ownership — the TextureView borrows this texture's memory.
+    _tex: wgpu::Texture,
+    view: wgpu::TextureView,
+    /// Current physical size of the texture.
+    phys_size: (u32, u32),
+}
+
+impl AppShell {
+    fn new(device: &wgpu::Device, outbox: WindowOutbox) -> Self {
+        let engine = Engine::new(
+            Box::new(DemoHost::with_outbox(outbox)),
+            VocabRegistry::base(),
+            SkinSource::inline(APP_SHELL, APP_SHELL_SIZE),
+        )
+        .unwrap();
+        let phys = APP_SHELL_SIZE;
+        let (_tex, view) = Self::make_tex(device, phys.0, phys.1);
+        Self {
+            engine,
+            renderer: Renderer::new(device),
+            _tex,
+            view,
+            phys_size: phys,
+        }
+    }
+
+    fn make_tex(device: &wgpu::Device, w: u32, h: u32) -> (wgpu::Texture, wgpu::TextureView) {
+        let tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("app-shell"),
+            size: wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+        (tex, view)
+    }
+
+    /// Reflow the shell engine to `(logical_w, logical_h)`, resize the texture to
+    /// `(phys_w, phys_h)` if needed, then render into the texture.
+    fn paint(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        logical_w: f32,
+        logical_h: f32,
+        phys_w: u32,
+        phys_h: u32,
+    ) {
+        // Recreate texture if physical size changed.
+        if self.phys_size != (phys_w, phys_h) {
+            let (tex, view) = Self::make_tex(device, phys_w, phys_h);
+            self._tex = tex;
+            self.view = view;
+            self.phys_size = (phys_w, phys_h);
+        }
+
+        // Reflow the shell to the logical view size.
+        let shell_scene = self.engine.layout(logical_w, logical_h);
+        self.renderer.draw(
+            &shell_scene,
+            |k| self.engine.state(k),
+            |_| None,
+            &RenderTarget {
+                device,
+                queue,
+                view: &self.view,
+                width: phys_w,
+                height: phys_h,
+                base_color: carapace::scene::Color {
+                    r: 18,
+                    g: 20,
+                    b: 26,
+                    a: 255,
+                },
+            },
+        );
+    }
+}
+
 const MEDIA_SKINS: &[&str] = &[
     "skins/classic",
     "skins/minimal",
     "skins/reference",
     "skins/transport",
+    "skins/frame",
 ];
 const SYSMON_SKINS: &[&str] = &["skins/sysmon"];
 const INIT_SCALE: u32 = 3;
@@ -120,10 +231,25 @@ fn demo_registry() -> VocabRegistry {
     r
 }
 
-fn load_source_from(list: &[&str], i: usize) -> (SkinSource, (u32, u32)) {
-    let (_m, src) = carapace::skin::load_dir(&skin_root().join(list[i])).expect("load skin");
+/// Archetype metadata extracted from the skin manifest for the demo window.
+struct SkinMeta {
+    resizable: bool,
+    min_size: Option<(u32, u32)>,
+    max_size: Option<(u32, u32)>,
+}
+
+fn load_source_from(list: &[&str], i: usize) -> (SkinSource, (u32, u32), SkinMeta) {
+    let (m, src) = carapace::skin::load_dir(&skin_root().join(list[i])).expect("load skin");
     let canvas = src.canvas;
-    (src, canvas)
+    (
+        src,
+        canvas,
+        SkinMeta {
+            resizable: m.resizable,
+            min_size: m.min_size,
+            max_size: m.max_size,
+        },
+    )
 }
 
 /// GPU state: wgpu surface + device + queue + surface config + blitter + intermediate texture.
@@ -179,19 +305,21 @@ struct App {
     skin_index: usize,
     sysmon: bool,
     engine: Engine,
+    meta: SkinMeta,
     cursor: (f64, f64),
     last: Instant,
     window: Option<Arc<Window>>,
     gpu: Option<Gpu>,
     renderer: Option<Renderer>,
     monitor: Option<Monitor>,
+    app_shell: Option<AppShell>,
     window_outbox: WindowOutbox,
 }
 
 impl App {
     fn new() -> Self {
         let window_outbox: WindowOutbox = Default::default();
-        let (src, _canvas) = load_source_from(MEDIA_SKINS, 0);
+        let (src, _canvas, meta) = load_source_from(MEDIA_SKINS, 0);
         let engine = Engine::new(
             Box::new(DemoHost::with_outbox(window_outbox.clone())),
             demo_registry(),
@@ -202,12 +330,14 @@ impl App {
             skin_index: 0,
             sysmon: false,
             engine,
+            meta,
             cursor: (0.0, 0.0),
             last: Instant::now(),
             window: None,
             gpu: None,
             renderer: None,
             monitor: None,
+            app_shell: None,
             window_outbox,
         }
     }
@@ -238,15 +368,31 @@ impl ApplicationHandler for App {
             return;
         }
 
-        // Size window from the initial skin canvas * scale.
+        // Size window from the skin manifest archetype.
+        // Frame skin: open at design (canvas) logical size and allow resize.
+        // Gadget skin: open at canvas * INIT_SCALE, non-resizable (unchanged behaviour).
         let (cw, ch) = self.engine.scene().canvas;
-        let attrs = Window::default_attributes()
+        let mut attrs = Window::default_attributes()
             .with_decorations(false)
-            .with_transparent(true)
-            .with_inner_size(winit::dpi::LogicalSize::new(
-                cw * INIT_SCALE,
-                ch * INIT_SCALE,
-            ));
+            .with_transparent(true);
+        if self.meta.resizable {
+            attrs = attrs
+                .with_resizable(true)
+                .with_inner_size(winit::dpi::LogicalSize::new(cw, ch));
+            if let Some((mw, mh)) = self.meta.min_size {
+                attrs = attrs.with_min_inner_size(winit::dpi::LogicalSize::new(mw, mh));
+            }
+            if let Some((mw, mh)) = self.meta.max_size {
+                attrs = attrs.with_max_inner_size(winit::dpi::LogicalSize::new(mw, mh));
+            }
+        } else {
+            attrs = attrs
+                .with_resizable(false)
+                .with_inner_size(winit::dpi::LogicalSize::new(
+                    cw * INIT_SCALE,
+                    ch * INIT_SCALE,
+                ));
+        }
         let window = Arc::new(event_loop.create_window(attrs).unwrap());
         let phys = window.inner_size();
         let (pw, ph) = (phys.width.max(1), phys.height.max(1));
@@ -320,11 +466,13 @@ impl ApplicationHandler for App {
 
         let renderer = Renderer::new(&gpu.device);
         let monitor = Monitor::new(&gpu.device, self.window_outbox.clone());
+        let app_shell = AppShell::new(&gpu.device, self.window_outbox.clone());
 
         self.window = Some(window.clone());
         self.gpu = Some(gpu);
         self.renderer = Some(renderer);
         self.monitor = Some(monitor);
+        self.app_shell = Some(app_shell);
 
         window.request_redraw();
     }
@@ -336,6 +484,10 @@ impl ApplicationHandler for App {
             WindowEvent::Resized(size) => {
                 if let Some(gpu) = self.gpu.as_mut() {
                     gpu.reconfigure(size.width, size.height);
+                }
+                // Request a redraw so the next frame re-evaluates engine.layout at the new size.
+                if let Some(w) = &self.window {
+                    w.request_redraw();
                 }
             }
 
@@ -350,6 +502,41 @@ impl ApplicationHandler for App {
                 // Paint the monitor sub-render before borrowing self.engine immutably.
                 if let (Some(mon), Some(gpu)) = (self.monitor.as_mut(), self.gpu.as_ref()) {
                     mon.paint(&gpu.device, &gpu.queue, dt);
+                }
+
+                // For a frame skin, resolve the outer scene and paint the app-shell sub-renderer
+                // into its texture BEFORE the outer mutable borrows of gpu/renderer.
+                let scale_factor = self
+                    .window
+                    .as_ref()
+                    .map(|w| w.scale_factor() as f32)
+                    .unwrap_or(1.0);
+
+                if self.meta.resizable
+                    && let (Some(shell), Some(gpu)) = (self.app_shell.as_mut(), self.gpu.as_ref())
+                {
+                    let phys_w = gpu.config.width;
+                    let phys_h = gpu.config.height;
+                    let logical_w = phys_w as f32 / scale_factor;
+                    let logical_h = phys_h as f32 / scale_factor;
+
+                    // Find the resolved "app" view rect in logical coords.
+                    let outer_scene = self.engine.layout(logical_w, logical_h);
+                    if let Some((_id, dest)) =
+                        outer_scene.views().into_iter().find(|(id, _)| id == "app")
+                    {
+                        // Physical size of the view slot = logical dest * scale_factor.
+                        let view_phys_w = ((dest.w * scale_factor).round() as u32).max(1);
+                        let view_phys_h = ((dest.h * scale_factor).round() as u32).max(1);
+                        shell.paint(
+                            &gpu.device,
+                            &gpu.queue,
+                            dest.w,
+                            dest.h,
+                            view_phys_w,
+                            view_phys_h,
+                        );
+                    }
                 }
 
                 let (Some(gpu), Some(renderer)) = (self.gpu.as_mut(), self.renderer.as_mut())
@@ -388,16 +575,44 @@ impl ApplicationHandler for App {
                     .texture
                     .create_view(&wgpu::TextureViewDescriptor::default());
 
-                // Capture the monitor texture view before the immutable engine borrows.
+                // Capture sub-renderer texture views before the immutable engine borrows.
                 let mon_view = self.monitor.as_ref().map(|m| &m.view);
+                let shell_view = self.app_shell.as_ref().map(|s| &s.view);
 
-                // Render the scene into the intermediate Rgba8Unorm storage texture.
-                let scene = self.engine.scene();
+                // For a frame skin, resolve the scene at the window's LOGICAL size so that
+                // Renderer::draw scales by physical/logical = DPI (retina-correct).
+                // For a gadget skin, pass the design scene unchanged; render scales by
+                // physical/canvas (pixel-identical to before).
+                //
+                // Pointer mapping intentionally keeps the existing physical→design-canvas
+                // mapping for BOTH archetypes: engine.handle_pointer hit-tests engine.scene()
+                // (the design scene), so cursor coords must be in design space. Frame-skin
+                // hotspots (e.g. top-anchored title-bar buttons) coincide at the top edge;
+                // full anchored-hotspot hit-testing is deferred to a later spec.
+                let logical = (
+                    gpu.config.width as f32 / scale_factor,
+                    gpu.config.height as f32 / scale_factor,
+                );
+                let resolved;
+                let scene = if self.meta.resizable {
+                    resolved = self.engine.layout(logical.0, logical.1);
+                    &resolved
+                } else {
+                    self.engine.scene()
+                };
                 let read_value = |k: &str| self.engine.state(k);
                 renderer.draw(
                     scene,
                     read_value,
-                    |id| if id == "display" { mon_view } else { None },
+                    |id| {
+                        if id == "app" {
+                            shell_view
+                        } else if id == "display" {
+                            mon_view
+                        } else {
+                            None
+                        }
+                    },
                     &RenderTarget {
                         device: &gpu.device,
                         queue: &gpu.queue,
@@ -446,12 +661,29 @@ impl ApplicationHandler for App {
                 if let Some(window) = self.window.as_ref() {
                     let phys = window.inner_size();
                     let (pw, ph) = (phys.width.max(1) as f64, phys.height.max(1) as f64);
-                    let (cw, ch) = self.engine.scene().canvas;
-                    // Map physical cursor -> canvas coords via the same ratio used for the blit.
-                    let cx = (self.cursor.0 * cw as f64 / pw) as f32;
-                    let cy = (self.cursor.1 * ch as f64 / ph) as f32;
-                    self.engine
-                        .handle_pointer(Pt { x: cx, y: cy }, PointerEvent::Press);
+                    if self.meta.resizable {
+                        // Frame skin: hotspots are drawn at layout-resolved positions, so hit-test
+                        // the resolved scene at the logical cursor (design-space hit-testing would
+                        // miss anchored controls once the window is resized).
+                        let sf = window.scale_factor() as f32;
+                        let p = Pt {
+                            x: self.cursor.0 as f32 / sf,
+                            y: self.cursor.1 as f32 / sf,
+                        };
+                        self.engine.handle_pointer_resolved(
+                            pw as f32 / sf,
+                            ph as f32 / sf,
+                            p,
+                            PointerEvent::Press,
+                        );
+                    } else {
+                        // Gadget skin: uniform scale, so map the physical cursor to design coords.
+                        let (cw, ch) = self.engine.scene().canvas;
+                        let cx = (self.cursor.0 * cw as f64 / pw) as f32;
+                        let cy = (self.cursor.1 * ch as f64 / ph) as f32;
+                        self.engine
+                            .handle_pointer(Pt { x: cx, y: cy }, PointerEvent::Press);
+                    }
                 }
             }
 
@@ -465,8 +697,10 @@ impl ApplicationHandler for App {
                             MEDIA_SKINS
                         };
                         self.skin_index = (self.skin_index + 1) % list.len();
-                        let (src, _) = load_source_from(list, self.skin_index);
+                        let (src, canvas, meta) = load_source_from(list, self.skin_index);
+                        self.meta = meta;
                         self.engine.handle_command(Command::Swap(src));
+                        apply_window_archetype(&self.window, &self.meta, canvas);
                         if let Some(w) = &self.window {
                             w.request_redraw();
                         }
@@ -479,7 +713,8 @@ impl ApplicationHandler for App {
                         } else {
                             MEDIA_SKINS
                         };
-                        let (src, _) = load_source_from(list, 0);
+                        let (src, canvas, meta) = load_source_from(list, 0);
+                        self.meta = meta;
                         let host: Box<dyn carapace::host::Host> = if self.sysmon {
                             Box::new(SysmonHost::with_outbox(self.window_outbox.clone()))
                         } else {
@@ -487,6 +722,7 @@ impl ApplicationHandler for App {
                         };
                         self.engine
                             .handle_command(Command::SwitchHost { host, skin: src });
+                        apply_window_archetype(&self.window, &self.meta, canvas);
                         if let Some(w) = &self.window {
                             w.request_redraw();
                         }
@@ -496,6 +732,36 @@ impl ApplicationHandler for App {
             }
 
             _ => {}
+        }
+    }
+}
+
+/// Update the live window's resizability and size to match a newly-loaded skin's archetype.
+///
+/// winit 0.30 supports live property changes on an existing window, so no surface/device
+/// recreation is needed. The resulting `Resized` event drives `gpu.reconfigure`.
+fn apply_window_archetype(window: &Option<Arc<Window>>, meta: &SkinMeta, canvas: (u32, u32)) {
+    if let Some(w) = window {
+        w.set_resizable(meta.resizable);
+        if meta.resizable {
+            let (cw, ch) = canvas;
+            let _ = w.request_inner_size(winit::dpi::LogicalSize::new(cw, ch));
+            if let Some((mw, mh)) = meta.min_size {
+                w.set_min_inner_size(Some(winit::dpi::LogicalSize::new(mw, mh)));
+            }
+            if let Some((mw, mh)) = meta.max_size {
+                w.set_max_inner_size(Some(winit::dpi::LogicalSize::new(mw, mh)));
+            } else {
+                w.set_max_inner_size::<winit::dpi::LogicalSize<u32>>(None);
+            }
+        } else {
+            w.set_min_inner_size::<winit::dpi::LogicalSize<u32>>(None);
+            w.set_max_inner_size::<winit::dpi::LogicalSize<u32>>(None);
+            let (cw, ch) = canvas;
+            let _ = w.request_inner_size(winit::dpi::LogicalSize::new(
+                cw * INIT_SCALE,
+                ch * INIT_SCALE,
+            ));
         }
     }
 }

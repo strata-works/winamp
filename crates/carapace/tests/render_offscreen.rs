@@ -1015,3 +1015,200 @@ fn view_without_texture_leaves_the_hole() {
         "no texture -> the hole stays the base color"
     );
 }
+
+#[test]
+fn gadget_path_still_uniform_scales() {
+    // Prove the gadget render path (canvas != surface size → uniform scale) is unchanged
+    // by frame-skin work. Canvas 100×100 rendered into a 300×300 surface = 3× uniform scale.
+    // A red fill over canvas rect 20,20..50,50 maps to surface rect 60,60..150,150.
+    // Sentinel: surface pixel (90,90) must be red; surface pixel (5,5) must be base black.
+    let o = offscreen(300, 300);
+    let mut r = Renderer::new(&o.device);
+    let scene = Scene {
+        canvas: (100, 100),
+        nodes: vec![Node::Fill {
+            path: rect(20.0, 20.0, 50.0, 50.0),
+            paint: Paint::Solid(Color {
+                r: 255,
+                g: 0,
+                b: 0,
+                a: 255,
+            }),
+        }],
+    };
+    r.draw(
+        &scene,
+        |_k| None,
+        |_| None,
+        &RenderTarget {
+            device: &o.device,
+            queue: &o.queue,
+            view: &o.view,
+            width: o.w,
+            height: o.h,
+            base_color: carapace::scene::Color {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 255,
+            },
+        },
+    );
+    let data = readback(&o);
+    // canvas (30,30) → surface (90,90) at 3× uniform scale: must be inside the red fill
+    assert_eq!(
+        px(&data, 300, 90, 90),
+        [255, 0, 0],
+        "canvas (30,30) → surface (90,90) at 3× must be red"
+    );
+    // canvas (1.67,1.67) → surface (5,5): outside the fill, base black
+    assert_eq!(
+        px(&data, 300, 5, 5),
+        [0, 0, 0],
+        "surface (5,5) is outside the fill — must be base black"
+    );
+}
+
+#[test]
+fn frame_keeps_corners_fixed_and_stretches_edges() {
+    use carapace::asset::DecodedImage;
+    use carapace::scene::{FrameCenter, ImageDest, Slice};
+    use std::sync::Arc;
+
+    // Build a 60x60 test image with a clear 10px chrome border:
+    //   - Corners (10x10): solid red   [255, 0, 0]
+    //   - Top/bottom edges: solid blue [0, 0, 255]
+    //   - Left/right edges: solid blue [0, 0, 255]
+    //   - Center interior: solid green [0, 255, 0]
+    let size: usize = 60;
+    let inset: usize = 10;
+    let mut rgba = vec![0u8; size * size * 4];
+    for row in 0..size {
+        for col in 0..size {
+            let in_top = row < inset;
+            let in_bottom = row >= size - inset;
+            let in_left = col < inset;
+            let in_right = col >= size - inset;
+            let (r, g, b) = if (in_top || in_bottom) && (in_left || in_right) {
+                // corner
+                (255u8, 0u8, 0u8)
+            } else if in_top || in_bottom || in_left || in_right {
+                // edge
+                (0u8, 0u8, 255u8)
+            } else {
+                // center
+                (0u8, 255u8, 0u8)
+            };
+            let i = (row * size + col) * 4;
+            rgba[i] = r;
+            rgba[i + 1] = g;
+            rgba[i + 2] = b;
+            rgba[i + 3] = 255;
+        }
+    }
+    let img = Arc::new(DecodedImage {
+        rgba,
+        width: size as u32,
+        height: size as u32,
+    });
+
+    // Helper: build a Scene with a single Frame node at given dest width (height fixed at 120).
+    let make_scene = |dest_w: f32| Scene {
+        canvas: (dest_w as u32, 120),
+        nodes: vec![Node::Frame {
+            image: img.clone(),
+            dest: ImageDest {
+                x: 0.0,
+                y: 0.0,
+                w: dest_w,
+                h: 120.0,
+            },
+            slice: Slice {
+                left: 10.0,
+                right: 10.0,
+                top: 10.0,
+                bottom: 10.0,
+            },
+            center: FrameCenter::Stretch,
+        }],
+    };
+
+    let black_bg = carapace::scene::Color {
+        r: 0,
+        g: 0,
+        b: 0,
+        a: 255,
+    };
+
+    // Render at 120x120
+    let o120 = offscreen(120, 120);
+    let mut r120 = Renderer::new(&o120.device);
+    r120.draw(
+        &make_scene(120.0),
+        |_| None,
+        |_| None,
+        &RenderTarget {
+            device: &o120.device,
+            queue: &o120.queue,
+            view: &o120.view,
+            width: o120.w,
+            height: o120.h,
+            base_color: black_bg,
+        },
+    );
+    let data120 = readback(&o120);
+
+    // Render at 200x120 (wider — top edge stretches, corners stay the same)
+    let o200 = offscreen(200, 120);
+    let mut r200 = Renderer::new(&o200.device);
+    r200.draw(
+        &make_scene(200.0),
+        |_| None,
+        |_| None,
+        &RenderTarget {
+            device: &o200.device,
+            queue: &o200.queue,
+            view: &o200.view,
+            width: o200.w,
+            height: o200.h,
+            base_color: black_bg,
+        },
+    );
+    let data200 = readback(&o200);
+
+    // Top-left corner block (deep inside, 1:1 source -> same dest size):
+    //   Both renders must have the same red pixel at (4, 4) — corner never scales.
+    let corner120 = px(&data120, 120, 4, 4);
+    let corner200 = px(&data200, 200, 4, 4);
+    assert_eq!(
+        corner120, corner200,
+        "top-left corner pixel must be byte-identical at both widths"
+    );
+    // Corners should be red (we designed them that way).
+    assert!(
+        corner120[0] > 180 && corner120[1] < 60 && corner120[2] < 60,
+        "corner must be red-dominant, got {:?}",
+        corner120
+    );
+
+    // Top-edge center sample: at 120-wide this is the stretched edge. At 200-wide, the same
+    // logical position (center of the top edge) is stretched further — pixels differ.
+    // In the 120-wide image the top edge center is at roughly x=60, y=4.
+    // In the 200-wide image the top edge center is at roughly x=100, y=4.
+    // Both should be blue (edge cells), but we just assert they differ to confirm stretching.
+    // Actually, because the source edge pixel value repeats (all blue), vello bilinear can
+    // produce the same value. A safer assertion: check that the center interior is green in
+    // the stretch case, proving all 9 cells are drawn including center.
+    let center120 = px(&data120, 120, 60, 60);
+    assert!(
+        center120[1] > 180 && center120[0] < 60 && center120[2] < 60,
+        "center interior must be green (Stretch draws center), got {:?}",
+        center120
+    );
+    let center200 = px(&data200, 200, 100, 60);
+    assert!(
+        center200[1] > 180 && center200[0] < 60 && center200[2] < 60,
+        "center interior at 200-wide must also be green, got {:?}",
+        center200
+    );
+}

@@ -8,13 +8,15 @@ own layout, appearance, and interactive hotspots, and lets users hot-swap skins 
 runtime without losing app state.
 
 > **Status: working engine, built phase by phase — Phases 0–6 complete, plus the live
-> host-view region (`view{}` primitive).** The demo is a borderless, transparent, draggable
-> window where the skin *is* the interface — vector skins self-shape into rounded silhouettes
-> (the Headspace bitmap floats as a borderless rectangle); the **H** key live-switches the whole
-> window between a media player and a real `sysinfo` system monitor on one engine, proving total
-> window replacement and zero domain knowledge (the only engine change was a transparent render
-> base color); and the Headspace skin hosts a live CPU / MEM / SWP system monitor painted into a
-> declared `view{}` region each frame. See [Current status](#current-status).
+> host-view region (`view{}` primitive) and frame-skin support (resizable themed windows).**
+> The demo is a borderless, transparent, draggable window where the skin *is* the interface —
+> vector skins self-shape into rounded silhouettes (the Headspace bitmap floats as a borderless
+> rectangle); the **H** key live-switches the whole window between a media player and a real
+> `sysinfo` system monitor on one engine, proving total window replacement and zero domain
+> knowledge (the only engine change was a transparent render base color); and the Headspace skin
+> hosts a live CPU / MEM / SWP system monitor painted into a declared `view{}` region each
+> frame. A separate `frame` skin demonstrates resizable themed windows with 9-slice chrome — the
+> window resizes, corners stay fixed, edges stretch. See [Current status](#current-status).
 
 ## Motivation
 
@@ -52,9 +54,9 @@ The load-bearing decisions:
 - **Embedded Lua scripting in a capability sandbox.** Skins bind to host actions/state
   through a Lua script whose `_ENV` is *only* the vocabulary constructors plus an
   allowlisted set of host actions — no raw `host`/`io`/`os`/filesystem access.
-- **Domain-neutral base vocabulary, host-extensible.** The engine ships six generic
+- **Domain-neutral base vocabulary, host-extensible.** The engine ships seven generic
   base primitives: `fill` (background), `region` hotspots, value-bound `value_fill`,
-  `image`, `text` — laid-out, value-bindable, `Paint`-filled — and `view` (live host-content
+  `image`, `frame` (9-slice stretchable chrome), `text`, and `view` (live host-content
   region; see below). Anything domain-flavored — "transport control", "audio visualizer" — is
   registered by the host as an extension.
   A host registers its own domain primitives through `VocabRegistry::register`; they appear in the
@@ -137,6 +139,81 @@ transport. It does not embed foreign-process apps (no OS-window reparenting).
 Responsive / resizable layout inside a view is not part of this primitive; the
 view rect is a fixed declared geometry, exactly like the other base primitives.
 
+### Frame skins — resizable themed windows
+
+A second skin archetype sits alongside the classic gadget skin: **frame skins** define
+resizable windows rather than fixed-canvas widgets.
+
+```toml
+# skin.toml
+resizable = true
+min_size  = { w = 320, h = 240 }
+```
+
+Setting `resizable = true` in the manifest switches the engine from uniform-zoom mode
+(gadget) to anchor-resolved layout mode (frame). A gadget skin sets a fixed `canvas`
+size and the engine scales the whole scene uniformly to the output surface — every pixel
+lands exactly where the design says, at any DPI. A frame skin omits a fixed canvas and
+instead resolves each primitive's position from anchors before the GPU sees the scene; the
+layout pass is CPU-only and produces a fully-resolved scene that the renderer handles just
+like any other scene.
+
+**Positioned primitives and anchors.** Every primitive that takes a position can carry an
+optional `anchor` table:
+
+```lua
+fill{ path = rect(0, 0, 1, 1),   -- normalized or absolute coords in the resolved rect
+      anchor = { "left", "right", "top", "bottom" },   -- all four → fills the whole window
+      paint = { r=30, g=30, b=30 } }
+
+image{ asset = "close.png", x = 0, y = 0, w = 16, h = 16,
+       anchor = { "right", "top" } }   -- pinned to top-right corner
+```
+
+Anchoring rules:
+- Specifying **both** sides of an axis (`"left"` + `"right"`, or `"top"` + `"bottom"`)
+  makes that dimension **stretch** to fill the available space.
+- Specifying **one** side pins the edge to that side of the window; the dimension is fixed.
+- Default (no `anchor`) is **top-left fixed** — identical behaviour to a gadget-skin primitive.
+- An optional `min = { w = …, h = … }` sub-table sets a minimum logical size for the
+  resolved rectangle; the engine clamps to it before layout finalises.
+
+**The `frame{}` 9-slice primitive.** `frame{}` draws stretchable bitmap chrome. It
+splits a source image into the classic 3×3 grid using four inset distances and composites
+each cell into the matching region of the destination rect:
+
+```lua
+frame{ asset   = "chrome.png",
+       x = 0, y = 0, w = 1, h = 1,   -- destination (resolved via anchor)
+       anchor  = { "left", "right", "top", "bottom" },
+       slice   = { left = 12, right = 12, top = 28, bottom = 12 },
+       center  = "stretch" }          -- or "hollow" to leave the center transparent
+```
+
+- `slice` — pixel distances from each edge of the source image to the slice boundaries.
+  Corners are fixed (1:1 pixel copy). Edge cells stretch along the axis perpendicular to
+  the edge. The `center` cell either stretches to fill the interior or is left transparent
+  (`"hollow"`) for a frame-only effect. The engine clamps insets so they never exceed half
+  the source dimension in either axis.
+- `center = "stretch"` — draws all nine cells including the interior.
+- `center = "hollow"` — draws only the eight border cells, leaving the interior untouched.
+
+**Gadget skins are unchanged.** A skin that does not set `resizable = true` renders
+identically to before: the engine applies a single uniform scale from the declared canvas
+to the output surface. No GPU paths changed; the gadget pixel-identical guarantee is
+covered by a dedicated offscreen regression test (`gadget_path_still_uniform_scales`).
+
+**What the frame demo shows.** The bundled `frame` skin demonstrates a resizable window
+with a 9-slice bitmap title bar and border, anchor-resolved controls (close button pinned
+to top-right), and a stretching interior. A `view{}` region in the interior hosts a
+reflowing file-browser app-shell that reflows as the window is resized — the shell redraws
+at each new size by supplying a fresh texture.
+
+**What the frame demo does not do.** The hosted app-shell is a static visual — it is **not
+yet interactive**: there is no click-routing into the shell content, no navigation, no live
+file-list, and no audio. Those are planned for a later phase. The engine does not embed
+foreign-process windows and has no audio subsystem.
+
 ## Building & running
 
 Requires a recent Rust toolchain (edition 2024; built against Rust 1.96). Dependency
@@ -201,6 +278,16 @@ engine. Phase 5 was decomposed into sub-projects (5a–5e).
   rects; `Renderer::draw` accepts an embedder-provided texture lookup. The Headspace skin in
   the demo hosts a live CPU / MEM / SWP system-monitor painted into the `"display"` view each
   frame. GPU render-correctness covered by dedicated offscreen tests.
+- **Frame skins — resizable themed windows.** ✅ A second skin archetype: `resizable = true`
+  + `min_size` in the manifest switches to anchor-resolved layout. Primitives take an optional
+  `anchor` table (`"left"` / `"right"` / `"top"` / `"bottom"`; both sides of an axis →
+  stretch; default = top-left = fixed) plus an optional `min` size. The `frame{}` 9-slice
+  primitive splits a source bitmap along `slice = { left, right, top, bottom }` insets and
+  composites corners (fixed), edges (stretched), and center (`"stretch"` | `"hollow"`). The
+  engine resolves anchors to logical rects in a GPU-free layout pass; gadget skins render
+  pixel-identically (uniform scale path unchanged). The bundled `frame` demo skin hosts a
+  reflowing app-shell through the `view{}` seam — the shell is **not yet interactive** (no
+  navigation or live data; planned for a later phase).
 
 ## Repository layout
 
