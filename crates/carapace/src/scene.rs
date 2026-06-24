@@ -325,6 +325,34 @@ impl Scene {
             .collect()
     }
 
+    /// Topmost list row under `p`: `(on_select action, row index)`. Lists draw later → reverse.
+    pub fn hit_row(&self, p: Pt) -> Option<(String, usize)> {
+        for node in self.nodes.iter().rev() {
+            let Node::List {
+                region,
+                row_height,
+                on_select,
+                count,
+                ..
+            } = node
+            else {
+                continue;
+            };
+            let Some(action) = on_select else { continue };
+            if *row_height <= 0.0 || *count == 0 {
+                continue;
+            }
+            if p.x < region.x || p.x > region.x + region.w || p.y < region.y {
+                continue;
+            }
+            let idx = ((p.y - region.y) / row_height).floor() as usize;
+            if idx < *count {
+                return Some((action.clone(), idx));
+            }
+        }
+        None
+    }
+
     /// Topmost hotspot containing `p` (later nodes draw on top → iterate in reverse).
     pub fn hit(&self, p: Pt) -> Option<HandlerId> {
         for node in self.nodes.iter().rev() {
@@ -596,6 +624,56 @@ mod tests {
             scene.summary(),
             "canvas 200x100\nlist collection=entries rows=3"
         );
+    }
+
+    fn list_scene(count: usize, on_select: Option<&str>) -> Scene {
+        Scene {
+            canvas: (200, 100),
+            nodes: vec![Node::List {
+                collection: "c".to_string(),
+                region: ImageDest {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 100.0,
+                    h: 80.0,
+                },
+                row_height: 20.0,
+                on_select: on_select.map(|s| s.to_string()),
+                count,
+                template: vec![],
+            }],
+        }
+    }
+
+    #[test]
+    fn hit_row_maps_y_to_index() {
+        let s = list_scene(3, Some("open"));
+        assert_eq!(
+            s.hit_row(Pt { x: 50.0, y: 10.0 }),
+            Some(("open".to_string(), 0))
+        );
+        assert_eq!(
+            s.hit_row(Pt { x: 50.0, y: 30.0 }),
+            Some(("open".to_string(), 1))
+        );
+        assert_eq!(
+            s.hit_row(Pt { x: 50.0, y: 50.0 }),
+            Some(("open".to_string(), 2))
+        );
+    }
+
+    #[test]
+    fn hit_row_misses_beyond_count_and_outside_region() {
+        let s = list_scene(3, Some("open"));
+        assert_eq!(s.hit_row(Pt { x: 50.0, y: 70.0 }), None, "row 3 >= count");
+        assert_eq!(s.hit_row(Pt { x: 50.0, y: -5.0 }), None, "above region");
+        assert_eq!(s.hit_row(Pt { x: 150.0, y: 10.0 }), None, "right of region");
+    }
+
+    #[test]
+    fn hit_row_none_without_on_select() {
+        let s = list_scene(3, None);
+        assert_eq!(s.hit_row(Pt { x: 50.0, y: 10.0 }), None);
     }
 
     #[test]
