@@ -105,6 +105,79 @@ impl AudioBackend for MockAudio {
     }
 }
 
+use std::fs::File;
+use std::io::BufReader;
+
+/// Real audio backend backed by `rodio`. Constructed once at startup; call
+/// `RodioBackend::new()` which returns `Err(AudioError)` if no output device
+/// is available (so the demo can fall back to `NullAudio` without panicking).
+pub struct RodioBackend {
+    // MixerDeviceSink must be kept alive for audio to play through the OS sink.
+    _sink: rodio::MixerDeviceSink,
+    player: rodio::Player,
+    duration: Option<Duration>,
+}
+
+impl RodioBackend {
+    pub fn new() -> Result<Self, AudioError> {
+        let sink = rodio::DeviceSinkBuilder::open_default_sink()
+            .map_err(|e| AudioError::Open(e.to_string()))?;
+        let player = rodio::Player::connect_new(sink.mixer());
+        Ok(Self {
+            _sink: sink,
+            player,
+            duration: None,
+        })
+    }
+}
+
+impl AudioBackend for RodioBackend {
+    fn play(&mut self, path: &Path) -> Result<(), AudioError> {
+        use rodio::Source;
+        let file = File::open(path).map_err(|e| AudioError::Open(e.to_string()))?;
+        let decoder = rodio::Decoder::new(BufReader::new(file))
+            .map_err(|e| AudioError::Decode(e.to_string()))?;
+        self.duration = decoder.total_duration();
+        // Stop the current track then queue the new one on the same player.
+        self.player.stop();
+        self.player.append(decoder);
+        self.player.play();
+        Ok(())
+    }
+
+    fn set_paused(&mut self, paused: bool) {
+        if paused {
+            self.player.pause();
+        } else {
+            self.player.play();
+        }
+    }
+
+    fn stop(&mut self) {
+        self.player.stop();
+        self.duration = None;
+    }
+
+    fn seek(&mut self, fraction: f32) {
+        if let Some(dur) = self.duration {
+            let target = dur.mul_f32(fraction.clamp(0.0, 1.0));
+            let _ = self.player.try_seek(target); // best-effort; some formats can't seek
+        }
+    }
+
+    fn position(&self) -> Duration {
+        self.player.get_pos()
+    }
+
+    fn duration(&self) -> Option<Duration> {
+        self.duration
+    }
+
+    fn is_finished(&self) -> bool {
+        self.player.empty()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
