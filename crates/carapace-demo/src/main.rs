@@ -2,6 +2,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
+// Next task (FileBrowserHost) consumes StdFs, FileSystem, and DirEntryInfo.
+#[allow(dead_code)]
+mod file_browser_host;
+
 use carapace::command::{Command, SkinSource};
 use carapace::engine::{Engine, PointerEvent};
 use carapace::render::{RenderTarget, Renderer};
