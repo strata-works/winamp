@@ -2,8 +2,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
-// Next task (FileBrowserHost) consumes StdFs, FileSystem, and DirEntryInfo.
-#[allow(dead_code)]
 mod file_browser_host;
 
 use carapace::command::{Command, SkinSource};
@@ -104,19 +102,20 @@ impl Monitor {
     }
 }
 
-/// Inline skin for the nested app-shell shown inside the frame skin's `view{ id="app" }`.
-/// Design size matches the view's design rect (456×272).
+/// Inline skin for the nested file-browser shown inside the frame skin's `view{ id="app" }`.
+/// Design size matches the view's design rect (456×272). Two live lists + a path line.
 const APP_SHELL: &str = "\
     fill{ path = rect{x=0,y=0,w=456,h=272}, color = {r=18,g=20,b=26} }\n\
     fill{ path = rect{x=0,y=0,w=456,h=24}, color = {r=40,g=46,b=60}, anchor={'left','right','top'} }\n\
-    text{ text='Name', size=14, x=64, y=4, color={r=170,g=185,b=210}, anchor={'left','top'} }\n\
+    text{ value='current_path', size=13, x=8, y=4, color={r=170,g=185,b=210}, anchor={'left','right','top'} }\n\
     fill{ path = rect{x=0,y=24,w=120,h=248}, color = {r=24,g=28,b=38}, anchor={'left','top','bottom'} }\n\
-    text{ text='Places', size=13, x=12, y=32, color={r=150,g=165,b=190}, anchor={'left','top'} }\n\
-    text{ text='~/Music', size=13, x=12, y=52, color={r=130,g=200,b=150}, anchor={'left','top'} }\n\
-    text{ text='~/Docs',  size=13, x=12, y=72, color={r=130,g=200,b=150}, anchor={'left','top'} }\n\
-    text{ text='track-01.mp3   3.2M', size=13, x=132, y=32, color={r=200,g=210,b=225}, anchor={'left','right','top'} }\n\
-    text{ text='track-02.mp3   4.1M', size=13, x=132, y=52, color={r=200,g=210,b=225}, anchor={'left','right','top'} }\n\
-    text{ text='notes.txt      812B', size=13, x=132, y=72, color={r=200,g=210,b=225}, anchor={'left','right','top'} }\n";
+    list{ collection='shortcuts', x=8, y=32, w=104, h=232, row_height=20, on_select='open_shortcut',\n\
+          anchor={'left','top','bottom'},\n\
+          template={ { bind='label', x=4, y=2, size=13, color={r=150,g=200,b=170} } } }\n\
+    list{ collection='entries', x=128, y=32, w=320, h=232, row_height=20, on_select='open_entry',\n\
+          anchor={'left','right','top','bottom'},\n\
+          template={ { bind='name', x=4, y=2, size=13, color={r=200,g=210,b=225} },\n\
+                     { bind='size', right=8, y=2, size=13, halign='right', color={r=150,g=160,b=175} } } }\n";
 
 /// Design size of the app-shell skin (matches the `view{ id="app" }` design rect).
 const APP_SHELL_SIZE: (u32, u32) = (456, 272);
@@ -135,9 +134,23 @@ struct AppShell {
 }
 
 impl AppShell {
-    fn new(device: &wgpu::Device, outbox: WindowOutbox) -> Self {
+    fn new(device: &wgpu::Device, _outbox: WindowOutbox) -> Self {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|p| p.parent())
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| PathBuf::from("/"));
+        let shortcuts = vec![
+            ("Repo".to_string(), root.clone()),
+            ("Crates".to_string(), root.join("crates")),
+            ("Docs".to_string(), root.join("docs")),
+        ];
         let engine = Engine::new(
-            Box::new(DemoHost::with_outbox(outbox)),
+            Box::new(file_browser_host::FileBrowserHost::new(
+                file_browser_host::StdFs,
+                root,
+                shortcuts,
+            )),
             VocabRegistry::base(),
             SkinSource::inline(APP_SHELL, APP_SHELL_SIZE),
         )
@@ -151,6 +164,17 @@ impl AppShell {
             view,
             phys_size: phys,
         }
+    }
+
+    /// Drain queued navigation host-actions (the shell engine is not ticked elsewhere).
+    fn tick(&mut self, dt: std::time::Duration) {
+        self.engine.update(dt);
+    }
+
+    /// Forward a click already translated into the shell's local coords.
+    fn handle_click(&mut self, inner: Pt, view_w: f32, view_h: f32) {
+        self.engine
+            .handle_pointer_resolved(view_w, view_h, inner, PointerEvent::Press);
     }
 
     fn make_tex(device: &wgpu::Device, w: u32, h: u32) -> (wgpu::Texture, wgpu::TextureView) {
@@ -226,6 +250,18 @@ const INIT_SCALE: u32 = 3;
 
 fn skin_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+}
+
+/// Map an outer-logical point into a view region's local coords, or None if outside.
+/// The nested shell reflows to the view's logical size, so the mapping is a pure translate.
+fn view_local(p: Pt, dest: &carapace::scene::ImageDest) -> Option<Pt> {
+    if p.x < dest.x || p.x > dest.x + dest.w || p.y < dest.y || p.y > dest.y + dest.h {
+        return None;
+    }
+    Some(Pt {
+        x: p.x - dest.x,
+        y: p.y - dest.y,
+    })
 }
 
 fn demo_registry() -> VocabRegistry {
@@ -501,6 +537,9 @@ impl ApplicationHandler for App {
                 self.last = now;
 
                 self.engine.update(dt);
+                if let Some(shell) = self.app_shell.as_mut() {
+                    shell.tick(dt);
+                }
                 self.apply_window_ops(event_loop);
 
                 // Paint the monitor sub-render before borrowing self.engine immutably.
@@ -666,20 +705,40 @@ impl ApplicationHandler for App {
                     let phys = window.inner_size();
                     let (pw, ph) = (phys.width.max(1) as f64, phys.height.max(1) as f64);
                     if self.meta.resizable {
-                        // Frame skin: hotspots are drawn at layout-resolved positions, so hit-test
-                        // the resolved scene at the logical cursor (design-space hit-testing would
-                        // miss anchored controls once the window is resized).
                         let sf = window.scale_factor() as f32;
+                        let logical_w = pw as f32 / sf;
+                        let logical_h = ph as f32 / sf;
                         let p = Pt {
                             x: self.cursor.0 as f32 / sf,
                             y: self.cursor.1 as f32 / sf,
                         };
-                        self.engine.handle_pointer_resolved(
-                            pw as f32 / sf,
-                            ph as f32 / sf,
-                            p,
-                            PointerEvent::Press,
-                        );
+                        // If the click is inside the "app" view, route it into the nested shell
+                        // engine; otherwise hit-test the outer (chrome) scene.
+                        let app_dest = self
+                            .engine
+                            .layout(logical_w, logical_h)
+                            .views()
+                            .into_iter()
+                            .find(|(id, _)| id == "app")
+                            .map(|(_, d)| d);
+                        let routed = match (app_dest, self.app_shell.as_mut()) {
+                            (Some(dest), Some(shell)) => match view_local(p, &dest) {
+                                Some(inner) => {
+                                    shell.handle_click(inner, dest.w, dest.h);
+                                    true
+                                }
+                                None => false,
+                            },
+                            _ => false,
+                        };
+                        if !routed {
+                            self.engine.handle_pointer_resolved(
+                                logical_w,
+                                logical_h,
+                                p,
+                                PointerEvent::Press,
+                            );
+                        }
                     } else {
                         // Gadget skin: uniform scale, so map the physical cursor to design coords.
                         let (cw, ch) = self.engine.scene().canvas;
@@ -774,4 +833,38 @@ fn main() {
     let event_loop = EventLoop::new().unwrap();
     let mut app = App::new();
     event_loop.run_app(&mut app).unwrap();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::view_local;
+    use carapace::scene::{ImageDest, Pt};
+
+    #[test]
+    fn view_local_translates_inside_and_rejects_outside() {
+        let d = ImageDest {
+            x: 10.0,
+            y: 20.0,
+            w: 100.0,
+            h: 50.0,
+        };
+        assert_eq!(
+            view_local(Pt { x: 10.0, y: 20.0 }, &d),
+            Some(Pt { x: 0.0, y: 0.0 })
+        );
+        assert_eq!(
+            view_local(Pt { x: 60.0, y: 45.0 }, &d),
+            Some(Pt { x: 50.0, y: 25.0 })
+        );
+        assert_eq!(
+            view_local(Pt { x: 5.0, y: 45.0 }, &d),
+            None,
+            "left of region"
+        );
+        assert_eq!(
+            view_local(Pt { x: 60.0, y: 80.0 }, &d),
+            None,
+            "below region"
+        );
+    }
 }
