@@ -425,6 +425,52 @@ mod tests {
         }
     }
 
+    #[test]
+    fn list_prim_parses_region_and_template() {
+        use crate::scene::Node;
+        let q = new_queue();
+        let skin = load(
+            &src(
+                "list{ collection='entries', x=10, y=20, w=100, h=80, row_height=20, \
+                 on_select='open_entry', template={ \
+                   { bind='name', x=4, y=3, size=12, color={r=1,g=2,b=3} }, \
+                   { bind='size', right=4, y=3, size=12, halign='right', color={r=4,g=5,b=6} } } }",
+            ),
+            &FixtureHost::new(),
+            Rc::new(VocabRegistry::base()),
+            q,
+        )
+        .unwrap();
+        assert_eq!(skin.scene.nodes.len(), 1);
+        match &skin.scene.nodes[0] {
+            Node::List {
+                collection,
+                region,
+                row_height,
+                on_select,
+                count,
+                template,
+            } => {
+                assert_eq!(collection, "entries");
+                assert_eq!(
+                    (region.x, region.y, region.w, region.h),
+                    (10.0, 20.0, 100.0, 80.0)
+                );
+                assert_eq!(*row_height, 20.0);
+                assert_eq!(on_select.as_deref(), Some("open_entry"));
+                assert_eq!(*count, 0);
+                assert_eq!(template.len(), 2);
+                assert_eq!(template[0].bind, "name");
+                assert_eq!(template[0].x_from_left, Some(4.0));
+                assert_eq!(template[0].x_from_right, None);
+                assert_eq!(template[1].x_from_left, None);
+                assert_eq!(template[1].x_from_right, Some(4.0));
+                assert_eq!(template[1].halign, crate::scene::HAlign::Right);
+            }
+            other => panic!("expected List, got {other:?}"),
+        }
+    }
+
     /// String methods on literals are reachable via the string metatable (accepted,
     /// documented sandbox boundary), but `os`, `load`, and `require` remain blocked.
     #[test]
