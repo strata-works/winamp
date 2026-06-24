@@ -47,6 +47,24 @@ impl Engine {
         }
     }
 
+    /// Like `handle_pointer`, but hit-tests the layout-resolved scene for the given logical window
+    /// size, so anchored hotspots (frame skins) are hit where they are actually drawn rather than
+    /// at their design positions. `p` is in logical (window-point) coordinates.
+    pub fn handle_pointer_resolved(
+        &mut self,
+        logical_w: f32,
+        logical_h: f32,
+        p: Pt,
+        _kind: PointerEvent,
+    ) {
+        let hit = self.layout(logical_w, logical_h).hit(p);
+        if let Some(id) = hit
+            && let Err(e) = self.skin.fire(id)
+        {
+            eprintln!("carapace: handler error: {e:?}");
+        }
+    }
+
     /// Enqueue a meta command (the host app's Tab/H equivalents).
     pub fn handle_command(&mut self, cmd: Command) {
         self.queue.borrow_mut().push(cmd);

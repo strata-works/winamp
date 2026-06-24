@@ -661,12 +661,29 @@ impl ApplicationHandler for App {
                 if let Some(window) = self.window.as_ref() {
                     let phys = window.inner_size();
                     let (pw, ph) = (phys.width.max(1) as f64, phys.height.max(1) as f64);
-                    let (cw, ch) = self.engine.scene().canvas;
-                    // Map physical cursor -> canvas coords via the same ratio used for the blit.
-                    let cx = (self.cursor.0 * cw as f64 / pw) as f32;
-                    let cy = (self.cursor.1 * ch as f64 / ph) as f32;
-                    self.engine
-                        .handle_pointer(Pt { x: cx, y: cy }, PointerEvent::Press);
+                    if self.meta.resizable {
+                        // Frame skin: hotspots are drawn at layout-resolved positions, so hit-test
+                        // the resolved scene at the logical cursor (design-space hit-testing would
+                        // miss anchored controls once the window is resized).
+                        let sf = window.scale_factor() as f32;
+                        let p = Pt {
+                            x: self.cursor.0 as f32 / sf,
+                            y: self.cursor.1 as f32 / sf,
+                        };
+                        self.engine.handle_pointer_resolved(
+                            pw as f32 / sf,
+                            ph as f32 / sf,
+                            p,
+                            PointerEvent::Press,
+                        );
+                    } else {
+                        // Gadget skin: uniform scale, so map the physical cursor to design coords.
+                        let (cw, ch) = self.engine.scene().canvas;
+                        let cx = (self.cursor.0 * cw as f64 / pw) as f32;
+                        let cy = (self.cursor.1 * ch as f64 / ph) as f32;
+                        self.engine
+                            .handle_pointer(Pt { x: cx, y: cy }, PointerEvent::Press);
+                    }
                 }
             }
 

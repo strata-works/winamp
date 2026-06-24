@@ -1,8 +1,29 @@
 use carapace::command::SkinSource;
 use carapace::engine::Engine;
 use carapace::fixture::FixtureHost;
-use carapace::scene::Node;
+use carapace::scene::{Node, Pt};
 use carapace::vocab::VocabRegistry;
+
+// A right/top-anchored hotspot must be hittable where it is DRAWN after resize — the bug behind
+// "frame-skin buttons stop working once you resize the window". Design-space hit-testing misses it;
+// hit-testing the layout-resolved scene finds it.
+#[test]
+fn resolved_scene_hits_anchored_hotspot_at_its_drawn_position() {
+    const SKIN: &str = "region{ path = rect{x=90,y=4,w=8,h=8}, anchor={'right','top'}, on_press=function() end }\n";
+    let e = Engine::new(
+        Box::new(FixtureHost::new()),
+        VocabRegistry::base(),
+        SkinSource::inline(SKIN, (100, 100)),
+    )
+    .unwrap();
+    // At design size the hotspot sits at x 90..98.
+    assert!(e.scene().hit(Pt { x: 94.0, y: 8.0 }).is_some());
+    // Resized to 200 wide it rides the right edge -> x 190..198. The old design position now misses,
+    // but the resolved scene hits where the control is actually drawn.
+    let resolved = e.layout(200.0, 100.0);
+    assert!(resolved.hit(Pt { x: 194.0, y: 8.0 }).is_some());
+    assert!(resolved.hit(Pt { x: 94.0, y: 8.0 }).is_none());
+}
 
 // Multi-node frame skin for the spec §8 multi-anchor integration test.
 // Design canvas: 200×120.
