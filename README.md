@@ -113,7 +113,7 @@ region{ path = { ... next ... },        on_press = function() host.next() end }
 scrub{ x = 16, y = 72, w = 220, h = 8,                               -- click-to-seek bar
        value = "position", on_seek = "seek", color = { r=120, g=230, b=80 } }
 text{ x = 16, y = 84, value = "time",   size = 10, color = { r=200, g=200, b=200 } }
-list{ collection = "tracks", x = 16, y = 100, w = 220, h = 120,      -- clickable playlist
+list{ collection = "playlist", x = 16, y = 100, w = 220, h = 120,    -- clickable playlist
       row_height = 20, on_select = "play_index",
       template = { { bind = "title", x = 4, y = 3, size = 11,
                      color = { r=220, g=220, b=220 } } } }
