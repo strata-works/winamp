@@ -655,16 +655,11 @@ impl ApplicationHandler for App {
                 let mon_view = self.monitor.as_ref().map(|m| &m.view);
                 let shell_view = self.app_shell.as_ref().map(|s| &s.view);
 
-                // For a frame skin, resolve the scene at the window's LOGICAL size so that
-                // Renderer::draw scales by physical/logical = DPI (retina-correct).
-                // For a gadget skin, pass the design scene unchanged; render scales by
-                // physical/canvas (pixel-identical to before).
-                //
-                // Pointer mapping intentionally keeps the existing physical→design-canvas
-                // mapping for BOTH archetypes: engine.handle_pointer hit-tests engine.scene()
-                // (the design scene), so cursor coords must be in design space. Frame-skin
-                // hotspots (e.g. top-anchored title-bar buttons) coincide at the top edge;
-                // full anchored-hotspot hit-testing is deferred to a later spec.
+                // Both archetypes render and hit-test through engine.layout(): frame skins to the
+                // window's LOGICAL size (so Renderer::draw scales by physical/logical = DPI), gadget
+                // skins to their own canvas (identity for list/scrub-free skins, but enabling list
+                // expansion + scrub/row hit geometry). Pointer events for both go through
+                // handle_pointer_resolved against that same resolved scene.
                 let logical = (
                     gpu.config.width as f32 / scale_factor,
                     gpu.config.height as f32 / scale_factor,
