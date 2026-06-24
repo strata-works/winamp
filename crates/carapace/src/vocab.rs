@@ -416,6 +416,32 @@ impl Primitive for ListPrim {
     }
 }
 
+struct ScrubPrim;
+impl Primitive for ScrubPrim {
+    fn id(&self) -> &str {
+        "scrub"
+    }
+    fn build(&self, args: &Table, _ctx: &mut dyn BuildContext) -> Result<Vec<Node>, BuildError> {
+        let x: f32 = args.get("x").map_err(|_| BuildError::MissingField("x"))?;
+        let y: f32 = args.get("y").map_err(|_| BuildError::MissingField("y"))?;
+        let w: f32 = args.get("w").map_err(|_| BuildError::MissingField("w"))?;
+        let h: f32 = args.get("h").map_err(|_| BuildError::MissingField("h"))?;
+        let value_key: String = args
+            .get("value")
+            .map_err(|_| BuildError::MissingField("value"))?;
+        let on_seek: String = args
+            .get("on_seek")
+            .map_err(|_| BuildError::MissingField("on_seek"))?;
+        Ok(vec![Node::Scrub {
+            region: crate::scene::ImageDest { x, y, w, h },
+            value_key,
+            direction: parse_direction(args)?,
+            color: parse_color(args)?,
+            on_seek,
+        }])
+    }
+}
+
 struct TextPrim;
 impl Primitive for TextPrim {
     fn id(&self) -> &str {
@@ -492,6 +518,7 @@ impl VocabRegistry {
         r.register(Box::new(TextPrim));
         r.register(Box::new(ViewPrim));
         r.register(Box::new(ListPrim));
+        r.register(Box::new(ScrubPrim));
         r
     }
 }
@@ -856,8 +883,8 @@ mod tests {
     }
 
     #[test]
-    fn base_registry_now_has_eight() {
-        assert_eq!(VocabRegistry::base().iter().count(), 8);
+    fn base_registry_now_has_nine() {
+        assert_eq!(VocabRegistry::base().iter().count(), 9);
     }
 
     #[test]

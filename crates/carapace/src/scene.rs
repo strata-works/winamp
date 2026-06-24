@@ -199,6 +199,13 @@ pub enum Node {
         count: usize,
         template: RowTemplate,
     },
+    Scrub {
+        region: ImageDest,
+        value_key: String,
+        direction: FillDir,
+        color: Color,
+        on_seek: String,
+    },
     Text {
         content: TextContent,
         font: Option<std::sync::Arc<FontData>>,
@@ -294,6 +301,9 @@ impl Scene {
                 Node::List {
                     collection, count, ..
                 } => format!("list collection={collection} rows={count}"),
+                Node::Scrub {
+                    value_key, on_seek, ..
+                } => format!("scrub value={value_key} on_seek={on_seek}"),
                 Node::Text {
                     content,
                     font_name,
@@ -699,6 +709,34 @@ mod tests {
     fn hit_row_none_without_on_select() {
         let s = list_scene(3, None);
         assert_eq!(s.hit_row(Pt { x: 50.0, y: 10.0 }), None);
+    }
+
+    #[test]
+    fn summary_describes_scrub_nodes() {
+        let scene = Scene {
+            canvas: (300, 100),
+            nodes: vec![Node::Scrub {
+                region: ImageDest {
+                    x: 10.0,
+                    y: 20.0,
+                    w: 200.0,
+                    h: 12.0,
+                },
+                value_key: "position".to_string(),
+                direction: FillDir::Right,
+                color: Color {
+                    r: 1,
+                    g: 2,
+                    b: 3,
+                    a: 255,
+                },
+                on_seek: "seek".to_string(),
+            }],
+        };
+        assert_eq!(
+            scene.summary(),
+            "canvas 300x100\nscrub value=position on_seek=seek"
+        );
     }
 
     #[test]
