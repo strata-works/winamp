@@ -8,15 +8,18 @@ own layout, appearance, and interactive hotspots, and lets users hot-swap skins 
 runtime without losing app state.
 
 > **Status: working engine, built phase by phase — Phases 0–6 complete, plus the live
-> host-view region (`view{}` primitive) and frame-skin support (resizable themed windows).**
+> host-view region (`view{}` primitive), frame-skin support (resizable themed windows), and
+> the Headspace music player (real audio, playlist, click-to-seek).**
 > The demo is a borderless, transparent, draggable window where the skin *is* the interface —
-> vector skins self-shape into rounded silhouettes (the Headspace bitmap floats as a borderless
-> rectangle); the **H** key live-switches the whole window between a media player and a real
-> `sysinfo` system monitor on one engine, proving total window replacement and zero domain
-> knowledge (the only engine change was a transparent render base color); and the Headspace skin
-> hosts a live CPU / MEM / SWP system monitor painted into a declared `view{}` region each
-> frame. A separate `frame` skin demonstrates resizable themed windows with 9-slice chrome — the
-> window resizes, corners stay fixed, edges stretch. See [Current status](#current-status).
+> vector skins self-shape into rounded silhouettes; the **H** key live-switches the whole
+> window between a functioning music player and a real `sysinfo` system monitor on one engine,
+> proving total window replacement and zero domain knowledge (the only engine change was a
+> transparent render base color); the Headspace skin is a full music player (real audio via
+> `rodio`, clickable `list{}` playlist, `scrub{}` click-to-seek, next/prev, auto-advance,
+> elapsed/total time readout) and also hosts a live CPU / MEM / SWP system monitor in its
+> `view{}` region. A separate `frame` skin demonstrates resizable themed windows with 9-slice
+> chrome — the window resizes, corners stay fixed, edges stretch.
+> See [Current status](#current-status).
 
 ## Motivation
 
@@ -54,10 +57,11 @@ The load-bearing decisions:
 - **Embedded Lua scripting in a capability sandbox.** Skins bind to host actions/state
   through a Lua script whose `_ENV` is *only* the vocabulary constructors plus an
   allowlisted set of host actions — no raw `host`/`io`/`os`/filesystem access.
-- **Domain-neutral base vocabulary, host-extensible.** The engine ships eight generic
+- **Domain-neutral base vocabulary, host-extensible.** The engine ships nine generic
   base primitives: `fill` (background), `region` hotspots, value-bound `value_fill`,
   `image`, `frame` (9-slice stretchable chrome), `text`, `view` (live host-content
-  region; see below), and `list` (dynamic host-driven list; see below). Anything domain-flavored — "transport control", "audio visualizer" — is
+  region; see below), `list` (dynamic host-driven list; see below), and `scrub`
+  (click-to-seek progress bar; see below). Anything domain-flavored — "transport control", "audio visualizer" — is
   registered by the host as an extension.
   A host registers its own domain primitives through `VocabRegistry::register`; they appear in the
   skin env exactly like built-ins and can bind the host's allowlisted actions directly (e.g. the
@@ -76,7 +80,8 @@ The engine works end-to-end. Run `cargo run -p carapace-demo` and a borderless, 
 window opens running a skin (vector skins self-shape into rounded silhouettes; the Headspace
 bitmap floats as a rectangle); **Tab** cycles through the bundled skins, **H**
 live-switches the whole window between the media-player host and a real `sysinfo` system
-monitor, clicks hit free-form hotspots, a value-bound seek bar advances on wall-clock time,
+monitor, clicks hit free-form hotspots, the Headspace skin is a functioning music player
+(real audio via `rodio`, a clickable playlist, click-to-seek, next/prev, auto-advance),
 and a skin swap preserves playback state.
 
 What exists today:
@@ -91,27 +96,34 @@ What exists today:
 sandboxed `AssetResolver` scans a skin's `assets/` directory (Flutter-style: resolved =
 usable; `..` and symlinks can't escape the skin dir) and decodes PNG/JPEG/GIF/BMP to sRGB
 RGBA8 on first use. The new `image{ asset = "…", x, y }` primitive draws that bitmap
-through vello. The demo `reference` skin is the genuine `headspace.png` faceplate with two
-invisible hotspots (play/stop) and a live seek bar layered on top — exactly how real WMP
-skins are built. See
+through vello. The demo `reference` skin uses the genuine `headspace.png` faceplate as its
+visual chrome — exactly how real WMP skins are built. See
 [`docs/superpowers/specs/2026-06-18-phase5a-asset-loading-design.md`](docs/superpowers/specs/2026-06-18-phase5a-asset-loading-design.md).
 
 ## A skin, end to end
 
 A skin is a directory: a `skin.toml` manifest (canvas size, entry script, asset dir) plus
-a Lua entry script that calls vocabulary constructors. The demo's `reference` skin:
+a Lua entry script that calls vocabulary constructors. The demo's `reference` (Headspace)
+skin is a functioning music player:
 
 ```lua
 image{ asset = "headspace.png", x = 0, y = 0 }                       -- the bitmap faceplate
 region{ path = { ... play button ... }, on_press = function() host.toggle_play() end }
-region{ path = { ... stop button ... }, on_press = function() host.stop() end }
-value_fill{ path = { ... seek bar ... }, value = "position",         -- bound to host state
-            color = { r = 120, g = 230, b = 80 } }
+region{ path = { ... next ... },        on_press = function() host.next() end }
+scrub{ x = 16, y = 72, w = 220, h = 8,                               -- click-to-seek bar
+       value = "position", on_seek = "seek", color = { r=120, g=230, b=80 } }
+text{ x = 16, y = 84, value = "time",   size = 10, color = { r=200, g=200, b=200 } }
+list{ collection = "tracks", x = 16, y = 100, w = 220, h = 120,      -- clickable playlist
+      row_height = 20, on_select = "play_index",
+      template = { { bind = "title", x = 4, y = 3, size = 11,
+                     color = { r=220, g=220, b=220 } } } }
 ```
 
 The bitmap supplies the look; Lua supplies placement and interactivity; the host supplies
-state (`position`) and actions (`toggle_play`, `stop`). The engine knows nothing about
-"playback" — those are just an allowlisted action name and a bound state key.
+state (`position`, `time`, `track_title`, `playing`) and actions (`toggle_play`, `stop`,
+`next`, `prev`, `seek`, `play_index`). The engine knows nothing about "playback" — those
+are just allowlisted action names and bound state keys. (No volume, shuffle, repeat,
+drag-scrub, or playlist scrolling; bundled demo clips are generated public-domain tones.)
 
 ### The `view{}` primitive — live host-content region
 
@@ -213,7 +225,7 @@ reuses scene hit-testing and host actions — no new input primitive was require
 
 **What the frame demo does not do.** The file browser is read-only: there is no scroll,
 no selection highlight, no file opening, and no filesystem writes. The engine does not
-embed foreign-process windows and has no audio subsystem.
+embed foreign-process windows; it carries no audio subsystem (audio is in the demo host).
 
 ### The `list{}` primitive — dynamic host-driven lists
 
@@ -240,6 +252,26 @@ as a side effect and cannot be used inside a template.
 `list{}` carries no scrolling, selection highlight, or multi-column sort — those remain
 out of scope. It is the base seam by which a host exposes a flat, read-only collection to
 a skin.
+
+### The `scrub{}` primitive — click-to-seek progress bar
+
+A skin can render a click-to-seek progress bar with `scrub{}`:
+
+```lua
+scrub{ x = 16, y = 72, w = 220, h = 8,
+       value    = "position",    -- host state key (0.0–1.0 fill fraction)
+       on_seek  = "seek",        -- host action invoked with the 0..1 click fraction
+       color    = { r=120, g=230, b=80 },
+       direction = "right" }     -- optional; "right" (default) | "left" | "up" | "down"
+```
+
+`scrub{}` renders a proportional fill from host state `value` (like `value_fill`) but is
+hittable: clicking it invokes the `on_seek` host action with the click's 0..1 fraction,
+via `Scene::hit_scrub` — the seek-bar analogue of `list{}`'s `hit_row`. Gadget skins route
+through `Engine::layout()` so `scrub{}` (and `list{}`) work in them; the uniform-scale
+gadget path is unchanged and pixel-identical.
+
+`scrub{}` supports click-to-seek only; drag-scrub is out of scope.
 
 ## Building & running
 
@@ -316,6 +348,19 @@ engine. Phase 5 was decomposed into sub-projects (5a–5e).
   live, two-pane read-only file browser through the `view{}` seam — powered by the new
   `list{}` primitive, input routing into the nested shell engine, and a `FileBrowserHost`
   (read-only; no scroll, no selection highlight, no file opening).
+- **Headspace music player.** ✅ The Headspace gadget skin is now a functioning music
+  player. New `scrub{ x, y, w, h, value, on_seek, color, direction? }` base primitive: a
+  click-to-seek bar that renders a proportional fill from host state `value` and invokes the
+  `on_seek` host action with the click's 0..1 fraction (`Scene::hit_scrub`). Real audio
+  playback via `rodio` (behind a mockable `AudioBackend` trait; `RodioBackend` for the live
+  demo, `MockAudio` for tests, `NullAudio` fallback) drives `MusicPlayerHost`
+  (play/pause/stop/next/prev/seek/play_index, auto-advance on track end). The skin exposes
+  a clickable `list{}` playlist, a `scrub{}` seek bar, and an elapsed/total time readout.
+  Gadget skins now route through `Engine::layout()` so `list{}`/`scrub{}` work in them;
+  the uniform-scale pixel-identical guarantee is preserved (verified by
+  `gadget_path_still_uniform_scales`). Base vocab is now **nine** primitives. Limitations:
+  no volume/shuffle/repeat, click-to-seek only (no drag), no playlist scrolling; bundled
+  demo clips are generated public-domain tones, not a library scan.
 
 ## Repository layout
 
