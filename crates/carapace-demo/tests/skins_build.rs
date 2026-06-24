@@ -73,8 +73,8 @@ fn headspace_reference_builds_with_bitmap() {
         "has interactive hotspots"
     );
     assert!(
-        nodes.iter().any(|n| matches!(n, Node::ValueFill { .. })),
-        "has the live seek bar"
+        nodes.iter().any(|n| matches!(n, Node::Scrub { .. })),
+        "has the interactive scrub seek bar"
     );
     use carapace::scene::Paint;
     assert!(

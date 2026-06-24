@@ -22,9 +22,23 @@ region{ path = {{x=150,y=24},{x=178,y=24},{x=178,y=48},{x=150,y=48}},
 -- stop hotspot
 region{ path = {{x=184,y=24},{x=212,y=24},{x=212,y=48},{x=184,y=48}},
         on_press = function() host.stop() end }
--- live seek bar bound to position, over the bitmap's seek groove
-value_fill{ path = {{x=78,y=216},{x=264,y=216},{x=264,y=230},{x=78,y=230}},
-            value = "position", color = {r=120,g=230,b=80} }
+-- live, click-to-seek bar bound to position, over the bitmap's seek groove
+scrub{ x = 78, y = 216, w = 186, h = 14, value = "position", on_seek = "seek",
+       color = {r=120,g=230,b=80} }
+-- previous / next track hotspots (positioned over the artwork's transport area; tune to taste)
+region{ path = rect{x=218, y=24, w=24, h=24}, on_press = function() host.prev() end }
+region{ path = rect{x=246, y=24, w=24, h=24}, on_press = function() host.next() end }
+-- elapsed / total time readout
+text{ value = "time", font = "vt323.ttf", size = 13, x = 78, y = 232,
+      color = {r = 120, g = 230, b = 80} }
+-- clickable playlist (host-driven rows); clicking a row plays that track
+list{ collection = "playlist", x = 78, y = 250, w = 186, h = 120, row_height = 18,
+      on_select = "play_index",
+      template = {
+        { bind = "now",      x = 0,  y = 1, size = 13, color = {r=120,g=230,b=80} },
+        { bind = "title",    x = 14, y = 1, size = 13, color = {r=200,g=235,b=200} },
+        { bind = "duration", right = 2, y = 1, size = 13, halign = "right", color = {r=120,g=180,b=120} },
+      } }
 -- Gradient-chrome title label (static), centered on the header.
 text{ text = "HEADSPACE", font = "vt323.ttf", size = 22, x = 171, y = 6, halign = "center",
       gradient = { type = "linear", from = {x=0,y=0}, to = {x=0,y=22},
