@@ -641,13 +641,16 @@ impl ApplicationHandler for App {
                     gpu.config.width as f32 / scale_factor,
                     gpu.config.height as f32 / scale_factor,
                 );
-                let resolved;
-                let scene = if self.meta.resizable {
-                    resolved = self.engine.layout(logical.0, logical.1);
-                    &resolved
+                // Both archetypes resolve through layout(): frame skins to the logical window size,
+                // gadget skins to their own canvas (identity for list/scrub-free skins, but enabling
+                // list expansion + scrub/row hit geometry). Renderer still scales physical/canvas.
+                let resolved = if self.meta.resizable {
+                    self.engine.layout(logical.0, logical.1)
                 } else {
-                    self.engine.scene()
+                    let (cw, ch) = self.engine.scene().canvas;
+                    self.engine.layout(cw as f32, ch as f32)
                 };
+                let scene = &resolved;
                 let read_value = |k: &str| self.engine.state(k);
                 renderer.draw(
                     scene,
@@ -745,12 +748,17 @@ impl ApplicationHandler for App {
                             );
                         }
                     } else {
-                        // Gadget skin: uniform scale, so map the physical cursor to design coords.
+                        // Gadget skin: map physical cursor to canvas coords, then resolve-hit so
+                        // list rows + scrub bars are reachable (identity layout for plain skins).
                         let (cw, ch) = self.engine.scene().canvas;
                         let cx = (self.cursor.0 * cw as f64 / pw) as f32;
                         let cy = (self.cursor.1 * ch as f64 / ph) as f32;
-                        self.engine
-                            .handle_pointer(Pt { x: cx, y: cy }, PointerEvent::Press);
+                        self.engine.handle_pointer_resolved(
+                            cw as f32,
+                            ch as f32,
+                            Pt { x: cx, y: cy },
+                            PointerEvent::Press,
+                        );
                     }
                 }
             }
