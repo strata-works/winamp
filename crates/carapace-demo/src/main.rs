@@ -175,23 +175,29 @@ fn skin_root() -> PathBuf {
 /// `NullAudio` (silent, no panic) when no audio output device is available.
 fn make_music_player_host(outbox: WindowOutbox) -> music_player_host::MusicPlayerHost {
     let audio_dir = skin_root().join("skins/reference/assets/audio");
-    let playlist = vec![
-        music_player_host::Track {
-            title: "Headspace — Track 01".to_string(),
-            path: audio_dir.join("track-01.wav"),
-            duration: Some(std::time::Duration::from_secs(4)),
-        },
-        music_player_host::Track {
-            title: "Headspace — Track 02".to_string(),
-            path: audio_dir.join("track-02.wav"),
-            duration: Some(std::time::Duration::from_secs(4)),
-        },
-        music_player_host::Track {
-            title: "Headspace — Track 03".to_string(),
-            path: audio_dir.join("track-03.wav"),
-            duration: Some(std::time::Duration::from_secs(4)),
-        },
-    ];
+    let mut playlist = Vec::new();
+    // A real track, if dropped into the asset dir (gitignored — copyrighted audio isn't committed).
+    // Listed first so the default play is actual music rather than a placeholder tone.
+    let song = audio_dir.join("ameno-amapiano.mp3");
+    if song.exists() {
+        playlist.push(music_player_host::Track {
+            title: "Goya Menor — Ameno Amapiano".to_string(),
+            path: song,
+            duration: None, // derived live from the decoder when it plays
+        });
+    }
+    // Bundled CC0 placeholder tones (always present).
+    for (n, secs) in [
+        ("track-01.wav", 4),
+        ("track-02.wav", 4),
+        ("track-03.wav", 4),
+    ] {
+        playlist.push(music_player_host::Track {
+            title: format!("Headspace — {}", n.trim_end_matches(".wav")),
+            path: audio_dir.join(n),
+            duration: Some(std::time::Duration::from_secs(secs)),
+        });
+    }
     let backend: Box<dyn audio::AudioBackend> = match audio::RodioBackend::new() {
         Ok(b) => Box::new(b),
         Err(e) => {

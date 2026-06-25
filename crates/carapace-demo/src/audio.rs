@@ -122,8 +122,9 @@ pub struct RodioBackend {
 
 impl RodioBackend {
     pub fn new() -> Result<Self, AudioError> {
-        let sink = rodio::DeviceSinkBuilder::open_default_sink()
+        let mut sink = rodio::DeviceSinkBuilder::open_default_sink()
             .map_err(|e| AudioError::Open(e.to_string()))?;
+        sink.log_on_drop(false); // suppress rodio's stderr message on shutdown drop
         let player = rodio::Player::connect_new(sink.mixer());
         Ok(Self {
             _sink: sink,

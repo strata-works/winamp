@@ -31,20 +31,25 @@ region{ path = rect{x=246, y=24, w=24, h=24}, on_press = function() host.next() 
 -- elapsed / total time readout
 text{ value = "time", font = "vt323.ttf", size = 13, x = 78, y = 232,
       color = {r = 120, g = 230, b = 80} }
--- The player "screen": a dark rounded panel filling the faceplate's display window, hosting the
--- now-playing title + the clickable playlist. (The system monitor is no longer composited here;
--- it remains demoable via the H-key standalone sysmon skin.)
-fill{ path = rounded_rect{x=66, y=60, w=210, h=150, radius=8},
-      color = {r=16, g=20, b=26, a=235} }
--- now-playing title (host state), as the screen header
-text{ value = "track_title", font = "vt323.ttf", size = 15, x = 80, y = 66,
-      color = {r=150, g=235, b=170} }
+-- The player "screen": a translucent green-tinted glass panel over the faceplate's display
+-- window (the face shows through faintly — Y2K glass), hosting the now-playing title + the
+-- clickable playlist. (The system monitor is no longer composited here; it remains demoable
+-- via the H-key standalone sysmon skin.)
+fill{ path = rounded_rect{x=70, y=63, w=202, h=142, radius=11},
+      color = {r=8, g=26, b=18, a=200} }
+-- faint inner top-edge sheen for the glass feel
+fill{ path = rect{x=78, y=68, w=186, h=1}, color = {r=150, g=230, b=180, a=70} }
+-- now-playing title (host state), as the screen header, in bright phosphor green
+text{ value = "track_title", font = "vt323.ttf", size = 14, x = 82, y = 71,
+      color = {r=150, g=245, b=175} }
+-- separator under the header
+fill{ path = rect{x=82, y=90, w=178, h=1}, color = {r=90, g=170, b=120, a=150} }
 -- clickable playlist (host-driven rows) inside the screen; clicking a row plays that track
-list{ collection = "playlist", x = 80, y = 92, w = 182, h = 112, row_height = 21,
+list{ collection = "playlist", x = 82, y = 96, w = 178, h = 104, row_height = 20,
       on_select = "play_index",
       template = {
-        { bind = "now",   x = 0,  y = 3, size = 14, color = {r=120,g=230,b=80} },
-        { bind = "title", x = 18, y = 3, size = 14, color = {r=210,g=235,b=215} },
+        { bind = "now",   x = 0,  y = 2, size = 13, color = {r=120,g=235,b=110} },
+        { bind = "title", x = 16, y = 2, size = 13, color = {r=205,g=235,b=212} },
       } }
 -- Gradient-chrome title label (static), centered on the header.
 text{ text = "HEADSPACE", font = "vt323.ttf", size = 22, x = 171, y = 6, halign = "center",

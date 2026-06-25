@@ -129,9 +129,9 @@ impl carapace::host::Host for PlaylistMockHost {
         use carapace::state::StateValue;
         match key {
             "playing" => Some(StateValue::Bool(true)),
-            "position" => Some(StateValue::Scalar(0.4)),
-            "track_title" => Some(StateValue::Str("Headspace — Track 01".into())),
-            "time" => Some(StateValue::Str("0:01 / 0:04".into())),
+            "position" => Some(StateValue::Scalar(0.27)),
+            "track_title" => Some(StateValue::Str("Goya Menor — Ameno Amapiano".into())),
+            "time" => Some(StateValue::Str("0:44 / 2:44".into())),
             _ => None,
         }
     }
@@ -146,6 +146,7 @@ impl carapace::host::Host for PlaylistMockHost {
             return Vec::new();
         }
         [
+            "Goya Menor — Ameno Amapiano",
             "Headspace — Track 01",
             "Headspace — Track 02",
             "Headspace — Track 03",
