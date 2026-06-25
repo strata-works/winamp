@@ -58,6 +58,9 @@ impl Host for FfiHost {
                 buf.as_mut_ptr() as *mut c_char,
                 buf.len(),
             ) {
+                // Defensive: ensure NUL termination even if callee fills all 256 bytes
+                let last = buf.len() - 1;
+                buf[last] = 0;
                 let s = unsafe { CStr::from_ptr(buf.as_ptr() as *const c_char) }
                     .to_string_lossy()
                     .into_owned();
@@ -124,6 +127,7 @@ mod tests {
 
     #[test]
     fn invoke_routes_to_the_callback_and_action_is_advertised() {
+        INVOKED.store(0, Ordering::SeqCst);
         let mut host = FfiHost::new(vtable());
         assert!(host.actions().iter().any(|a| a.name == "toggle"));
         host.invoke("toggle", &[]);
