@@ -1,3 +1,8 @@
+// io-surface 0.16 is deprecated in favour of objc2-io-surface; we knowingly use it here.
+#[allow(deprecated)]
+use io_surface::{
+    IOSurfaceGetBaseAddress, IOSurfaceGetBytesPerRow, IOSurfaceLock, IOSurfaceRef, IOSurfaceUnlock,
+};
 use std::time::Duration;
 
 use carapace::engine::Engine;
@@ -130,4 +135,43 @@ pub fn readback_rgba(gpu: &GpuCtx, tex: &wgpu::Texture, w: u32, h: u32) -> Vec<u
     drop(data);
     buf.unmap();
     out
+}
+
+/// Tier identifies which present path the engine is using.
+#[repr(i32)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Tier {
+    Readback = 1,
+    Shared = 2,
+}
+
+/// Lock a caller-owned IOSurface (BGRA8 format) and copy tightly-packed RGBA8 rows into it,
+/// swizzling R↔B per pixel and honoring the surface's bytesPerRow stride.
+///
+/// # Safety
+/// `surface` must be a valid, live IOSurface of at least w×h pixels.
+/// `rgba` must contain exactly `w * h * 4` bytes of packed RGBA8 data.
+#[allow(deprecated)]
+pub unsafe fn copy_into_iosurface(surface: IOSurfaceRef, rgba: &[u8], w: u32, h: u32) {
+    let mut seed: u32 = 0;
+    // Lock for read+write (options = 0).
+    IOSurfaceLock(surface, 0, &mut seed);
+    let base = IOSurfaceGetBaseAddress(surface) as *mut u8;
+    let stride = IOSurfaceGetBytesPerRow(surface);
+    let row_bytes = (w * 4) as usize;
+    for y in 0..h as usize {
+        let src = rgba[y * row_bytes..(y + 1) * row_bytes].as_ptr();
+        let dst = base.add(y * stride);
+        // Swizzle RGBA → BGRA per pixel.
+        for x in 0..w as usize {
+            let s = src.add(x * 4);
+            let d = dst.add(x * 4);
+            // dst[0]=B=src[2], dst[1]=G=src[1], dst[2]=R=src[0], dst[3]=A=src[3]
+            d.write(*s.add(2)); // B
+            d.add(1).write(*s.add(1)); // G
+            d.add(2).write(*s); // R
+            d.add(3).write(*s.add(3)); // A
+        }
+    }
+    IOSurfaceUnlock(surface, 0, &mut seed);
 }
