@@ -25,21 +25,21 @@ region{ path = rect{x=246, y=24, w=24, h=24}, on_press = function() host.next() 
 -- ===== Modern player UI INSIDE the artwork's black screen (x ~68..274, y ~58..205). =====
 -- No panel of our own (the bitmap's dark screen is the background); clean system sans-serif,
 -- white/grey text with a single green accent, no pixel font or emoji markers.
-local SX, SY, SW = 80, 67, 182
+local SX, SY, SW = 74, 67, 196      -- use the full inner width of the artwork screen
 local ACCENT = {r=46, g=212, b=128}   -- the one accent colour (Spotify-ish green)
--- now-playing title (system font, bright)
-text{ value = "track_title", size = 15, x = SX, y = SY, color = {r=242, g=245, b=249} }
+-- now-playing title (system font, bright) — sized to fit the screen width
+text{ value = "track_title", size = 13, x = SX, y = SY, color = {r=242, g=245, b=249} }
 -- a slim spectrum band (12 thin bars), accent green, lower-key than before
 for i = 0, 11 do
-  value_fill{ path = rect{x = SX+2 + i*15, y = SY+22, w = 7, h = 16},
+  value_fill{ path = rect{x = SX+2 + i*16, y = SY+20, w = 8, h = 16},
               value = "viz_" .. i, direction = "up", color = ACCENT }
 end
 -- playlist; the now-playing row is marked by a soft accent highlight bar (no glyph)
-list{ collection = "playlist", x = SX, y = SY+46, w = SW, h = 64, row_height = 16,
+list{ collection = "playlist", x = SX, y = SY+44, w = SW, h = 64, row_height = 16,
       on_select = "play_index",
       selected = "current_index", highlight = { r = 46, g = 212, b = 128, a = 44 },
       template = {
-        { bind = "title", x = 4, y = 1, size = 13, color = {r=196, g=204, b=214} },
+        { bind = "title", x = 4, y = 1, size = 12, color = {r=196, g=204, b=214} },
       } }
 -- progress: a slim track with an accent-filled played portion
 fill{ path = rect{x=SX, y=SY+118, w=SW, h=3}, color = {r=78, g=86, b=98, a=170} }
