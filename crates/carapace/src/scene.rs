@@ -198,6 +198,17 @@ pub enum Node {
         /// Visible row count, set during layout expansion; 0 in the design scene.
         count: usize,
         template: RowTemplate,
+        /// Optional selection highlight: a bar of `highlight` color drawn behind the row whose
+        /// index equals the host scalar at `selected`. Both must be set for a highlight to appear.
+        highlight: Option<Color>,
+        selected: Option<String>,
+    },
+    Scrub {
+        region: ImageDest,
+        value_key: String,
+        direction: FillDir,
+        color: Color,
+        on_seek: String,
     },
     Text {
         content: TextContent,
@@ -294,6 +305,9 @@ impl Scene {
                 Node::List {
                     collection, count, ..
                 } => format!("list collection={collection} rows={count}"),
+                Node::Scrub {
+                    value_key, on_seek, ..
+                } => format!("scrub value={value_key} on_seek={on_seek}"),
                 Node::Text {
                     content,
                     font_name,
@@ -378,6 +392,32 @@ impl Scene {
         None
     }
 
+    /// Topmost scrub bar under `p`: `(on_seek action, click fraction 0..1)`. Reverse order.
+    pub fn hit_scrub(&self, p: Pt) -> Option<(String, f32)> {
+        for node in self.nodes.iter().rev() {
+            let Node::Scrub {
+                region, on_seek, ..
+            } = node
+            else {
+                continue;
+            };
+            if p.x < region.x
+                || p.x > region.x + region.w
+                || p.y < region.y
+                || p.y > region.y + region.h
+            {
+                continue;
+            }
+            let frac = if region.w > 0.0 {
+                ((p.x - region.x) / region.w).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            return Some((on_seek.clone(), frac));
+        }
+        None
+    }
+
     /// Topmost hotspot containing `p` (later nodes draw on top → iterate in reverse).
     pub fn hit(&self, p: Pt) -> Option<HandlerId> {
         for node in self.nodes.iter().rev() {
@@ -389,11 +429,123 @@ impl Scene {
         }
         None
     }
+
+    /// Topmost interactive node under `p`, by z-order (later nodes draw on top → reverse scan),
+    /// regardless of kind. This is what input dispatch should use: a `list{}` or `scrub{}` drawn
+    /// on top of a background hotspot (e.g. a full-window drag region) correctly wins the click.
+    pub fn hit_any(&self, p: Pt) -> Option<Hit> {
+        for node in self.nodes.iter().rev() {
+            match node {
+                Node::Hotspot { region, on_press } if region.contains(Point { x: p.x, y: p.y }) => {
+                    return Some(Hit::Handler(*on_press));
+                }
+                Node::List {
+                    region,
+                    row_height,
+                    on_select: Some(action),
+                    count,
+                    ..
+                } if *row_height > 0.0
+                    && *count > 0
+                    && p.x >= region.x
+                    && p.x <= region.x + region.w
+                    && p.y >= region.y =>
+                {
+                    let idx = ((p.y - region.y) / row_height).floor() as usize;
+                    if idx < *count {
+                        return Some(Hit::Row {
+                            action: action.clone(),
+                            index: idx,
+                        });
+                    }
+                }
+                Node::Scrub {
+                    region, on_seek, ..
+                } if p.x >= region.x
+                    && p.x <= region.x + region.w
+                    && p.y >= region.y
+                    && p.y <= region.y + region.h =>
+                {
+                    let fraction = if region.w > 0.0 {
+                        ((p.x - region.x) / region.w).clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    };
+                    return Some(Hit::Scrub {
+                        action: on_seek.clone(),
+                        fraction,
+                    });
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+}
+
+/// The topmost interactive node under a point — see [`Scene::hit_any`].
+#[derive(Clone, Debug, PartialEq)]
+pub enum Hit {
+    /// A polygon hotspot's registered handler.
+    Handler(HandlerId),
+    /// A `list{}` row: the `on_select` host action + the row index.
+    Row { action: String, index: usize },
+    /// A `scrub{}` bar: the `on_seek` host action + the 0..1 click fraction.
+    Scrub { action: String, fraction: f32 },
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hit_any_prefers_topmost_list_over_background_hotspot() {
+        let full = vec![
+            Pt { x: 0.0, y: 0.0 },
+            Pt { x: 200.0, y: 0.0 },
+            Pt { x: 200.0, y: 100.0 },
+            Pt { x: 0.0, y: 100.0 },
+        ];
+        let scene = Scene {
+            canvas: (200, 100),
+            nodes: vec![
+                // background full-canvas drag hotspot (drawn first / lowest z)
+                Node::Hotspot {
+                    region: region_of(&full),
+                    on_press: 7,
+                },
+                // a list drawn on top of it
+                Node::List {
+                    collection: "c".to_string(),
+                    region: ImageDest {
+                        x: 0.0,
+                        y: 0.0,
+                        w: 100.0,
+                        h: 60.0,
+                    },
+                    row_height: 20.0,
+                    on_select: Some("open".to_string()),
+                    count: 3,
+                    template: vec![],
+                    highlight: None,
+                    selected: None,
+                },
+            ],
+        };
+        // A click inside the list region resolves to the row, not the background drag.
+        assert_eq!(
+            scene.hit_any(Pt { x: 50.0, y: 30.0 }),
+            Some(Hit::Row {
+                action: "open".to_string(),
+                index: 1
+            })
+        );
+        // A click below the list (but inside the canvas) falls through to the drag hotspot.
+        assert_eq!(
+            scene.hit_any(Pt { x: 50.0, y: 80.0 }),
+            Some(Hit::Handler(7))
+        );
+    }
 
     fn l_path() -> Vec<Pt> {
         vec![
@@ -643,6 +795,8 @@ mod tests {
                 on_select: Some("open_entry".to_string()),
                 count: 3,
                 template: vec![],
+                highlight: None,
+                selected: None,
             }],
         };
         assert_eq!(
@@ -666,6 +820,8 @@ mod tests {
                 on_select: on_select.map(|s| s.to_string()),
                 count,
                 template: vec![],
+                highlight: None,
+                selected: None,
             }],
         }
     }
@@ -699,6 +855,81 @@ mod tests {
     fn hit_row_none_without_on_select() {
         let s = list_scene(3, None);
         assert_eq!(s.hit_row(Pt { x: 50.0, y: 10.0 }), None);
+    }
+
+    #[test]
+    fn summary_describes_scrub_nodes() {
+        let scene = Scene {
+            canvas: (300, 100),
+            nodes: vec![Node::Scrub {
+                region: ImageDest {
+                    x: 10.0,
+                    y: 20.0,
+                    w: 200.0,
+                    h: 12.0,
+                },
+                value_key: "position".to_string(),
+                direction: FillDir::Right,
+                color: Color {
+                    r: 1,
+                    g: 2,
+                    b: 3,
+                    a: 255,
+                },
+                on_seek: "seek".to_string(),
+            }],
+        };
+        assert_eq!(
+            scene.summary(),
+            "canvas 300x100\nscrub value=position on_seek=seek"
+        );
+    }
+
+    fn scrub_scene() -> Scene {
+        Scene {
+            canvas: (200, 50),
+            nodes: vec![Node::Scrub {
+                region: ImageDest {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 100.0,
+                    h: 20.0,
+                },
+                value_key: "position".to_string(),
+                direction: FillDir::Right,
+                color: Color {
+                    r: 0,
+                    g: 0,
+                    b: 0,
+                    a: 255,
+                },
+                on_seek: "seek".to_string(),
+            }],
+        }
+    }
+
+    #[test]
+    fn hit_scrub_maps_x_to_fraction() {
+        let s = scrub_scene();
+        assert_eq!(
+            s.hit_scrub(Pt { x: 0.0, y: 10.0 }),
+            Some(("seek".to_string(), 0.0))
+        );
+        assert_eq!(
+            s.hit_scrub(Pt { x: 50.0, y: 10.0 }),
+            Some(("seek".to_string(), 0.5))
+        );
+        assert_eq!(
+            s.hit_scrub(Pt { x: 100.0, y: 10.0 }),
+            Some(("seek".to_string(), 1.0))
+        );
+    }
+
+    #[test]
+    fn hit_scrub_misses_outside_region() {
+        let s = scrub_scene();
+        assert_eq!(s.hit_scrub(Pt { x: 50.0, y: 30.0 }), None, "below region");
+        assert_eq!(s.hit_scrub(Pt { x: -1.0, y: 10.0 }), None, "left of region");
     }
 
     #[test]

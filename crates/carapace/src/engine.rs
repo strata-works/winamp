@@ -57,18 +57,29 @@ impl Engine {
         p: Pt,
         _kind: PointerEvent,
     ) {
+        use crate::scene::Hit;
         let scene = self.layout(logical_w, logical_h);
-        if let Some(id) = scene.hit(p) {
-            if let Err(e) = self.skin.fire(id) {
-                eprintln!("carapace: handler error: {e:?}");
+        // Single z-ordered hit: the topmost interactive node wins, regardless of kind, so a
+        // list row / scrub drawn over a background drag hotspot beats it.
+        match scene.hit_any(p) {
+            Some(Hit::Handler(id)) => {
+                if let Err(e) = self.skin.fire(id) {
+                    eprintln!("carapace: handler error: {e:?}");
+                }
             }
-            return;
-        }
-        if let Some((action, index)) = scene.hit_row(p) {
-            self.queue.borrow_mut().push(Command::HostAction {
-                action,
-                args: vec![crate::host::Value::Num(index as f64)],
-            });
+            Some(Hit::Row { action, index }) => {
+                self.queue.borrow_mut().push(Command::HostAction {
+                    action,
+                    args: vec![crate::host::Value::Num(index as f64)],
+                });
+            }
+            Some(Hit::Scrub { action, fraction }) => {
+                self.queue.borrow_mut().push(Command::HostAction {
+                    action,
+                    args: vec![crate::host::Value::Num(fraction as f64)],
+                });
+            }
+            None => {}
         }
     }
 
@@ -145,6 +156,8 @@ impl Engine {
 fn expand_lists(scene: &mut Scene, host: &dyn Host) {
     use crate::scene::Node;
 
+    use crate::scene::{Paint, Pt};
+
     let mut out = Vec::with_capacity(scene.nodes.len());
     for node in std::mem::take(&mut scene.nodes) {
         let Node::List {
@@ -154,6 +167,8 @@ fn expand_lists(scene: &mut Scene, host: &dyn Host) {
             on_select,
             count: _,
             template,
+            highlight,
+            selected,
         } = node
         else {
             out.push(node);
@@ -175,7 +190,41 @@ fn expand_lists(scene: &mut Scene, host: &dyn Host) {
             on_select,
             count: n,
             template: template.clone(),
+            highlight,
+            selected: selected.clone(),
         });
+
+        // Selection highlight: a bar behind the row whose index == the host scalar at `selected`.
+        if let (Some(color), Some(key)) = (highlight, selected.as_deref())
+            && let Some(StateValue::Scalar(s)) = host.get(key)
+        {
+            let idx = s.max(0.0) as usize;
+            if idx < n {
+                let top = region.y + idx as f32 * row_height;
+                let bottom = top + row_height;
+                out.push(Node::Fill {
+                    path: vec![
+                        Pt {
+                            x: region.x,
+                            y: top,
+                        },
+                        Pt {
+                            x: region.x + region.w,
+                            y: top,
+                        },
+                        Pt {
+                            x: region.x + region.w,
+                            y: bottom,
+                        },
+                        Pt {
+                            x: region.x,
+                            y: bottom,
+                        },
+                    ],
+                    paint: Paint::Solid(color),
+                });
+            }
+        }
 
         for (i, row) in rows.iter().take(n).enumerate() {
             let row_top = region.y + i as f32 * row_height;

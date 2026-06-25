@@ -117,6 +117,59 @@ fn readback(o: &Offscreen) -> Vec<u8> {
     })
 }
 
+/// A throwaway host that feeds the reference (music-player) skin realistic state + playlist rows
+/// so the offscreen shot shows the screen panel, the now-playing title, and the populated playlist.
+struct PlaylistMockHost;
+impl carapace::host::Host for PlaylistMockHost {
+    fn name(&self) -> &str {
+        "shoot-music"
+    }
+    fn tick(&mut self, _dt: Duration) {}
+    fn get(&self, key: &str) -> Option<carapace::state::StateValue> {
+        use carapace::state::StateValue;
+        match key {
+            "playing" => Some(StateValue::Bool(true)),
+            "current_index" => Some(StateValue::Scalar(0.0)),
+            "position" => Some(StateValue::Scalar(0.27)),
+            "track_title" => Some(StateValue::Str("Goya Menor — Ameno Amapiano".into())),
+            "time" => Some(StateValue::Str("0:44 / 2:44".into())),
+            // static spectrum levels so the visualizer is visible in the still shot
+            k if k.starts_with("viz_") => {
+                let i = k[4..].parse::<u32>().unwrap_or(0) as f32;
+                Some(StateValue::Scalar(0.35 + 0.45 * (i * 1.3).sin().abs()))
+            }
+            _ => None,
+        }
+    }
+    fn actions(&self) -> &[carapace::host::ActionSpec] {
+        &[]
+    }
+    fn invoke(&mut self, _action: &str, _args: &[carapace::host::Value]) {}
+    fn rows(&self, collection: &str) -> Vec<carapace::host::Row> {
+        use carapace::host::Row;
+        use carapace::state::StateValue;
+        if collection != "playlist" {
+            return Vec::new();
+        }
+        [
+            "Goya Menor — Ameno Amapiano",
+            "Headspace · Tone 1",
+            "Headspace · Tone 2",
+            "Headspace · Tone 3",
+        ]
+        .iter()
+        .enumerate()
+        .map(|(i, t)| {
+            let now = if i == 0 { "▶" } else { "" };
+            Row::new()
+                .set("now", StateValue::Str(now.into()))
+                .set("title", StateValue::Str((*t).into()))
+                .set("duration", StateValue::Str("0:04".into()))
+        })
+        .collect()
+    }
+}
+
 fn shoot(skin: &str, out_dir: &Path) {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("skins")
@@ -127,6 +180,8 @@ fn shoot(skin: &str, out_dir: &Path) {
     // Pick the domain's host so bound metrics resolve (sysmon -> SysmonHost, else DemoHost).
     let host: Box<dyn carapace::host::Host> = if skin == "sysmon" {
         Box::new(carapace_demo::sysmon_host::SysmonHost::new())
+    } else if skin == "reference" {
+        Box::new(PlaylistMockHost)
     } else {
         Box::new(DemoHost::new())
     };
@@ -142,8 +197,10 @@ fn shoot(skin: &str, out_dir: &Path) {
 
     let o = offscreen(w, h);
     let mut r = Renderer::new(&o.device);
+    // Render through layout() (like the real gadget path) so list{} rows expand and scrub resolves.
+    let resolved = engine.layout(w as f32, h as f32);
     r.draw(
-        engine.scene(),
+        &resolved,
         |k| engine.state(k),
         |_| None,
         &RenderTarget {

@@ -263,6 +263,29 @@ impl Renderer {
                 }
                 Node::View { .. } => {} // composited in the live-host-view-region render task
                 Node::List { .. } => {} // expands to Text rows during layout; nothing to draw here
+                Node::Scrub {
+                    region,
+                    value_key,
+                    color,
+                    direction,
+                    ..
+                } => {
+                    use crate::scene::FillDir;
+                    let v = value_of(&read_value, value_key);
+                    let x0 = region.x as f64;
+                    let y0 = region.y as f64;
+                    let x1 = (region.x + region.w) as f64;
+                    let y1 = (region.y + region.h) as f64;
+                    let w = region.w as f64;
+                    let h = region.h as f64;
+                    let extent = match direction {
+                        FillDir::Right => Rect::new(x0, y0, x0 + w * v, y1),
+                        FillDir::Left => Rect::new(x1 - w * v, y0, x1, y1),
+                        FillDir::Up => Rect::new(x0, y1 - h * v, x1, y1),
+                        FillDir::Down => Rect::new(x0, y0, x1, y0 + h * v),
+                    };
+                    vs.fill(Fill::NonZero, xform, vcolor(*color), None, &extent);
+                }
                 Node::Frame {
                     image,
                     dest,

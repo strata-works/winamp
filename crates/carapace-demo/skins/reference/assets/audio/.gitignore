@@ -1,0 +1,5 @@
+# Local real-music drops (copyrighted) — keep CC0 .wav tones committed
+*.mp3
+*.flac
+*.ogg
+*.m4a

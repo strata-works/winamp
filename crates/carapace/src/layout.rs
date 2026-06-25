@@ -110,6 +110,12 @@ fn node_bbox(node: &Node) -> Option<Rect> {
             w: region.w,
             h: region.h,
         }),
+        Node::Scrub { region, .. } => Some(Rect {
+            x: region.x,
+            y: region.y,
+            w: region.w,
+            h: region.h,
+        }),
         Node::Fill { path, .. } | Node::ValueFill { path, .. } => path_bbox(path),
         Node::Hotspot { region, .. } => {
             let pts: Vec<Pt> = region
@@ -156,6 +162,14 @@ fn transform_node(node: &Node, from: Rect, to: Rect) -> Node {
             };
         }
         Node::List { region, .. } => {
+            *region = ImageDest {
+                x: to.x,
+                y: to.y,
+                w: to.w,
+                h: to.h,
+            };
+        }
+        Node::Scrub { region, .. } => {
             *region = ImageDest {
                 x: to.x,
                 y: to.y,
@@ -213,7 +227,43 @@ pub fn resolve_scene(design: &Scene, anchors: &[Anchors], logical: (f32, f32)) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scene::{ImageDest, Node, Scene};
+    use crate::scene::{Color, ImageDest, Node, Scene};
+
+    #[test]
+    fn scrub_region_stretches_under_full_anchors() {
+        let design = Scene {
+            canvas: (200, 100),
+            nodes: vec![Node::Scrub {
+                region: ImageDest {
+                    x: 10.0,
+                    y: 10.0,
+                    w: 180.0,
+                    h: 12.0,
+                },
+                value_key: "position".to_string(),
+                direction: crate::scene::FillDir::Right,
+                color: Color {
+                    r: 0,
+                    g: 0,
+                    b: 0,
+                    a: 255,
+                },
+                on_seek: "seek".to_string(),
+            }],
+        };
+        let anchors = vec![Anchors {
+            left: true,
+            right: true,
+            top: true,
+            bottom: false,
+            min: None,
+        }];
+        let resolved = resolve_scene(&design, &anchors, (300.0, 100.0));
+        match &resolved.nodes[0] {
+            Node::Scrub { region, .. } => assert_eq!(region.w, 280.0, "w stretched by +100"),
+            other => panic!("expected Scrub, got {other:?}"),
+        }
+    }
 
     #[test]
     fn list_region_stretches_under_full_anchors() {
@@ -231,6 +281,8 @@ mod tests {
                 on_select: None,
                 count: 0,
                 template: vec![],
+                highlight: None,
+                selected: None,
             }],
         };
         let anchors = vec![Anchors {

@@ -2,14 +2,16 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
+// AudioBackend/AudioError consumed by music_player_host + main wiring.
+mod audio;
 mod file_browser_host;
+mod music_player_host;
 
 use carapace::command::{Command, SkinSource};
 use carapace::engine::{Engine, PointerEvent};
 use carapace::render::{RenderTarget, Renderer};
 use carapace::scene::Pt;
 use carapace::vocab::VocabRegistry;
-use carapace_demo::demo_host::DemoHost;
 use carapace_demo::sysmon_host::SysmonHost;
 use carapace_demo::window::{WindowOp, WindowOutbox};
 
@@ -18,89 +20,6 @@ use winit::event::{ElementState, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::keyboard::{Key, NamedKey};
 use winit::window::{Window, WindowId};
-
-const MONITOR_SKIN: &str = "\
-    fill{ path = rect{x=0,y=0,w=210,h=150}, color = {r=12,g=16,b=22} }\n\
-    gauge{ x = 18,  y = 20, value = 'cpu',  label = 'CPU' }\n\
-    gauge{ x = 85,  y = 20, value = 'mem',  label = 'MEM' }\n\
-    gauge{ x = 152, y = 20, value = 'swap', label = 'SWP' }\n";
-
-/// The monitor texture matches the reference skin's `view{ id="display" }` rect so the gauges
-/// composite 1:1 with no stretch.
-const MONITOR_SIZE: (u32, u32) = (210, 150);
-
-/// A self-contained sub-renderer that paints a live CPU/MEM/SWP gauge into an off-screen
-/// texture. The texture view is supplied to the main `Renderer::draw` as the `"display"` view.
-struct Monitor {
-    engine: carapace::engine::Engine,
-    renderer: Renderer,
-    /// Held for ownership only — the TextureView references this texture's memory.
-    _tex: wgpu::Texture,
-    view: wgpu::TextureView,
-    size: (u32, u32),
-}
-
-impl Monitor {
-    fn new(device: &wgpu::Device, outbox: WindowOutbox) -> Self {
-        let mut reg = VocabRegistry::base();
-        reg.register(Box::new(carapace_demo::gauge::GaugePrim));
-        let engine = Engine::new(
-            Box::new(carapace_demo::sysmon_host::SysmonHost::with_outbox(outbox)),
-            reg,
-            carapace::command::SkinSource::inline(MONITOR_SKIN, MONITOR_SIZE),
-        )
-        .unwrap();
-        let (_tex, view) = Self::make_tex(device, MONITOR_SIZE.0, MONITOR_SIZE.1);
-        Self {
-            engine,
-            renderer: Renderer::new(device),
-            _tex,
-            view,
-            size: MONITOR_SIZE,
-        }
-    }
-
-    fn make_tex(device: &wgpu::Device, w: u32, h: u32) -> (wgpu::Texture, wgpu::TextureView) {
-        let tex = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("monitor"),
-            size: wgpu::Extent3d {
-                width: w,
-                height: h,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        });
-        let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
-        (tex, view)
-    }
-
-    fn paint(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, dt: std::time::Duration) {
-        self.engine.update(dt);
-        self.renderer.draw(
-            self.engine.scene(),
-            |k| self.engine.state(k),
-            |_| None,
-            &RenderTarget {
-                device,
-                queue,
-                view: &self.view,
-                width: self.size.0,
-                height: self.size.1,
-                base_color: carapace::scene::Color {
-                    r: 12,
-                    g: 16,
-                    b: 22,
-                    a: 255,
-                },
-            },
-        );
-    }
-}
 
 /// Inline skin for the nested file-browser shown inside the frame skin's `view{ id="app" }`.
 /// Design size matches the view's design rect (456×272). Two live lists + a path line.
@@ -246,10 +165,46 @@ const MEDIA_SKINS: &[&str] = &[
     "skins/frame",
 ];
 const SYSMON_SKINS: &[&str] = &["skins/sysmon"];
-const INIT_SCALE: u32 = 3;
+const INIT_SCALE: u32 = 2;
 
 fn skin_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+}
+
+/// Construct a `MusicPlayerHost` with the bundled demo clips. Falls back to
+/// `NullAudio` (silent, no panic) when no audio output device is available.
+fn make_music_player_host(outbox: WindowOutbox) -> music_player_host::MusicPlayerHost {
+    let audio_dir = skin_root().join("skins/reference/assets/audio");
+    let mut playlist = Vec::new();
+    // A real track, if dropped into the asset dir (gitignored — copyrighted audio isn't committed).
+    // Listed first so the default play is actual music rather than a placeholder tone.
+    let song = audio_dir.join("ameno-amapiano.mp3");
+    if song.exists() {
+        playlist.push(music_player_host::Track {
+            title: "Goya Menor — Ameno Amapiano".to_string(),
+            path: song,
+            duration: None, // derived live from the decoder when it plays
+        });
+    }
+    // Bundled CC0 placeholder tones (always present).
+    for (i, n) in ["track-01.wav", "track-02.wav", "track-03.wav"]
+        .into_iter()
+        .enumerate()
+    {
+        playlist.push(music_player_host::Track {
+            title: format!("Headspace · Tone {}", i + 1),
+            path: audio_dir.join(n),
+            duration: Some(std::time::Duration::from_secs(4)),
+        });
+    }
+    let backend: Box<dyn audio::AudioBackend> = match audio::RodioBackend::new() {
+        Ok(b) => Box::new(b),
+        Err(e) => {
+            eprintln!("carapace-demo: no audio device ({e:?}); player is silent");
+            Box::new(audio::NullAudio)
+        }
+    };
+    music_player_host::MusicPlayerHost::new(backend, playlist, outbox)
 }
 
 /// Map an outer-logical point into a view region's local coords, or None if outside.
@@ -351,7 +306,6 @@ struct App {
     window: Option<Arc<Window>>,
     gpu: Option<Gpu>,
     renderer: Option<Renderer>,
-    monitor: Option<Monitor>,
     app_shell: Option<AppShell>,
     window_outbox: WindowOutbox,
 }
@@ -361,7 +315,7 @@ impl App {
         let window_outbox: WindowOutbox = Default::default();
         let (src, _canvas, meta) = load_source_from(MEDIA_SKINS, 0);
         let engine = Engine::new(
-            Box::new(DemoHost::with_outbox(window_outbox.clone())),
+            Box::new(make_music_player_host(window_outbox.clone())),
             demo_registry(),
             src,
         )
@@ -376,7 +330,6 @@ impl App {
             window: None,
             gpu: None,
             renderer: None,
-            monitor: None,
             app_shell: None,
             window_outbox,
         }
@@ -409,8 +362,9 @@ impl ApplicationHandler for App {
         }
 
         // Size window from the skin manifest archetype.
-        // Frame skin: open at design (canvas) logical size and allow resize.
-        // Gadget skin: open at canvas * INIT_SCALE, non-resizable (unchanged behaviour).
+        // Frame skin: open at design (canvas) logical size and allow anchor-reflow resize.
+        // Gadget skin: open at canvas * INIT_SCALE, resizable by uniform zoom (aspect locked
+        // in the Resized handler so the face scales without stretching).
         let (cw, ch) = self.engine.scene().canvas;
         let mut attrs = Window::default_attributes()
             .with_decorations(false)
@@ -427,7 +381,8 @@ impl ApplicationHandler for App {
             }
         } else {
             attrs = attrs
-                .with_resizable(false)
+                .with_resizable(true)
+                .with_min_inner_size(winit::dpi::LogicalSize::new(cw, ch))
                 .with_inner_size(winit::dpi::LogicalSize::new(
                     cw * INIT_SCALE,
                     ch * INIT_SCALE,
@@ -505,13 +460,11 @@ impl ApplicationHandler for App {
         });
 
         let renderer = Renderer::new(&gpu.device);
-        let monitor = Monitor::new(&gpu.device, self.window_outbox.clone());
         let app_shell = AppShell::new(&gpu.device, self.window_outbox.clone());
 
         self.window = Some(window.clone());
         self.gpu = Some(gpu);
         self.renderer = Some(renderer);
-        self.monitor = Some(monitor);
         self.app_shell = Some(app_shell);
 
         window.request_redraw();
@@ -522,12 +475,26 @@ impl ApplicationHandler for App {
             WindowEvent::CloseRequested => event_loop.exit(),
 
             WindowEvent::Resized(size) => {
+                let w = size.width.max(1);
+                let mut h = size.height.max(1);
+                // Gadget skins zoom uniformly: lock the window to the canvas aspect ratio so the
+                // face never stretches. Honor the dragged width; derive the height.
+                let (cw, ch) = self.engine.scene().canvas;
+                if !self.meta.resizable && cw > 0 && ch > 0 {
+                    let target_h = ((w as f32) * ch as f32 / cw as f32).round().max(1.0) as u32;
+                    if target_h.abs_diff(h) > 1
+                        && let Some(win) = &self.window
+                    {
+                        let _ = win.request_inner_size(winit::dpi::PhysicalSize::new(w, target_h));
+                        h = target_h;
+                    }
+                }
                 if let Some(gpu) = self.gpu.as_mut() {
-                    gpu.reconfigure(size.width, size.height);
+                    gpu.reconfigure(w, h);
                 }
                 // Request a redraw so the next frame re-evaluates engine.layout at the new size.
-                if let Some(w) = &self.window {
-                    w.request_redraw();
+                if let Some(win) = &self.window {
+                    win.request_redraw();
                 }
             }
 
@@ -541,11 +508,6 @@ impl ApplicationHandler for App {
                     shell.tick(dt);
                 }
                 self.apply_window_ops(event_loop);
-
-                // Paint the monitor sub-render before borrowing self.engine immutably.
-                if let (Some(mon), Some(gpu)) = (self.monitor.as_mut(), self.gpu.as_ref()) {
-                    mon.paint(&gpu.device, &gpu.queue, dt);
-                }
 
                 // For a frame skin, resolve the outer scene and paint the app-shell sub-renderer
                 // into its texture BEFORE the outer mutable borrows of gpu/renderer.
@@ -618,44 +580,30 @@ impl ApplicationHandler for App {
                     .texture
                     .create_view(&wgpu::TextureViewDescriptor::default());
 
-                // Capture sub-renderer texture views before the immutable engine borrows.
-                let mon_view = self.monitor.as_ref().map(|m| &m.view);
+                // Capture the app-shell texture view before the immutable engine borrows.
                 let shell_view = self.app_shell.as_ref().map(|s| &s.view);
 
-                // For a frame skin, resolve the scene at the window's LOGICAL size so that
-                // Renderer::draw scales by physical/logical = DPI (retina-correct).
-                // For a gadget skin, pass the design scene unchanged; render scales by
-                // physical/canvas (pixel-identical to before).
-                //
-                // Pointer mapping intentionally keeps the existing physical→design-canvas
-                // mapping for BOTH archetypes: engine.handle_pointer hit-tests engine.scene()
-                // (the design scene), so cursor coords must be in design space. Frame-skin
-                // hotspots (e.g. top-anchored title-bar buttons) coincide at the top edge;
-                // full anchored-hotspot hit-testing is deferred to a later spec.
+                // Both archetypes render and hit-test through engine.layout(): frame skins to the
+                // window's LOGICAL size (so Renderer::draw scales by physical/logical = DPI), gadget
+                // skins to their own canvas (identity for list/scrub-free skins, but enabling list
+                // expansion + scrub/row hit geometry). Pointer events for both go through
+                // handle_pointer_resolved against that same resolved scene.
                 let logical = (
                     gpu.config.width as f32 / scale_factor,
                     gpu.config.height as f32 / scale_factor,
                 );
-                let resolved;
-                let scene = if self.meta.resizable {
-                    resolved = self.engine.layout(logical.0, logical.1);
-                    &resolved
+                let resolved = if self.meta.resizable {
+                    self.engine.layout(logical.0, logical.1)
                 } else {
-                    self.engine.scene()
+                    let (cw, ch) = self.engine.scene().canvas;
+                    self.engine.layout(cw as f32, ch as f32)
                 };
+                let scene = &resolved;
                 let read_value = |k: &str| self.engine.state(k);
                 renderer.draw(
                     scene,
                     read_value,
-                    |id| {
-                        if id == "app" {
-                            shell_view
-                        } else if id == "display" {
-                            mon_view
-                        } else {
-                            None
-                        }
-                    },
+                    |id| if id == "app" { shell_view } else { None },
                     &RenderTarget {
                         device: &gpu.device,
                         queue: &gpu.queue,
@@ -740,12 +688,17 @@ impl ApplicationHandler for App {
                             );
                         }
                     } else {
-                        // Gadget skin: uniform scale, so map the physical cursor to design coords.
+                        // Gadget skin: map physical cursor to canvas coords, then resolve-hit so
+                        // list rows + scrub bars are reachable (identity layout for plain skins).
                         let (cw, ch) = self.engine.scene().canvas;
                         let cx = (self.cursor.0 * cw as f64 / pw) as f32;
                         let cy = (self.cursor.1 * ch as f64 / ph) as f32;
-                        self.engine
-                            .handle_pointer(Pt { x: cx, y: cy }, PointerEvent::Press);
+                        self.engine.handle_pointer_resolved(
+                            cw as f32,
+                            ch as f32,
+                            Pt { x: cx, y: cy },
+                            PointerEvent::Press,
+                        );
                     }
                 }
             }
@@ -781,7 +734,7 @@ impl ApplicationHandler for App {
                         let host: Box<dyn carapace::host::Host> = if self.sysmon {
                             Box::new(SysmonHost::with_outbox(self.window_outbox.clone()))
                         } else {
-                            Box::new(DemoHost::with_outbox(self.window_outbox.clone()))
+                            Box::new(make_music_player_host(self.window_outbox.clone()))
                         };
                         self.engine
                             .handle_command(Command::SwitchHost { host, skin: src });
@@ -805,9 +758,11 @@ impl ApplicationHandler for App {
 /// recreation is needed. The resulting `Resized` event drives `gpu.reconfigure`.
 fn apply_window_archetype(window: &Option<Arc<Window>>, meta: &SkinMeta, canvas: (u32, u32)) {
     if let Some(w) = window {
-        w.set_resizable(meta.resizable);
+        // Both archetypes are resizable; gadget skins zoom uniformly (aspect locked on resize),
+        // frame skins reflow via anchors.
+        w.set_resizable(true);
+        let (cw, ch) = canvas;
         if meta.resizable {
-            let (cw, ch) = canvas;
             let _ = w.request_inner_size(winit::dpi::LogicalSize::new(cw, ch));
             if let Some((mw, mh)) = meta.min_size {
                 w.set_min_inner_size(Some(winit::dpi::LogicalSize::new(mw, mh)));
@@ -818,9 +773,8 @@ fn apply_window_archetype(window: &Option<Arc<Window>>, meta: &SkinMeta, canvas:
                 w.set_max_inner_size::<winit::dpi::LogicalSize<u32>>(None);
             }
         } else {
-            w.set_min_inner_size::<winit::dpi::LogicalSize<u32>>(None);
+            w.set_min_inner_size(Some(winit::dpi::LogicalSize::new(cw, ch)));
             w.set_max_inner_size::<winit::dpi::LogicalSize<u32>>(None);
-            let (cw, ch) = canvas;
             let _ = w.request_inner_size(winit::dpi::LogicalSize::new(
                 cw * INIT_SCALE,
                 ch * INIT_SCALE,

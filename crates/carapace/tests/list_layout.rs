@@ -31,6 +31,85 @@ fn name_row(n: &str) -> Row {
     Row::new().set("name", StateValue::Str(n.into()))
 }
 
+/// Host that exposes a selection index via `get("sel")` and a fixed row set.
+struct SelHost {
+    rows: Vec<Row>,
+    sel: f32,
+}
+impl Host for SelHost {
+    fn name(&self) -> &str {
+        "sel-test"
+    }
+    fn tick(&mut self, _dt: Duration) {}
+    fn get(&self, key: &str) -> Option<StateValue> {
+        (key == "sel").then_some(StateValue::Scalar(self.sel))
+    }
+    fn actions(&self) -> &[ActionSpec] {
+        &[]
+    }
+    fn invoke(&mut self, _action: &str, _args: &[Value]) {}
+    fn rows(&self, _collection: &str) -> Vec<Row> {
+        self.rows.clone()
+    }
+}
+
+#[test]
+fn list_highlight_draws_a_fill_behind_the_selected_row() {
+    const SKIN_HL: &str = "list{ collection='entries', x=0, y=0, w=100, h=80, row_height=20, \
+        on_select='open', selected='sel', highlight={r=9,g=9,b=9}, \
+        template={ { bind='name', x=4, y=2, size=12, color={r=1,g=2,b=3} } } }";
+    let host = SelHost {
+        rows: vec![name_row("a"), name_row("b"), name_row("c")],
+        sel: 1.0, // highlight the middle row (y in [20,40))
+    };
+    let engine = Engine::new(
+        Box::new(host),
+        VocabRegistry::base(),
+        SkinSource::inline(SKIN_HL, (100, 100)),
+    )
+    .unwrap();
+    let scene = engine.layout(100.0, 100.0);
+
+    // Exactly one Fill, a full-width bar at the selected row's top (y=20).
+    let fills: Vec<&Vec<carapace::scene::Pt>> = scene
+        .nodes
+        .iter()
+        .filter_map(|n| match n {
+            Node::Fill { path, .. } => Some(path),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(fills.len(), 1, "one highlight fill for the selected row");
+    assert_eq!(
+        fills[0][0],
+        carapace::scene::Pt { x: 0.0, y: 20.0 },
+        "bar top at row 1"
+    );
+    assert_eq!(
+        fills[0][2],
+        carapace::scene::Pt { x: 100.0, y: 40.0 },
+        "bar bottom-right at row 1 end"
+    );
+}
+
+#[test]
+fn list_without_selected_draws_no_highlight() {
+    let host = ListHost {
+        rows: vec![name_row("a"), name_row("b")],
+    };
+    let engine = Engine::new(
+        Box::new(host),
+        VocabRegistry::base(),
+        SkinSource::inline(SKIN, (100, 100)),
+    )
+    .unwrap();
+    let scene = engine.layout(100.0, 100.0);
+    assert!(
+        !scene.nodes.iter().any(|n| matches!(n, Node::Fill { .. })),
+        "no highlight without selected/highlight"
+    );
+}
+
 const SKIN: &str = "list{ collection='entries', x=0, y=0, w=100, h=80, row_height=20, \
     on_select='open', template={ { bind='name', x=4, y=2, size=12, color={r=1,g=2,b=3} } } }";
 

@@ -450,6 +450,7 @@ mod tests {
                 on_select,
                 count,
                 template,
+                ..
             } => {
                 assert_eq!(collection, "entries");
                 assert_eq!(
@@ -468,6 +469,38 @@ mod tests {
                 assert_eq!(template[1].halign, crate::scene::HAlign::Right);
             }
             other => panic!("expected List, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn scrub_prim_parses_region_value_and_on_seek() {
+        use crate::scene::{FillDir, Node};
+        let q = new_queue();
+        let skin = load(
+            &src("scrub{ x=10, y=20, w=200, h=12, value='position', on_seek='seek', color={r=1,g=2,b=3} }"),
+            &FixtureHost::new(),
+            Rc::new(VocabRegistry::base()),
+            q,
+        )
+        .unwrap();
+        assert_eq!(skin.scene.nodes.len(), 1);
+        match &skin.scene.nodes[0] {
+            Node::Scrub {
+                region,
+                value_key,
+                direction,
+                on_seek,
+                ..
+            } => {
+                assert_eq!(
+                    (region.x, region.y, region.w, region.h),
+                    (10.0, 20.0, 200.0, 12.0)
+                );
+                assert_eq!(value_key, "position");
+                assert_eq!(on_seek, "seek");
+                assert!(matches!(direction, FillDir::Right));
+            }
+            other => panic!("expected Scrub, got {other:?}"),
         }
     }
 
