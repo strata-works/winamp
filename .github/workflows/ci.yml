@@ -17,8 +17,9 @@ jobs:
         run: rustup toolchain install stable --profile minimal --component rustfmt,clippy
       - name: Install system deps
         # parley/fontique link the system `fontconfig` (for system-font fallback) on Linux
-        # via yeslogic-fontconfig-sys; without the dev package the build script fails.
-        run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev pkg-config
+        # via yeslogic-fontconfig-sys; rodio (carapace-demo audio) pulls in alsa-sys, which
+        # needs the ALSA dev package (`alsa.pc`) to build. Without these the build scripts fail.
+        run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev libasound2-dev pkg-config
       - name: Cache cargo
         uses: actions/cache@v4
         with:
