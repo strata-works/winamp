@@ -31,6 +31,9 @@ pub unsafe extern "C" fn carapace_create(
     w: u32,
     h: u32,
 ) -> *mut CarapaceEngine {
+    if skin_dir.is_null() {
+        return std::ptr::null_mut();
+    }
     let dir = match unsafe { CStr::from_ptr(skin_dir) }.to_str() {
         Ok(s) => std::path::PathBuf::from(s),
         Err(_) => return std::ptr::null_mut(),
