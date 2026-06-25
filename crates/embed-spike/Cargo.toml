@@ -1,0 +1,14 @@
+[package]
+name = "embed-spike"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]   # cdylib for Swift to link; rlib so tests/examples can use it
+
+[dependencies]
+carapace = { path = "../carapace" }
+
+[dev-dependencies]
+carapace = { path = "../carapace" }
