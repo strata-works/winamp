@@ -16,8 +16,7 @@ runtime without losing app state.
 > proving total window replacement and zero domain knowledge (the only engine change was a
 > transparent render base color); the Headspace skin is a full music player (real audio via
 > `rodio`, clickable `list{}` playlist, `scrub{}` click-to-seek, next/prev, auto-advance,
-> elapsed/total time readout) and also hosts a live CPU / MEM / SWP system monitor in its
-> `view{}` region. A separate `frame` skin demonstrates resizable themed windows with 9-slice
+> elapsed/total time readout). A separate `frame` skin demonstrates resizable themed windows with 9-slice
 > chrome — the window resizes, corners stay fixed, edges stretch.
 > See [Current status](#current-status).
 
@@ -141,10 +140,11 @@ and passes a lookup closure to `Renderer::draw`. The engine composites the
 supplied texture into the rect, framing it with the surrounding skin chrome. If
 the embedder supplies no texture for a view, the rect is left transparent.
 
-The Headspace skin in the demo declares a `view{ id = "display", … }` and the
-demo embedder paints a live CPU / MEM / SWP system-monitor readout into it each
-frame — the same seam by which any host embeds carapace and "wears" a skin around
-its own live content.
+The bundled `frame` skin declares a `view{ id = "app", … }` and the demo embedder
+paints a live, navigable file browser (a nested carapace engine) into it each frame
+— the same seam by which any host embeds carapace and "wears" a skin around its own
+live content. (The standalone `sysmon` skin shows CPU / MEM / SWP gauges; the
+Headspace music player fills its central screen with its own playlist.)
 
 **What this is not.** `view{}` is a same-process, same-device GPU-texture
 transport. It does not embed foreign-process apps (no OS-window reparenting).
@@ -334,9 +334,9 @@ engine. Phase 5 was decomposed into sub-projects (5a–5e).
 - **Live host-view region (`view{}` primitive).** ✅ A skin declares a named rectangular
   cutout; the embedder supplies a `wgpu::TextureView` (same device, zero-copy) and carapace
   composites it into the rect, framing it with skin chrome. `Scene::views()` exposes the
-  rects; `Renderer::draw` accepts an embedder-provided texture lookup. The Headspace skin in
-  the demo hosts a live CPU / MEM / SWP system-monitor painted into the `"display"` view each
-  frame. GPU render-correctness covered by dedicated offscreen tests.
+  rects; `Renderer::draw` accepts an embedder-provided texture lookup. The bundled `frame`
+  skin hosts a live, navigable file browser (a nested carapace engine) in its `"app"` view
+  each frame. GPU render-correctness covered by dedicated offscreen tests.
 - **Frame skins — resizable themed windows.** ✅ A second skin archetype: `resizable = true`
   + `min_size` in the manifest switches to anchor-resolved layout. Primitives take an optional
   `anchor` table (`"left"` / `"right"` / `"top"` / `"bottom"`; both sides of an axis →

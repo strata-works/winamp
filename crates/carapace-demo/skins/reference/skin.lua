@@ -31,21 +31,23 @@ region{ path = rect{x=246, y=24, w=24, h=24}, on_press = function() host.next() 
 -- elapsed / total time readout
 text{ value = "time", font = "vt323.ttf", size = 13, x = 78, y = 232,
       color = {r = 120, g = 230, b = 80} }
--- clickable playlist (host-driven rows); clicking a row plays that track
-list{ collection = "playlist", x = 78, y = 250, w = 186, h = 120, row_height = 18,
+-- The player "screen": a dark rounded panel filling the faceplate's display window, hosting the
+-- now-playing title + the clickable playlist. (The system monitor is no longer composited here;
+-- it remains demoable via the H-key standalone sysmon skin.)
+fill{ path = rounded_rect{x=66, y=60, w=210, h=150, radius=8},
+      color = {r=16, g=20, b=26, a=235} }
+-- now-playing title (host state), as the screen header
+text{ value = "track_title", font = "vt323.ttf", size = 15, x = 80, y = 66,
+      color = {r=150, g=235, b=170} }
+-- clickable playlist (host-driven rows) inside the screen; clicking a row plays that track
+list{ collection = "playlist", x = 80, y = 92, w = 182, h = 112, row_height = 21,
       on_select = "play_index",
       template = {
-        { bind = "now",      x = 0,  y = 1, size = 13, color = {r=120,g=230,b=80} },
-        { bind = "title",    x = 14, y = 1, size = 13, color = {r=200,g=235,b=200} },
-        { bind = "duration", right = 2, y = 1, size = 13, halign = "right", color = {r=120,g=180,b=120} },
+        { bind = "now",   x = 0,  y = 3, size = 14, color = {r=120,g=230,b=80} },
+        { bind = "title", x = 18, y = 3, size = 14, color = {r=210,g=235,b=215} },
       } }
 -- Gradient-chrome title label (static), centered on the header.
 text{ text = "HEADSPACE", font = "vt323.ttf", size = 22, x = 171, y = 6, halign = "center",
       gradient = { type = "linear", from = {x=0,y=0}, to = {x=0,y=22},
                    stops = { {at=0, color={r=235,g=245,b=255}},
                              {at=1, color={r=120,g=150,b=210}} } } }
--- the host-content region: the embedder paints a live monitor into the display screen
-view{ id = "display", x = 66, y = 60, w = 210, h = 150 }
--- Live value-bound readout: the current track title from host state, left-aligned over the display.
-text{ value = "track_title", font = "vt323.ttf", size = 16, x = 78, y = 196,
-      color = {r = 120, g = 230, b = 80} }
