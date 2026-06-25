@@ -23,8 +23,19 @@ region{ path = rect{x=246, y=24, w=24, h=24}, on_press = function() host.next() 
 -- ===== The CRT screen (compact, set into the faceplate's forehead window). =====
 -- Top: now-playing line + a spectrum visualizer. Middle: the playlist. Foot: seek bar + time.
 -- Sized to clear the speakers, the transport, and the artwork's seek groove.
-local SX, SY, SW, SH = 86, 62, 170, 140
-fill{ path = rounded_rect{x=SX, y=SY, w=SW, h=SH, radius=13}, color = {r=6, g=18, b=12, a=235} }
+local SX, SY, SW, SH = 86, 64, 170, 134
+-- Green bezel: the screen reads as set INTO the head's own plastic housing (molded-plastic
+-- gradient, lighter at top), so it belongs to the artwork instead of floating over it.
+fill{ path = rounded_rect{x=SX-7, y=SY-7, w=SW+14, h=SH+14, radius=20}, gradient = {
+  type = "linear", from = {x=0, y=SY-7}, to = {x=0, y=SY+SH+7},
+  stops = { {at=0, color={r=168, g=222, b=92}}, {at=0.5, color={r=118, g=180, b=52}},
+            {at=1, color={r=66, g=116, b=28}} } } }
+-- top-edge bezel highlight (a thin bright rim for the molded-plastic sheen)
+fill{ path = rounded_rect{x=SX-5, y=SY-6, w=SW+10, h=6, radius=10}, color = {r=205, g=240, b=150, a=120} }
+-- inset shadow rim around the glass
+fill{ path = rounded_rect{x=SX-3, y=SY-3, w=SW+6, h=SH+6, radius=16}, color = {r=24, g=44, b=18} }
+-- the dark phosphor glass
+fill{ path = rounded_rect{x=SX, y=SY, w=SW, h=SH, radius=13}, color = {r=6, g=18, b=12, a=246} }
 -- CRT scanlines
 for y = SY + 4, SY + SH - 6, 3 do
   fill{ path = rect{x=SX+4, y=y, w=SW-8, h=1}, color = {r=0, g=0, b=0, a=55} }

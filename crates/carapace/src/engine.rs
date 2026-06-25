@@ -57,25 +57,29 @@ impl Engine {
         p: Pt,
         _kind: PointerEvent,
     ) {
+        use crate::scene::Hit;
         let scene = self.layout(logical_w, logical_h);
-        if let Some(id) = scene.hit(p) {
-            if let Err(e) = self.skin.fire(id) {
-                eprintln!("carapace: handler error: {e:?}");
+        // Single z-ordered hit: the topmost interactive node wins, regardless of kind, so a
+        // list row / scrub drawn over a background drag hotspot beats it.
+        match scene.hit_any(p) {
+            Some(Hit::Handler(id)) => {
+                if let Err(e) = self.skin.fire(id) {
+                    eprintln!("carapace: handler error: {e:?}");
+                }
             }
-            return;
-        }
-        if let Some((action, index)) = scene.hit_row(p) {
-            self.queue.borrow_mut().push(Command::HostAction {
-                action,
-                args: vec![crate::host::Value::Num(index as f64)],
-            });
-            return;
-        }
-        if let Some((action, fraction)) = scene.hit_scrub(p) {
-            self.queue.borrow_mut().push(Command::HostAction {
-                action,
-                args: vec![crate::host::Value::Num(fraction as f64)],
-            });
+            Some(Hit::Row { action, index }) => {
+                self.queue.borrow_mut().push(Command::HostAction {
+                    action,
+                    args: vec![crate::host::Value::Num(index as f64)],
+                });
+            }
+            Some(Hit::Scrub { action, fraction }) => {
+                self.queue.borrow_mut().push(Command::HostAction {
+                    action,
+                    args: vec![crate::host::Value::Num(fraction as f64)],
+                });
+            }
+            None => {}
         }
     }
 
