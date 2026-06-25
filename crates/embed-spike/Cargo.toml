@@ -9,6 +9,9 @@ crate-type = ["cdylib", "rlib"]   # cdylib for Swift to link; rlib so tests/exam
 
 [dependencies]
 carapace = { path = "../carapace" }
+pollster = "0.4.0"
+wgpu = "29.0.3"
 
 [dev-dependencies]
 carapace = { path = "../carapace" }
+image = "0.24"
