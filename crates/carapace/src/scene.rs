@@ -198,6 +198,10 @@ pub enum Node {
         /// Visible row count, set during layout expansion; 0 in the design scene.
         count: usize,
         template: RowTemplate,
+        /// Optional selection highlight: a bar of `highlight` color drawn behind the row whose
+        /// index equals the host scalar at `selected`. Both must be set for a highlight to appear.
+        highlight: Option<Color>,
+        selected: Option<String>,
     },
     Scrub {
         region: ImageDest,
@@ -679,6 +683,8 @@ mod tests {
                 on_select: Some("open_entry".to_string()),
                 count: 3,
                 template: vec![],
+                highlight: None,
+                selected: None,
             }],
         };
         assert_eq!(
@@ -702,6 +708,8 @@ mod tests {
                 on_select: on_select.map(|s| s.to_string()),
                 count,
                 template: vec![],
+                highlight: None,
+                selected: None,
             }],
         }
     }

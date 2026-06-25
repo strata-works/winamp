@@ -450,6 +450,7 @@ mod tests {
                 on_select,
                 count,
                 template,
+                ..
             } => {
                 assert_eq!(collection, "entries");
                 assert_eq!(

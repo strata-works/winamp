@@ -86,6 +86,7 @@ impl Host for MusicPlayerHost {
     fn get(&self, key: &str) -> Option<StateValue> {
         match key {
             "playing" => Some(StateValue::Bool(self.playing)),
+            "current_index" => Some(StateValue::Scalar(self.current as f32)),
             "position" => {
                 let pos = self.backend.position().as_secs_f32();
                 let dur = self

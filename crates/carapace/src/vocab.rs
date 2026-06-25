@@ -398,6 +398,11 @@ impl Primitive for ListPrim {
             .get("row_height")
             .map_err(|_| BuildError::MissingField("row_height"))?;
         let on_select: Option<String> = args.get("on_select")?;
+        let selected: Option<String> = args.get("selected")?;
+        let highlight = match args.get::<Option<Table>>("highlight")? {
+            Some(t) => Some(color_from_table(&t)?),
+            None => None,
+        };
         let tpl_table: Table = args
             .get("template")
             .map_err(|_| BuildError::MissingField("template"))?;
@@ -412,6 +417,8 @@ impl Primitive for ListPrim {
             on_select,
             count: 0,
             template,
+            highlight,
+            selected,
         }])
     }
 }

@@ -281,6 +281,8 @@ mod tests {
                 on_select: None,
                 count: 0,
                 template: vec![],
+                highlight: None,
+                selected: None,
             }],
         };
         let anchors = vec![Anchors {

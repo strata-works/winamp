@@ -187,15 +187,14 @@ fn make_music_player_host(outbox: WindowOutbox) -> music_player_host::MusicPlaye
         });
     }
     // Bundled CC0 placeholder tones (always present).
-    for (n, secs) in [
-        ("track-01.wav", 4),
-        ("track-02.wav", 4),
-        ("track-03.wav", 4),
-    ] {
+    for (i, n) in ["track-01.wav", "track-02.wav", "track-03.wav"]
+        .into_iter()
+        .enumerate()
+    {
         playlist.push(music_player_host::Track {
-            title: format!("Headspace — {}", n.trim_end_matches(".wav")),
+            title: format!("Headspace · Tone {}", i + 1),
             path: audio_dir.join(n),
-            duration: Some(std::time::Duration::from_secs(secs)),
+            duration: Some(std::time::Duration::from_secs(4)),
         });
     }
     let backend: Box<dyn audio::AudioBackend> = match audio::RodioBackend::new() {

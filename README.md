@@ -237,6 +237,8 @@ list{
   x = 160, y = 30, w = 280, h = 340,
   row_height = 22,
   on_select  = "open_entry",       -- host action invoked with the row index on click
+  selected   = "current_index",    -- optional: host scalar state = the highlighted row index
+  highlight  = { r=36, g=110, b=64, a=150 }, -- optional: bar drawn behind the selected row
   template   = {                   -- one or more cells per row (plain data tables)
     { bind = "name", x = 4, y = 2, size = 13, color = { r=220, g=220, b=220 } },
   },
@@ -244,14 +246,15 @@ list{
 ```
 
 The engine calls `Host::rows(collection)` each frame and expands the `template` — a list of
-`{ bind, x|right, y, size, color, halign }` cells — into one row per item, clamped to the
-visible region. Clicking a row invokes the `on_select` host action with the row index.
+`{ bind, x|right, y, size, color, halign, font }` cells — into one row per item, clamped to the
+visible region. Clicking a row invokes the `on_select` host action with the row index. When both
+`selected` (a host scalar state key) and `highlight` (a color) are given, a bar of that color is
+drawn behind the row whose index equals the state — a selection / now-playing highlight.
 Template cells are plain data tables, **not** `text{}` calls; constructors emit scene nodes
 as a side effect and cannot be used inside a template.
 
-`list{}` carries no scrolling, selection highlight, or multi-column sort — those remain
-out of scope. It is the base seam by which a host exposes a flat, read-only collection to
-a skin.
+`list{}` carries no scrolling or multi-column sort — those remain out of scope. It is the base
+seam by which a host exposes a flat, read-only collection to a skin.
 
 ### The `scrub{}` primitive — click-to-seek progress bar
 
