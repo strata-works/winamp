@@ -165,7 +165,7 @@ const MEDIA_SKINS: &[&str] = &[
     "skins/frame",
 ];
 const SYSMON_SKINS: &[&str] = &["skins/sysmon"];
-const INIT_SCALE: u32 = 3;
+const INIT_SCALE: u32 = 2;
 
 fn skin_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -362,8 +362,9 @@ impl ApplicationHandler for App {
         }
 
         // Size window from the skin manifest archetype.
-        // Frame skin: open at design (canvas) logical size and allow resize.
-        // Gadget skin: open at canvas * INIT_SCALE, non-resizable (unchanged behaviour).
+        // Frame skin: open at design (canvas) logical size and allow anchor-reflow resize.
+        // Gadget skin: open at canvas * INIT_SCALE, resizable by uniform zoom (aspect locked
+        // in the Resized handler so the face scales without stretching).
         let (cw, ch) = self.engine.scene().canvas;
         let mut attrs = Window::default_attributes()
             .with_decorations(false)
@@ -380,7 +381,8 @@ impl ApplicationHandler for App {
             }
         } else {
             attrs = attrs
-                .with_resizable(false)
+                .with_resizable(true)
+                .with_min_inner_size(winit::dpi::LogicalSize::new(cw, ch))
                 .with_inner_size(winit::dpi::LogicalSize::new(
                     cw * INIT_SCALE,
                     ch * INIT_SCALE,
@@ -473,12 +475,26 @@ impl ApplicationHandler for App {
             WindowEvent::CloseRequested => event_loop.exit(),
 
             WindowEvent::Resized(size) => {
+                let w = size.width.max(1);
+                let mut h = size.height.max(1);
+                // Gadget skins zoom uniformly: lock the window to the canvas aspect ratio so the
+                // face never stretches. Honor the dragged width; derive the height.
+                let (cw, ch) = self.engine.scene().canvas;
+                if !self.meta.resizable && cw > 0 && ch > 0 {
+                    let target_h = ((w as f32) * ch as f32 / cw as f32).round().max(1.0) as u32;
+                    if target_h.abs_diff(h) > 1
+                        && let Some(win) = &self.window
+                    {
+                        let _ = win.request_inner_size(winit::dpi::PhysicalSize::new(w, target_h));
+                        h = target_h;
+                    }
+                }
                 if let Some(gpu) = self.gpu.as_mut() {
-                    gpu.reconfigure(size.width, size.height);
+                    gpu.reconfigure(w, h);
                 }
                 // Request a redraw so the next frame re-evaluates engine.layout at the new size.
-                if let Some(w) = &self.window {
-                    w.request_redraw();
+                if let Some(win) = &self.window {
+                    win.request_redraw();
                 }
             }
 
@@ -742,9 +758,11 @@ impl ApplicationHandler for App {
 /// recreation is needed. The resulting `Resized` event drives `gpu.reconfigure`.
 fn apply_window_archetype(window: &Option<Arc<Window>>, meta: &SkinMeta, canvas: (u32, u32)) {
     if let Some(w) = window {
-        w.set_resizable(meta.resizable);
+        // Both archetypes are resizable; gadget skins zoom uniformly (aspect locked on resize),
+        // frame skins reflow via anchors.
+        w.set_resizable(true);
+        let (cw, ch) = canvas;
         if meta.resizable {
-            let (cw, ch) = canvas;
             let _ = w.request_inner_size(winit::dpi::LogicalSize::new(cw, ch));
             if let Some((mw, mh)) = meta.min_size {
                 w.set_min_inner_size(Some(winit::dpi::LogicalSize::new(mw, mh)));
@@ -755,9 +773,8 @@ fn apply_window_archetype(window: &Option<Arc<Window>>, meta: &SkinMeta, canvas:
                 w.set_max_inner_size::<winit::dpi::LogicalSize<u32>>(None);
             }
         } else {
-            w.set_min_inner_size::<winit::dpi::LogicalSize<u32>>(None);
+            w.set_min_inner_size(Some(winit::dpi::LogicalSize::new(cw, ch)));
             w.set_max_inner_size::<winit::dpi::LogicalSize<u32>>(None);
-            let (cw, ch) = canvas;
             let _ = w.request_inner_size(winit::dpi::LogicalSize::new(
                 cw * INIT_SCALE,
                 ch * INIT_SCALE,

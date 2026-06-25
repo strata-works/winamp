@@ -20,47 +20,31 @@ region{ path = {{x=184,y=24},{x=212,y=24},{x=212,y=48},{x=184,y=48}},
 region{ path = rect{x=218, y=24, w=24, h=24}, on_press = function() host.prev() end }
 region{ path = rect{x=246, y=24, w=24, h=24}, on_press = function() host.next() end }
 
--- ===== The CRT screen (compact, set into the faceplate's forehead window). =====
--- Top: now-playing line + a spectrum visualizer. Middle: the playlist. Foot: seek bar + time.
--- Sized to clear the speakers, the transport, and the artwork's seek groove.
-local SX, SY, SW, SH = 86, 64, 170, 134
--- Green bezel: the screen reads as set INTO the head's own plastic housing (molded-plastic
--- gradient, lighter at top), so it belongs to the artwork instead of floating over it.
-fill{ path = rounded_rect{x=SX-7, y=SY-7, w=SW+14, h=SH+14, radius=20}, gradient = {
-  type = "linear", from = {x=0, y=SY-7}, to = {x=0, y=SY+SH+7},
-  stops = { {at=0, color={r=168, g=222, b=92}}, {at=0.5, color={r=118, g=180, b=52}},
-            {at=1, color={r=66, g=116, b=28}} } } }
--- top-edge bezel highlight (a thin bright rim for the molded-plastic sheen)
-fill{ path = rounded_rect{x=SX-5, y=SY-6, w=SW+10, h=6, radius=10}, color = {r=205, g=240, b=150, a=120} }
--- inset shadow rim around the glass
-fill{ path = rounded_rect{x=SX-3, y=SY-3, w=SW+6, h=SH+6, radius=16}, color = {r=24, g=44, b=18} }
--- the dark phosphor glass
-fill{ path = rounded_rect{x=SX, y=SY, w=SW, h=SH, radius=13}, color = {r=6, g=18, b=12, a=246} }
--- CRT scanlines
-for y = SY + 4, SY + SH - 6, 3 do
-  fill{ path = rect{x=SX+4, y=y, w=SW-8, h=1}, color = {r=0, g=0, b=0, a=55} }
-end
+-- ===== Player HUD, projected directly onto the face (no panel — transparent), centred =====
+-- A faint scrim only as wide as the content keeps text legible over the bright dome without
+-- reading as a separate window; the face shows through.
+local CX, CY, CW = 78, 150, 186     -- content origin (centred lower) + width
+fill{ path = rounded_rect{x=CX-6, y=CY-6, w=CW+12, h=150, radius=10}, color = {r=4, g=14, b=8, a=90} }
 -- now-playing line (full width), monospace phosphor
-text{ value = "track_title", font = "vt323.ttf", size = 11, x = SX+8, y = SY+3,
-      color = {r=130, g=245, b=150} }
+text{ value = "track_title", font = "vt323.ttf", size = 12, x = CX, y = CY,
+      color = {r=150, g=250, b=170} }
 -- spectrum visualizer: 12 bars filling upward (host viz_<i> levels)
 for i = 0, 11 do
-  value_fill{ path = rect{x = SX+10 + i*12, y = SY+20, w = 8, h = 22},
-              value = "viz_" .. i, direction = "up", color = {r=70, g=235, b=140} }
+  value_fill{ path = rect{x = CX+4 + i*15, y = CY+18, w = 10, h = 26},
+              value = "viz_" .. i, direction = "up", color = {r=90, g=245, b=150} }
 end
 -- separator
-fill{ path = rect{x=SX+8, y=SY+46, w=SW-16, h=1}, color = {r=60, g=150, b=95, a=160} }
+fill{ path = rect{x=CX, y=CY+50, w=CW, h=1}, color = {r=80, g=180, b=110, a=150} }
 -- playlist (the now-playing row gets a highlight bar)
-list{ collection = "playlist", x = SX+8, y = SY+50, w = SW-16, h = 60, row_height = 15,
+list{ collection = "playlist", x = CX, y = CY+54, w = CW, h = 64, row_height = 16,
       on_select = "play_index",
-      selected = "current_index", highlight = { r = 34, g = 104, b = 60, a = 150 },
+      selected = "current_index", highlight = { r = 40, g = 120, b = 70, a = 150 },
       template = {
-        { bind = "now",   font = "vt323.ttf", x = 0,  y = 1, size = 12, color = {r=120,g=245,b=110} },
-        { bind = "title", font = "vt323.ttf", x = 13, y = 1, size = 12, color = {r=195,g=232,b=205} },
+        { bind = "now",   font = "vt323.ttf", x = 0,  y = 1, size = 13, color = {r=130,g=250,b=120} },
+        { bind = "title", font = "vt323.ttf", x = 15, y = 1, size = 13, color = {r=205,g=240,b=212} },
       } }
 -- foot: thin seek bar + time
-fill{ path = rect{x=SX+8, y=SY+116, w=SW-16, h=4}, color = {r=0, g=0, b=0, a=130} }
-scrub{ x = SX+8, y = SY+116, w = SW-16, h = 4, value = "position", on_seek = "seek",
-       color = {r=120, g=240, b=130} }
-text{ value = "time", font = "vt323.ttf", size = 11, x = SX+SW-8, y = SY+123, halign = "right",
-      color = {r=95, g=195, b=125} }
+scrub{ x = CX, y = CY+124, w = CW, h = 5, value = "position", on_seek = "seek",
+       color = {r=120, g=245, b=140} }
+text{ value = "time", font = "vt323.ttf", size = 11, x = CX+CW, y = CY+131, halign = "right",
+      color = {r=120, g=215, b=145} }
