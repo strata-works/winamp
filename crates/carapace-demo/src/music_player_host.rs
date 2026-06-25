@@ -116,6 +116,20 @@ impl Host for MusicPlayerHost {
                     format!("{} / {}", fmt_mmss(pos), fmt_mmss(dur)).into(),
                 ))
             }
+            // Faux spectrum analyzer: `viz_<i>` returns a 0..1 bar level. rodio doesn't cheaply
+            // expose the sample stream for a real FFT, so this is a time-driven animation that
+            // reads lively while playing and falls flat when paused/stopped. Bass-weighted.
+            k if k.starts_with("viz_") => {
+                let i = k[4..].parse::<u32>().unwrap_or(0) as f32;
+                if !self.playing {
+                    return Some(StateValue::Scalar(0.05));
+                }
+                let t = self.backend.position().as_secs_f32();
+                let base = (1.0 - i / 16.0) * 0.45 + 0.18; // lower bars sit taller (bassy)
+                let wobble =
+                    0.55 * (t * (4.0 + i * 0.6) + i).sin() + 0.30 * (t * (9.0 + i * 0.27)).sin();
+                Some(StateValue::Scalar((base + wobble * 0.4).clamp(0.05, 1.0)))
+            }
             _ => None,
         }
     }

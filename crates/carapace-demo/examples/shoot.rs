@@ -133,6 +133,11 @@ impl carapace::host::Host for PlaylistMockHost {
             "position" => Some(StateValue::Scalar(0.27)),
             "track_title" => Some(StateValue::Str("Goya Menor — Ameno Amapiano".into())),
             "time" => Some(StateValue::Str("0:44 / 2:44".into())),
+            // static spectrum levels so the visualizer is visible in the still shot
+            k if k.starts_with("viz_") => {
+                let i = k[4..].parse::<u32>().unwrap_or(0) as f32;
+                Some(StateValue::Scalar(0.35 + 0.45 * (i * 1.3).sin().abs()))
+            }
             _ => None,
         }
     }
