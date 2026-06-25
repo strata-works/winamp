@@ -25,25 +25,27 @@ region{ path = rect{x=246, y=24, w=24, h=24}, on_press = function() host.next() 
 -- ===== Modern player UI INSIDE the artwork's black screen (x ~68..274, y ~58..205). =====
 -- No panel of our own (the bitmap's dark screen is the background); clean system sans-serif,
 -- white/grey text with a single green accent, no pixel font or emoji markers.
-local SX, SY, SW = 74, 67, 196      -- use the full inner width of the artwork screen
-local ACCENT = {r=46, g=212, b=128}   -- the one accent colour (Spotify-ish green)
--- now-playing title (system font, bright) — sized to fit the screen width
-text{ value = "track_title", size = 13, x = SX, y = SY, color = {r=242, g=245, b=249} }
--- a slim spectrum band (12 thin bars), accent green, lower-key than before
+local SX, SY, SW = 78, 66, 188      -- content area inside the artwork screen
+-- now-playing line (VT323 phosphor), sized to fit the screen width
+text{ value = "track_title", font = "vt323.ttf", size = 13, x = SX, y = SY,
+      color = {r=150, g=250, b=170} }
+-- spectrum visualizer: 12 bars filling upward (host viz_<i> levels)
 for i = 0, 11 do
-  value_fill{ path = rect{x = SX+2 + i*16, y = SY+20, w = 8, h = 16},
-              value = "viz_" .. i, direction = "up", color = ACCENT }
+  value_fill{ path = rect{x = SX+4 + i*15, y = SY+18, w = 10, h = 24},
+              value = "viz_" .. i, direction = "up", color = {r=80, g=240, b=140} }
 end
--- playlist; the now-playing row is marked by a soft accent highlight bar (no glyph)
-list{ collection = "playlist", x = SX, y = SY+44, w = SW, h = 64, row_height = 16,
+-- separator
+fill{ path = rect{x=SX, y=SY+48, w=SW, h=1}, color = {r=70, g=160, b=100, a=170} }
+-- playlist; the now-playing row is shown by a phosphor highlight bar (no glyph marker)
+list{ collection = "playlist", x = SX, y = SY+52, w = SW, h = 64, row_height = 16,
       on_select = "play_index",
-      selected = "current_index", highlight = { r = 46, g = 212, b = 128, a = 44 },
+      selected = "current_index", highlight = { r = 36, g = 112, b = 66, a = 175 },
       template = {
-        { bind = "title", x = 4, y = 1, size = 12, color = {r=196, g=204, b=214} },
+        { bind = "title", font = "vt323.ttf", x = 2, y = 1, size = 13, color = {r=190, g=245, b=205} },
       } }
--- progress: a slim track with an accent-filled played portion
-fill{ path = rect{x=SX, y=SY+118, w=SW, h=3}, color = {r=78, g=86, b=98, a=170} }
-scrub{ x = SX, y = SY+117, w = SW, h = 4, value = "position", on_seek = "seek", color = ACCENT }
--- elapsed / total time, muted grey
-text{ value = "time", size = 11, x = SX+SW, y = SY+124, halign = "right",
-      color = {r=140, g=149, b=162} }
+-- foot: thin seek bar + time
+fill{ path = rect{x=SX, y=SY+120, w=SW, h=4}, color = {r=0, g=0, b=0, a=140} }
+scrub{ x = SX, y = SY+120, w = SW, h = 4, value = "position", on_seek = "seek",
+       color = {r=120, g=240, b=130} }
+text{ value = "time", font = "vt323.ttf", size = 11, x = SX+SW, y = SY+127, halign = "right",
+      color = {r=110, g=210, b=140} }
