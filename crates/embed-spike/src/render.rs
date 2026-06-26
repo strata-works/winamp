@@ -310,6 +310,23 @@ pub unsafe fn upload_iosurface_to_texture(
     let base = IOSurfaceGetBaseAddress(surface) as *const u8;
     let stride = IOSurfaceGetBytesPerRow(surface) as u32;
 
+    // DIAGNOSTIC: checksum the content bytes once per ~30 uploads. If this value CHANGES over
+    // time the host's per-frame content IS reaching the GPU (so a frozen picture is a display
+    // problem); if CONSTANT, the host isn't updating the surface we read.
+    {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static N: AtomicU64 = AtomicU64::new(0);
+        let n = N.fetch_add(1, Ordering::Relaxed);
+        if n.is_multiple_of(30) {
+            let sum: u64 = unsafe { std::slice::from_raw_parts(base, (stride * h) as usize) }
+                .iter()
+                .step_by(101)
+                .map(|&b| b as u64)
+                .sum();
+            eprintln!("[content-upload] n={n} checksum={sum}");
+        }
+    }
+
     let extent = wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 };
     let copy = |bytes: &[u8], bytes_per_row: u32| {
         queue.write_texture(

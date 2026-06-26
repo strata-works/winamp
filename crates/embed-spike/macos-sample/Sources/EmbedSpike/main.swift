@@ -371,11 +371,18 @@ final class SkinView: NSView {
         // Draw the host's own live content BEFORE ticking so the engine composites this frame.
         drawHostContent()
         carapace_tick(engine, dt)
-        // Keep layer transparent so desktop shows through clear pixels.
-        layer?.isOpaque = false
-        layer?.backgroundColor = NSColor.clear.cgColor
-        layer?.contents = surface          // zero-copy hand-off to CA
-        layer?.contentsGravity = .resizeAspect
+        // Hand the freshly-composited surface to CA. CRITICAL: assigning the SAME IOSurface
+        // object every frame is cached by CoreAnimation by object identity — the picture
+        // freezes even though the surface's pixels changed. Explicitly flag the contents as
+        // changed (the documented mechanism for live IOSurface-backed layers).
+        if let l = layer {
+            l.isOpaque = false
+            l.backgroundColor = NSColor.clear.cgColor
+            l.contents = surface
+            l.contentsGravity = .resizeAspect
+            let sel = Selector(("setContentsChanged"))
+            if l.responds(to: sel) { l.perform(sel) }
+        }
 
         // FPS diagnostic: prints the real achieved frame rate once per second.
         frameCount += 1
@@ -446,7 +453,9 @@ final class SkinView: NSView {
         let f = win.frame
         let top = f.origin.y + f.size.height
         win.setFrame(NSRect(x: f.origin.x, y: top - newH, width: newW, height: newH), display: true)
-        print(String(format: "[zoom] %.2fx (%.0f×%.0f)", zoom, newW, newH))
+        // Diagnostic: did setFrame actually change the window's size?
+        print(String(format: "[zoom] %.2fx  want=%.0f×%.0f  actual=%.0f×%.0f",
+                     zoom, newW, newH, win.frame.size.width, win.frame.size.height))
     }
 
     private func applyZoomDelta(_ factor: CGFloat) { setZoom(zoom * factor) }
@@ -505,6 +514,7 @@ view.autoresizingMask = [.width, .height]
 win.contentView = view
 win.makeKeyAndOrderFront(nil)
 win.makeFirstResponder(view)    // route events directly to SkinView
+print("[win] isKeyWindow=\(win.isKeyWindow) firstResponder=\(String(describing: win.firstResponder))")
 
 // LAG FIX: Replace CVDisplayLink (which dispatched async onto main, building a queue backlog)
 // with a main-run-loop Timer. Coalesces naturally; fires during mouse tracking (.common mode).
