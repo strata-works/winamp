@@ -452,8 +452,11 @@ final class SkinView: NSView {
     private func applyZoomDelta(_ factor: CGFloat) { setZoom(zoom * factor) }
 
     override func scrollWheel(with e: NSEvent) {
-        // The old 0.002 step was imperceptible; 0.01 makes a normal scroll visibly resize.
-        applyZoomDelta(1 + e.scrollingDeltaY * 0.01)
+        // scrollWheel DOES fire (confirmed via logs) — the old proportional step was just too
+        // tiny to move zoom. Clamp the (often fractional) per-event delta so a normal scroll
+        // produces a visible ±step; the 0.5…3.0 clamp bounds momentum scrolling.
+        let d = max(-3.0, min(3.0, e.scrollingDeltaY))
+        applyZoomDelta(1 + d * 0.04)
     }
 
     /// Guaranteed resize path that doesn't depend on scroll sensitivity or gesture recognition.
