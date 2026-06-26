@@ -116,20 +116,23 @@ final class SkinView: NSView {
         )
 
         // Derive skin path relative to this source file.
-        // main.swift lives at:  .../macos-sample/Sources/EmbedSpike/main.swift
-        // Going up 4 dirs:      .../crates/embed-spike/
-        // Then append "skin":   .../crates/embed-spike/skin
+        // #filePath  = .../embed-spike/macos-sample/Sources/EmbedSpike/main.swift
+        // hop 1 → strip main.swift   → .../Sources/EmbedSpike/
+        // hop 2 → strip EmbedSpike/  → .../Sources/
+        // hop 3 → strip Sources/     → .../macos-sample/
+        // hop 4 → strip macos-sample/→ .../embed-spike/
+        // + "skin"                   → .../embed-spike/skin  ✓  (verified empirically)
         let thisFile = URL(fileURLWithPath: #filePath)
         let skinURL = thisFile
-            .deletingLastPathComponent()   // EmbedSpike/
-            .deletingLastPathComponent()   // Sources/
-            .deletingLastPathComponent()   // macos-sample/
-            .deletingLastPathComponent()   // embed-spike/
+            .deletingLastPathComponent()   // → .../Sources/EmbedSpike/
+            .deletingLastPathComponent()   // → .../Sources/
+            .deletingLastPathComponent()   // → .../macos-sample/
+            .deletingLastPathComponent()   // → .../embed-spike/
             .appendingPathComponent("skin")
         let skinDir = skinURL.path
         print("[carapace] skin dir:", skinDir)
 
-        engine = carapace_create(skinDir, vt, surface, W, H)
+        engine = skinDir.withCString { carapace_create($0, vt, surface, W, H) }
         if engine == nil {
             print("[carapace] ERROR: carapace_create returned nil — check skin path and dylib")
         } else {
@@ -159,7 +162,7 @@ final class SkinView: NSView {
     }
 
     deinit {
-        carapace_destroy(engine)
+        if let e = engine { carapace_destroy(e) }
     }
 }
 
