@@ -207,7 +207,12 @@ final class SkinView: NSView {
     // Drag state
     private var dragStartMouse:  NSPoint?
     private var dragStartOrigin: NSPoint?
+    private var dragStartZoom:   CGFloat = 1.0
     private var didDrag = false
+
+    // FPS diagnostics
+    private var frameCount = 0
+    private var fpsLast = CACurrentMediaTime()
 
     // Accept the first click even when the window is not yet key,
     // and make the view the first responder so keyboard/mouse events land here.
@@ -371,6 +376,14 @@ final class SkinView: NSView {
         layer?.backgroundColor = NSColor.clear.cgColor
         layer?.contents = surface          // zero-copy hand-off to CA
         layer?.contentsGravity = .resizeAspect
+
+        // FPS diagnostic: prints the real achieved frame rate once per second.
+        frameCount += 1
+        if now - fpsLast >= 1.0 {
+            print("[fps] \(frameCount)/s")
+            frameCount = 0
+            fpsLast = now
+        }
     }
 
     // MARK: - Mouse events for drag + tap dispatch
@@ -380,6 +393,7 @@ final class SkinView: NSView {
         // we only forward on mouseUp if the gesture was a tap (no drag).
         dragStartMouse  = NSEvent.mouseLocation
         dragStartOrigin = window?.frame.origin
+        dragStartZoom   = zoom
         didDrag = false
     }
 
@@ -392,7 +406,14 @@ final class SkinView: NSView {
         if abs(dx) > 3 || abs(dy) > 3 {
             didDrag = true
         }
-        window?.setFrameOrigin(NSPoint(x: origin.x + dx, y: origin.y + dy))
+        if e.modifierFlags.contains(.option) {
+            // ⌥-drag = RESIZE (uses the proven mouse path; setFrame is known-good because
+            // setFrameOrigin moves the window). Drag DOWN/RIGHT grows it, aspect-locked.
+            setZoom(dragStartZoom * (1 + (dx - dy) * 0.004))
+        } else {
+            // Plain drag = MOVE the window.
+            window?.setFrameOrigin(NSPoint(x: origin.x + dx, y: origin.y + dy))
+        }
     }
 
     override func mouseUp(with e: NSEvent) {
@@ -415,16 +436,20 @@ final class SkinView: NSView {
     /// Multiply the zoom by `factor` (clamped 0.5…3.0) and resize the window via an explicit
     /// setFrame (more reliable than setContentSize on a borderless window), keeping the top
     /// edge fixed so it grows downward and stays on screen.
-    private func applyZoomDelta(_ factor: CGFloat) {
-        let newZoom = max(0.5, min(3.0, zoom * factor))
-        guard let win = window, newZoom != zoom else { zoom = newZoom; return }
-        zoom = newZoom
+    /// Set the absolute zoom (clamped 0.5…3.0) and resize the window via explicit setFrame
+    /// (known-good: setFrameOrigin already moves this borderless window). Top edge stays fixed.
+    private func setZoom(_ z: CGFloat) {
+        let nz = max(0.5, min(3.0, z))
+        guard let win = window else { zoom = nz; return }
+        zoom = nz
         let newW = baseW * zoom, newH = baseH * zoom
         let f = win.frame
         let top = f.origin.y + f.size.height
         win.setFrame(NSRect(x: f.origin.x, y: top - newH, width: newW, height: newH), display: true)
         print(String(format: "[zoom] %.2fx (%.0f×%.0f)", zoom, newW, newH))
     }
+
+    private func applyZoomDelta(_ factor: CGFloat) { setZoom(zoom * factor) }
 
     override func scrollWheel(with e: NSEvent) {
         // The old 0.002 step was imperceptible; 0.01 makes a normal scroll visibly resize.
