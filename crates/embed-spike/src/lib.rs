@@ -13,8 +13,8 @@ use io_surface::IOSurfaceRef;
 
 use crate::host::{CarapaceHostVTable, FfiHost};
 use crate::render::{
-    blit, copy_into_iosurface, init_gpu, new_offscreen, readback_rgba, render_frame, try_shared,
-    GpuCtx, OffscreenTarget, Tier,
+    blit, copy_into_iosurface, init_gpu, new_offscreen, readback_rgba, render_frame,
+    try_import_sampled, try_shared, GpuCtx, OffscreenTarget, Tier,
 };
 
 /// How a rendered frame reaches the caller's IOSurface.
@@ -36,6 +36,17 @@ enum Present {
     Readback { off: OffscreenTarget },
 }
 
+/// Host-supplied live content for a skin `view{}` cutout. Imported from a second caller-owned
+/// IOSurface as a sampled `Bgra8Unorm` texture; the engine composites `view` into the matching
+/// `view{ id = "host" }` rect each tick. Kept alive for the engine's lifetime — the wgpu texture
+/// internally retains the underlying IOSurface, so we only need to hold the texture + its view.
+struct ContentTex {
+    _surface_kept: (),
+    #[allow(dead_code)]
+    tex: wgpu::Texture,
+    view: wgpu::TextureView,
+}
+
 /// Opaque handle handed across the C ABI.
 #[allow(deprecated)]
 pub struct CarapaceEngine {
@@ -44,6 +55,8 @@ pub struct CarapaceEngine {
     engine: Engine,
     present: Present,
     surface: IOSurfaceRef,
+    /// Optional live host content composited into the skin's `view{ id = "host" }` cutout.
+    content: Option<ContentTex>,
     tier: Tier,
     w: u32,
     h: u32,
@@ -56,13 +69,16 @@ unsafe impl Send for CarapaceEngine {}
 /// # Safety
 /// `skin_dir` must be a valid NUL-terminated UTF-8 path. `vtable` function pointers must
 /// outlive the returned engine. `surface` must be a valid IOSurface of size w×h, BGRA format,
-/// that outlives the engine. Returns null on failure.
+/// that outlives the engine. `content_surface`, if non-null, must be a valid BGRA8 IOSurface
+/// (any size — it's sampled into the skin's `view{ id = "host" }` cutout) that outlives the
+/// engine; pass null to supply no host content. Returns null on failure.
 #[no_mangle]
 #[allow(deprecated)]
 pub unsafe extern "C" fn carapace_create(
     skin_dir: *const c_char,
     vtable: CarapaceHostVTable,
     surface: IOSurfaceRef,
+    content_surface: IOSurfaceRef,
     w: u32,
     h: u32,
 ) -> *mut CarapaceEngine {
@@ -107,7 +123,40 @@ pub unsafe extern "C" fn carapace_create(
         }
         None => (Present::Readback { off: new_offscreen(&gpu.device, w, h) }, Tier::Readback),
     };
-    Box::into_raw(Box::new(CarapaceEngine { gpu, renderer, engine, present, surface, tier, w, h }))
+
+    // Optionally import the host's content IOSurface as a sampled texture for the skin's
+    // `view{ id = "host" }` cutout. Null surface, a failed import, or zero dimensions all yield
+    // None (the cutout simply shows nothing). NEVER panic.
+    let content = if content_surface.is_null() {
+        None
+    } else {
+        let (cw, ch) = unsafe {
+            (
+                io_surface::IOSurfaceGetWidth(content_surface) as u32,
+                io_surface::IOSurfaceGetHeight(content_surface) as u32,
+            )
+        };
+        if cw == 0 || ch == 0 {
+            None
+        } else {
+            unsafe { try_import_sampled(&gpu.device, content_surface, cw, ch) }.map(|tex| {
+                let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+                ContentTex { _surface_kept: (), tex, view }
+            })
+        }
+    };
+
+    Box::into_raw(Box::new(CarapaceEngine {
+        gpu,
+        renderer,
+        engine,
+        present,
+        surface,
+        content,
+        tier,
+        w,
+        h,
+    }))
 }
 
 /// Tick + render one frame into the engine's target surface.
@@ -120,21 +169,23 @@ pub unsafe extern "C" fn carapace_tick(ptr: *mut CarapaceEngine, dt_seconds: f64
     let dt = Duration::from_secs_f64(dt_seconds.max(0.0));
     // Split the borrows: render_frame needs &mut engine/renderer while the present path needs
     // &present — both live under `e`, so destructure into disjoint field borrows.
-    let CarapaceEngine { gpu, renderer, engine, present, surface, w, h, .. } = e;
+    let CarapaceEngine { gpu, renderer, engine, present, surface, content, w, h, .. } = e;
     let (w, h) = (*w, *h);
+    // Supply the host's live content texture for the skin's `view{ id = "host" }` cutout.
+    let host_view = content.as_ref().map(|c| ("host", &c.view));
     match present {
         // Tier 2: render into the Rgba8 offscreen, then GPU-blit it into the IOSurface texture.
         // No CPU readback, no swizzle copy — the blitter reorders RGBA→BGRA on the GPU.
         // wait=false: blit() is the single poll on this path; skipping the render_frame stall
         // removes a redundant GPU wait and reduces Tier-2 latency.
         Present::Shared { off, iosurface_view, blitter, .. } => {
-            render_frame(engine, renderer, gpu, &off.view, w, h, dt, false);
+            render_frame(engine, renderer, gpu, &off.view, w, h, dt, false, host_view);
             blit(gpu, blitter, &off.view, iosurface_view);
         }
         // Tier 1: render, read back, swizzle-copy into the IOSurface.
         // wait=true: readback_rgba must see completed GPU work before it maps the buffer.
         Present::Readback { off } => {
-            render_frame(engine, renderer, gpu, &off.view, w, h, dt, true);
+            render_frame(engine, renderer, gpu, &off.view, w, h, dt, true, host_view);
             let rgba = readback_rgba(gpu, &off.tex, w, h);
             unsafe { copy_into_iosurface(*surface, &rgba, w, h) };
         }

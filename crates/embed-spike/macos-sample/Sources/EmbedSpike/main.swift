@@ -1,4 +1,5 @@
 import AppKit
+import CoreText
 import IOSurface
 import IOKit.ps
 import CCarapace
@@ -7,6 +8,9 @@ import CCarapace
 setvbuf(stdout, nil, _IONBF, 0)
 
 let W: UInt32 = 342, H: UInt32 = 394
+// The host-content IOSurface for the skin's view{ id = "host" } cutout (70,60..272,206 → 202×146).
+// Rendered at 2× for crispness; the engine samples it into the cutout rect.
+let CW: Int = 404, CH: Int = 292
 
 // ---------------------------------------------------------------------------
 // Swift-owned host state
@@ -191,6 +195,8 @@ final class SkinWindow: NSWindow {
 final class SkinView: NSView {
     var engine: OpaquePointer?
     var surface: IOSurface!
+    var content: IOSurface!            // Swift draws its OWN live content here each tick.
+    let contentStart = CACurrentMediaTime()
     var last = CACurrentMediaTime()
 
     // Drag state
@@ -214,6 +220,14 @@ final class SkinView: NSView {
             .pixelFormat: 0x42475241 as UInt32   // 'BGRA'
         ])!
 
+        // Second IOSurface holding the host app's OWN live content for the view{} cutout.
+        content = IOSurface(properties: [
+            .width: CW,
+            .height: CH,
+            .bytesPerElement: 4,
+            .pixelFormat: 0x42475241 as UInt32   // 'BGRA'
+        ])!
+
         // Build vtable
         let vt = CarapaceHostVTable(
             ctx: nil,
@@ -222,22 +236,21 @@ final class SkinView: NSView {
             invoke: invokeAction
         )
 
-        // Derive skin path relative to this source file.
+        // Derive skin path relative to this source file. The view{}-cutout skin lives under
+        // embed-spike now (NOT carapace-demo): 4 hops to .../crates/embed-spike/, then skin-headspace.
         // #filePath  = .../crates/embed-spike/macos-sample/Sources/EmbedSpike/main.swift
         // hop 1 → strip main.swift         → .../Sources/EmbedSpike/
         // hop 2 → strip EmbedSpike/        → .../Sources/
         // hop 3 → strip Sources/           → .../macos-sample/
         // hop 4 → strip macos-sample/      → .../embed-spike/
-        // hop 5 → strip embed-spike/       → .../crates/
-        // + carapace-demo/skins/reference  → real Headspace skin dir ✓
+        // + skin-headspace                 → view{} cutout Headspace skin ✓
         let thisFile = URL(fileURLWithPath: #filePath)
         let skinURL = thisFile
             .deletingLastPathComponent()   // → .../Sources/EmbedSpike/
             .deletingLastPathComponent()   // → .../Sources/
             .deletingLastPathComponent()   // → .../macos-sample/
             .deletingLastPathComponent()   // → .../embed-spike/
-            .deletingLastPathComponent()   // → .../crates/
-            .appendingPathComponent("carapace-demo/skins/reference")
+            .appendingPathComponent("skin-headspace")
         let skinDir = skinURL.path
         print("[carapace] skin dir:", skinDir)
         let skinExists = FileManager.default.fileExists(atPath: skinDir)
@@ -246,7 +259,7 @@ final class SkinView: NSView {
             print("[carapace] WARNING: skin directory not found — engine will fail to load")
         }
 
-        engine = skinDir.withCString { carapace_create($0, vt, surface, W, H) }
+        engine = skinDir.withCString { carapace_create($0, vt, surface, content, W, H) }
         if engine == nil {
             print("[carapace] ERROR: carapace_create returned nil — check skin path and dylib")
         } else {
@@ -257,10 +270,92 @@ final class SkinView: NSView {
 
     required init?(coder: NSCoder) { fatalError() }
 
+    /// Draw the host app's OWN live content into the content IOSurface via Core Graphics.
+    /// A dark translucent panel, a bright accent header bar, a LIVE digital clock (HH:MM:SS),
+    /// a "Swift host content" label, and a moving bar that follows the playback sweep. The engine
+    /// samples this BGRA surface straight into the skin's view{ id = "host" } cutout.
+    func drawHostContent() {
+        content.lock(options: [], seed: nil)
+        defer { content.unlock(options: [], seed: nil) }
+
+        let base = content.baseAddress
+        let bpr = content.bytesPerRow
+        // BGRA premultiplied (byteOrder32Little + premultipliedFirst) — matches what the engine
+        // imports as Bgra8Unorm, so colours land correct.
+        let bitmapInfo = CGImageAlphaInfo.premultipliedFirst.rawValue
+            | CGBitmapInfo.byteOrder32Little.rawValue
+        guard let ctx = CGContext(
+            data: base,
+            width: CW,
+            height: CH,
+            bitsPerComponent: 8,
+            bytesPerRow: bpr,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: bitmapInfo
+        ) else { return }
+
+        // CGContext origin is bottom-left; the engine samples top-down. Flip so our drawing is
+        // upright in the cutout.
+        ctx.translateBy(x: 0, y: CGFloat(CH))
+        ctx.scaleBy(x: 1, y: -1)
+
+        let wF = CGFloat(CW), hF = CGFloat(CH)
+
+        // 1. Dark translucent background panel.
+        ctx.setFillColor(red: 0.04, green: 0.06, blue: 0.10, alpha: 0.92)
+        ctx.fill(CGRect(x: 0, y: 0, width: wF, height: hF))
+
+        // 2. Bright accent header bar (Headspace orange/amber).
+        ctx.setFillColor(red: 1.0, green: 0.62, blue: 0.16, alpha: 1.0)
+        ctx.fill(CGRect(x: 0, y: 0, width: wF, height: hF * 0.16))
+
+        // 3. Moving element: a bar whose width follows the same 0..1 sweep as `position`.
+        let pos = CGFloat(state.position())
+        ctx.setFillColor(red: 0.20, green: 0.85, blue: 0.55, alpha: 1.0)
+        ctx.fill(CGRect(x: 0, y: hF - hF * 0.10, width: wF * pos, height: hF * 0.10))
+
+        // Helper: draw a string with CoreText at (x, y) measured from the TOP (we flip y inside).
+        func drawText(_ s: String, x: CGFloat, topY: CGFloat, size: CGFloat,
+                      color: CGColor, font: String = "Menlo") {
+            let ctFont = CTFontCreateWithName(font as CFString, size, nil)
+            let attrs: [NSAttributedString.Key: Any] = [
+                .font: ctFont,
+                .foregroundColor: color,
+            ]
+            let line = CTLineCreateWithAttributedString(
+                NSAttributedString(string: s, attributes: attrs))
+            // Convert top-origin y to CG bottom-origin baseline.
+            ctx.textPosition = CGPoint(x: x, y: hF - topY - size)
+            CTLineDraw(line, ctx)
+        }
+
+        // 4. Header label inside the accent bar.
+        drawText("Swift host content", x: 14, topY: 10, size: 20,
+                 color: CGColor(red: 0.05, green: 0.04, blue: 0.02, alpha: 1.0),
+                 font: "HelveticaNeue-Bold")
+
+        // 5. LIVE digital clock (HH:MM:SS), updated every tick.
+        let df = DateFormatter()
+        df.dateFormat = "HH:mm:ss"
+        let clock = df.string(from: Date())
+        drawText(clock, x: 14, topY: hF * 0.16 + 16, size: 56,
+                 color: CGColor(red: 0.90, green: 0.97, blue: 1.0, alpha: 1.0),
+                 font: "Menlo-Bold")
+
+        // 6. A secondary line proving it's live: elapsed seconds since launch.
+        let elapsed = Int(CACurrentMediaTime() - contentStart)
+        drawText("live · up \(elapsed)s · pos \(Int(pos * 100))%",
+                 x: 14, topY: hF * 0.16 + 90, size: 22,
+                 color: CGColor(red: 0.55, green: 0.80, blue: 0.95, alpha: 1.0),
+                 font: "Menlo")
+    }
+
     func tick() {
         let now = CACurrentMediaTime()
         let dt = now - last
         last = now
+        // Draw the host's own live content BEFORE ticking so the engine composites this frame.
+        drawHostContent()
         carapace_tick(engine, dt)
         // Keep layer transparent so desktop shows through clear pixels.
         layer?.isOpaque = false

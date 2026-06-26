@@ -70,6 +70,10 @@ pub fn new_offscreen(device: &wgpu::Device, w: u32, h: u32) -> OffscreenTarget {
 
 /// The one draw path every tier shares: drain+tick, reflow, draw into `view`.
 ///
+/// `host_view`: optional `(view_id, texture_view)` for a skin `view{}` cutout. When present, a
+/// skin node `view{ id = view_id, ... }` is composited with the supplied texture (the host's own
+/// live content). `None` means no host content is supplied for any view id.
+///
 /// `wait`: set `true` when the caller needs all prior GPU work complete before returning
 /// (e.g. Readback path — `readback_rgba` runs immediately after). Set `false` when the
 /// caller does its own poll afterwards, e.g. the Shared blit path — `blit()` already calls
@@ -84,13 +88,15 @@ pub fn render_frame(
     h: u32,
     dt: Duration,
     wait: bool,
+    host_view: Option<(&str, &wgpu::TextureView)>,
 ) {
     engine.update(dt); // drains queued host actions, ticks host
     let scene = engine.layout(w as f32, h as f32);
+    let view_tex = |id: &str| host_view.and_then(|(vid, v)| if vid == id { Some(v) } else { None });
     renderer.draw(
         &scene,
         |k| engine.state(k),
-        |_| None, // no view{} regions in the spike
+        view_tex, // composite host content into the matching view{} cutout (if any)
         &RenderTarget {
             device: &gpu.device,
             queue: &gpu.queue,
@@ -240,6 +246,77 @@ pub unsafe fn try_shared(
                 dimension: wgpu::TextureDimension::D2,
                 format: wgpu::TextureFormat::Bgra8Unorm,
                 usage,
+                view_formats: &[],
+            },
+        )
+    };
+    Some(tex)
+}
+
+/// Import a caller-owned BGRA8 IOSurface as a *sampled* wgpu `Bgra8Unorm` texture (zero CPU
+/// copy) suitable for the engine's `view{}` composite path. Same import recipe as `try_shared`
+/// but the MTLTexture is created with `ShaderRead` usage and the wgpu texture with
+/// `TEXTURE_BINDING`, so the engine can sample it into a view cutout. Returns `None` on any
+/// failure (caller then supplies no host content).
+///
+/// # Safety
+/// `surface` must be a live IOSurface of at least `w`×`h` BGRA8 pixels that outlives the texture.
+#[allow(deprecated)]
+pub unsafe fn try_import_sampled(
+    device: &wgpu::Device,
+    surface: IOSurfaceRef,
+    w: u32,
+    h: u32,
+) -> Option<wgpu::Texture> {
+    use objc2::runtime::ProtocolObject;
+    use objc2_metal::{
+        MTLDevice, MTLPixelFormat, MTLStorageMode, MTLTextureDescriptor, MTLTextureType,
+        MTLTextureUsage,
+    };
+
+    // 1. Reach wgpu's underlying MTLDevice through the Metal HAL.
+    let hal_device = device.as_hal::<wgpu::hal::api::Metal>()?;
+    let mtl_device: &ProtocolObject<dyn MTLDevice> = hal_device.raw_device();
+
+    // 2. Build an MTLTextureDescriptor matching the BGRA IOSurface, sampled (ShaderRead) only.
+    let desc = MTLTextureDescriptor::new();
+    desc.setTextureType(MTLTextureType::Type2D);
+    desc.setPixelFormat(MTLPixelFormat::BGRA8Unorm);
+    // setWidth/setHeight are `unsafe`; our values come straight from the surface dimensions.
+    unsafe {
+        desc.setWidth(w as usize);
+        desc.setHeight(h as usize);
+    }
+    desc.setUsage(MTLTextureUsage::ShaderRead);
+    desc.setStorageMode(MTLStorageMode::Shared);
+
+    // 3. Create an MTLTexture backed by the IOSurface (plane 0).
+    let io: &objc2_io_surface::IOSurfaceRef =
+        unsafe { (surface as *const objc2_io_surface::IOSurfaceRef).as_ref()? };
+    let mtl_tex = mtl_device.newTextureWithDescriptor_iosurface_plane(&desc, io, 0)?;
+
+    // 4. Wrap the MTLTexture as a wgpu-hal texture, then import it into wgpu as TEXTURE_BINDING.
+    let hal_tex = unsafe {
+        <wgpu::hal::api::Metal as wgpu::hal::Api>::Device::texture_from_raw(
+            mtl_tex,
+            wgpu::TextureFormat::Bgra8Unorm,
+            MTLTextureType::Type2D,
+            1, // array layers
+            1, // mip levels
+            wgpu::hal::CopyExtent { width: w, height: h, depth: 1 },
+        )
+    };
+    let tex = unsafe {
+        device.create_texture_from_hal::<wgpu::hal::api::Metal>(
+            hal_tex,
+            &wgpu::TextureDescriptor {
+                label: Some("iosurface-content-sampled"),
+                size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Bgra8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
                 view_formats: &[],
             },
         )

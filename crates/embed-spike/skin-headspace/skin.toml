@@ -1,0 +1,6 @@
+schema = 1
+id = "embed-headspace"
+name = "Headspace (reference homage)"
+engine = "^0.1"
+canvas = { width = 342, height = 394 }
+entry = "skin.lua"

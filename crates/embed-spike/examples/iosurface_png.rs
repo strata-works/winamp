@@ -65,7 +65,10 @@ fn main() {
     };
 
     unsafe {
-        let e = embed_spike::carapace_create(cdir.as_ptr(), vtable, surface_ref, w, h);
+        // No content surface for the headless harness: pass a null IOSurfaceRef so the engine
+        // supplies no host content (this skin has no view{} anyway).
+        let null_content = std::ptr::null() as io_surface::IOSurfaceRef;
+        let e = embed_spike::carapace_create(cdir.as_ptr(), vtable, surface_ref, null_content, w, h);
         assert!(!e.is_null(), "carapace_create returned null");
 
         embed_spike::carapace_tick(e, 0.016);

@@ -21,9 +21,12 @@ typedef struct {
 } CarapaceHostVTable;
 
 /* Create the engine. Returns NULL on failure.
- * surface must be a valid IOSurface (BGRA8, w×h pixels) that outlives the engine. */
+ * surface must be a valid IOSurface (BGRA8, w×h pixels) that outlives the engine.
+ * content_surface, if non-NULL, is a BGRA8 IOSurface holding the host's own live content;
+ * the engine composites it into the skin's view{ id = "host" } cutout. Pass NULL for none. */
 CarapaceEngine* carapace_create(const char* skin_dir, CarapaceHostVTable host,
-                                IOSurfaceRef surface, uint32_t w, uint32_t h);
+                                IOSurfaceRef surface, IOSurfaceRef content_surface,
+                                uint32_t w, uint32_t h);
 
 /* Tick the engine by dt_seconds and composite one frame into the IOSurface. */
 void carapace_tick(CarapaceEngine* e, double dt_seconds);
