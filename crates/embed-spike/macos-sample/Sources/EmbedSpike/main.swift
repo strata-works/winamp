@@ -199,6 +199,11 @@ final class SkinView: NSView {
     let contentStart = CACurrentMediaTime()
     var last = CACurrentMediaTime()
 
+    // Zoom state for scroll/pinch resize (aspect-locked, 0.5…3.0×).
+    private var zoom: CGFloat = 1.0
+    private let baseW: CGFloat = 342
+    private let baseH: CGFloat = 394
+
     // Drag state
     private var dragStartMouse:  NSPoint?
     private var dragStartOrigin: NSPoint?
@@ -266,88 +271,87 @@ final class SkinView: NSView {
             let tier = carapace_active_tier(engine)
             print("[carapace] active tier:", tier, tier == 1 ? "(Readback)" : tier == 2 ? "(Shared/Metal)" : "(unknown)")
         }
+
+        // Pinch-to-zoom gesture recognizer.
+        let pinch = NSMagnificationGestureRecognizer(target: self, action: #selector(handlePinch(_:)))
+        addGestureRecognizer(pinch)
     }
 
     required init?(coder: NSCoder) { fatalError() }
 
-    /// Draw the host app's OWN live content into the content IOSurface via Core Graphics.
-    /// A dark translucent panel, a bright accent header bar, a LIVE digital clock (HH:MM:SS),
-    /// a "Swift host content" label, and a moving bar that follows the playback sweep. The engine
-    /// samples this BGRA surface straight into the skin's view{ id = "host" } cutout.
+    /// Draw the host app's OWN live content into the content IOSurface via a flipped
+    /// NSGraphicsContext so text and layout use top-left origin (y grows DOWN) — no manual
+    /// CTM flip needed, and NSString/NSAttributedString render upright and correctly-handed.
     func drawHostContent() {
         content.lock(options: [], seed: nil)
         defer { content.unlock(options: [], seed: nil) }
 
-        let base = content.baseAddress
-        let bpr = content.bytesPerRow
-        // BGRA premultiplied (byteOrder32Little + premultipliedFirst) — matches what the engine
-        // imports as Bgra8Unorm, so colours land correct.
-        let bitmapInfo = CGImageAlphaInfo.premultipliedFirst.rawValue
-            | CGBitmapInfo.byteOrder32Little.rawValue
-        guard let ctx = CGContext(
-            data: base,
-            width: CW,
-            height: CH,
+        let base   = content.baseAddress
+        let stride = content.bytesPerRow
+        let cw     = CW
+        let ch     = CH
+
+        let cs  = CGColorSpaceCreateDeviceRGB()
+        let bmp = CGImageAlphaInfo.premultipliedFirst.rawValue
+                | CGBitmapInfo.byteOrder32Little.rawValue
+        guard let cg = CGContext(
+            data:             base,
+            width:            cw,
+            height:           ch,
             bitsPerComponent: 8,
-            bytesPerRow: bpr,
-            space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: bitmapInfo
+            bytesPerRow:      stride,
+            space:            cs,
+            bitmapInfo:       bmp
         ) else { return }
 
-        // CGContext origin is bottom-left; the engine samples top-down. Flip so our drawing is
-        // upright in the cutout.
-        ctx.translateBy(x: 0, y: CGFloat(CH))
-        ctx.scaleBy(x: 1, y: -1)
+        // flipped:true => top-left origin, upright text — no manual CTM needed.
+        let ns = NSGraphicsContext(cgContext: cg, flipped: true)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = ns
 
-        let wF = CGFloat(CW), hF = CGFloat(CH)
-
-        // 1. Dark translucent background panel.
-        ctx.setFillColor(red: 0.04, green: 0.06, blue: 0.10, alpha: 0.92)
-        ctx.fill(CGRect(x: 0, y: 0, width: wF, height: hF))
-
-        // 2. Bright accent header bar (Headspace orange/amber).
-        ctx.setFillColor(red: 1.0, green: 0.62, blue: 0.16, alpha: 1.0)
-        ctx.fill(CGRect(x: 0, y: 0, width: wF, height: hF * 0.16))
-
-        // 3. Moving element: a bar whose width follows the same 0..1 sweep as `position`.
+        let wF  = CGFloat(cw)
+        let hF  = CGFloat(ch)
         let pos = CGFloat(state.position())
-        ctx.setFillColor(red: 0.20, green: 0.85, blue: 0.55, alpha: 1.0)
-        ctx.fill(CGRect(x: 0, y: hF - hF * 0.10, width: wF * pos, height: hF * 0.10))
 
-        // Helper: draw a string with CoreText at (x, y) measured from the TOP (we flip y inside).
-        func drawText(_ s: String, x: CGFloat, topY: CGFloat, size: CGFloat,
-                      color: CGColor, font: String = "Menlo") {
-            let ctFont = CTFontCreateWithName(font as CFString, size, nil)
-            let attrs: [NSAttributedString.Key: Any] = [
-                .font: ctFont,
-                .foregroundColor: color,
-            ]
-            let line = CTLineCreateWithAttributedString(
-                NSAttributedString(string: s, attributes: attrs))
-            // Convert top-origin y to CG bottom-origin baseline.
-            ctx.textPosition = CGPoint(x: x, y: hF - topY - size)
-            CTLineDraw(line, ctx)
-        }
+        // 1. Dark background.
+        NSColor(red: 0.04, green: 0.06, blue: 0.10, alpha: 0.92).setFill()
+        NSRect(x: 0, y: 0, width: wF, height: hF).fill()
 
-        // 4. Header label inside the accent bar.
-        drawText("Swift host content", x: 14, topY: 10, size: 20,
-                 color: CGColor(red: 0.05, green: 0.04, blue: 0.02, alpha: 1.0),
-                 font: "HelveticaNeue-Bold")
+        // 2. Amber accent header bar near the top (small y = top in flipped coords).
+        NSColor(red: 1.0, green: 0.62, blue: 0.16, alpha: 1.0).setFill()
+        NSRect(x: 0, y: 0, width: wF, height: hF * 0.16).fill()
 
-        // 5. LIVE digital clock (HH:MM:SS), updated every tick.
+        // 3. Header label inside the accent bar.
+        let headerAttrs: [NSAttributedString.Key: Any] = [
+            .font:            NSFont(name: "HelveticaNeue-Bold", size: 18) ?? NSFont.boldSystemFont(ofSize: 18),
+            .foregroundColor: NSColor(red: 0.05, green: 0.04, blue: 0.02, alpha: 1.0),
+        ]
+        ("Swift host content" as NSString).draw(at: NSPoint(x: 8, y: 6), withAttributes: headerAttrs)
+
+        // 4. LIVE digital clock (HH:MM:SS).
         let df = DateFormatter()
         df.dateFormat = "HH:mm:ss"
         let clock = df.string(from: Date())
-        drawText(clock, x: 14, topY: hF * 0.16 + 16, size: 56,
-                 color: CGColor(red: 0.90, green: 0.97, blue: 1.0, alpha: 1.0),
-                 font: "Menlo-Bold")
+        let clockAttrs: [NSAttributedString.Key: Any] = [
+            .font:            NSFont.monospacedSystemFont(ofSize: 34, weight: .bold),
+            .foregroundColor: NSColor(white: 0.95, alpha: 1.0),
+        ]
+        (clock as NSString).draw(at: NSPoint(x: 8, y: hF * 0.16 + 8), withAttributes: clockAttrs)
 
-        // 6. A secondary line proving it's live: elapsed seconds since launch.
+        // 5. Status line: live · up Ns · pos N%.
         let elapsed = Int(CACurrentMediaTime() - contentStart)
-        drawText("live · up \(elapsed)s · pos \(Int(pos * 100))%",
-                 x: 14, topY: hF * 0.16 + 90, size: 22,
-                 color: CGColor(red: 0.55, green: 0.80, blue: 0.95, alpha: 1.0),
-                 font: "Menlo")
+        let statusLine = "live · up \(elapsed)s · pos \(Int(pos * 100))%"
+        let statusAttrs: [NSAttributedString.Key: Any] = [
+            .font:            NSFont.monospacedSystemFont(ofSize: 13, weight: .regular),
+            .foregroundColor: NSColor(red: 0.55, green: 0.80, blue: 0.95, alpha: 1.0),
+        ]
+        (statusLine as NSString).draw(at: NSPoint(x: 8, y: hF * 0.16 + 54), withAttributes: statusAttrs)
+
+        // 6. Green sweep bar near the bottom (large y = bottom in flipped coords).
+        NSColor(red: 0.20, green: 0.85, blue: 0.55, alpha: 1.0).setFill()
+        NSRect(x: 8, y: hF - 16, width: CGFloat(cw - 16) * pos, height: 8).fill()
+
+        NSGraphicsContext.restoreGraphicsState()
     }
 
     func tick() {
@@ -361,7 +365,7 @@ final class SkinView: NSView {
         layer?.isOpaque = false
         layer?.backgroundColor = NSColor.clear.cgColor
         layer?.contents = surface          // zero-copy hand-off to CA
-        layer?.contentsGravity = .resize
+        layer?.contentsGravity = .resizeAspect
     }
 
     // MARK: - Mouse events for drag + tap dispatch
@@ -399,6 +403,28 @@ final class SkinView: NSView {
         dragStartMouse  = nil
         dragStartOrigin = nil
         didDrag = false
+    }
+
+    // MARK: - Scroll-wheel zoom (aspect-locked)
+
+    override func scrollWheel(with e: NSEvent) {
+        zoom *= (1 + e.scrollingDeltaY * 0.002)
+        zoom  = max(0.5, min(3.0, zoom))
+        let newSize = NSSize(width: baseW * zoom, height: baseH * zoom)
+        window?.setContentSize(newSize)
+        print(String(format: "[zoom] %.2fx", zoom))
+    }
+
+    // MARK: - Pinch-to-zoom (trackpad)
+
+    @objc func handlePinch(_ r: NSMagnificationGestureRecognizer) {
+        guard r.state == .changed else { return }
+        zoom *= (1 + r.magnification)
+        r.magnification = 0          // reset so deltas don't accumulate across changed events
+        zoom  = max(0.5, min(3.0, zoom))
+        let newSize = NSSize(width: baseW * zoom, height: baseH * zoom)
+        window?.setContentSize(newSize)
+        print(String(format: "[zoom] %.2fx", zoom))
     }
 
     deinit {
