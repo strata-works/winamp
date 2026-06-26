@@ -1,5 +1,4 @@
 import AppKit
-import CoreVideo
 import IOSurface
 import IOKit.ps
 import CCarapace
@@ -7,7 +6,7 @@ import CCarapace
 // Fix A: unbuffer stdout so runtime prints flush immediately to a non-TTY pipe.
 setvbuf(stdout, nil, _IONBF, 0)
 
-let W: UInt32 = 240, H: UInt32 = 80
+let W: UInt32 = 342, H: UInt32 = 394
 
 // ---------------------------------------------------------------------------
 // Swift-owned host state
@@ -15,22 +14,58 @@ let W: UInt32 = 240, H: UInt32 = 80
 
 final class HostState {
     var paused = false
-    var lastLevel: Double = 0.0
     let start = CACurrentMediaTime()
 
-    func level() -> Double {
-        if paused { return lastLevel }
-        // Triangle wave 0→1→0 over ~3s — Swift-computed state, served over FFI each frame.
-        let t = (CACurrentMediaTime() - start).truncatingRemainder(dividingBy: 3.0) / 3.0
-        let v = t < 0.5 ? t * 2.0 : (1.0 - t) * 2.0
-        lastLevel = v
-        return v
+    /// Playback position 0..1 sweeping over ~60 s; frozen when paused.
+    func position() -> Double {
+        if paused { return positionAtPause }
+        let elapsed = CACurrentMediaTime() - startOfPlay
+        return (elapsed / 60.0).truncatingRemainder(dividingBy: 1.0)
+    }
+
+    /// Fake visualiser bar i: animated spectrum, near-0/flat when paused.
+    func viz(_ i: Int) -> Double {
+        if paused {
+            return abs(sin(positionAtPause * 2.5 + Double(i) * 0.6)) *
+                   (0.4 + 0.6 * abs(sin(positionAtPause * 0.7 + Double(i)))) * 0.1
+        }
+        let now = CACurrentMediaTime() - start
+        let v = abs(sin(now * 2.5 + Double(i) * 0.6)) *
+                (0.4 + 0.6 * abs(sin(now * 0.7 + Double(i))))
+        return min(max(v, 0.0), 1.0)
+    }
+
+    /// "mm:ss / 3:45" derived from position over a fake 225s total.
+    func timeString() -> String {
+        let total = 225.0        // 3:45
+        let elapsed = position() * total
+        let m  = Int(elapsed) / 60
+        let s  = Int(elapsed) % 60
+        let ss = s < 10 ? "0\(s)" : "\(s)"
+        return "\(m):\(ss) / 3:45"
+    }
+
+    // Internal: track pause-time so position/viz freeze correctly.
+    private var positionAtPause: Double = 0.0
+    private var startOfPlay: Double     // adjusted origin so position is continuous
+
+    init() {
+        startOfPlay = CACurrentMediaTime()
+    }
+
+    func togglePlay() {
+        if paused {
+            // Resume: shift startOfPlay so position() picks up where we paused.
+            startOfPlay = CACurrentMediaTime() - positionAtPause * 60.0
+            paused = false
+        } else {
+            positionAtPause = position()
+            paused = true
+        }
     }
 }
 
 /// Read the current battery charge fraction (0..1) via IOKit Power Sources.
-/// Returns nil when no battery is present (e.g. desktop Macs or while on AC
-/// with no battery charge info available).
 func batteryFraction() -> Double? {
     let blob = IOPSCopyPowerSourcesInfo().takeRetainedValue()
     let list = IOPSCopyPowerSourcesList(blob).takeRetainedValue() as [CFTypeRef]
@@ -48,7 +83,6 @@ func batteryFraction() -> Double? {
 }
 
 let state = HostState()
-// Fix B: log real battery value once at startup (demonstration of native macOS read).
 print("[host] battery fraction (native read):", batteryFraction().map { String($0) } ?? "n/a")
 
 // ---------------------------------------------------------------------------
@@ -61,11 +95,22 @@ func getNum(
     _ out: UnsafeMutablePointer<Double>?
 ) -> Bool {
     guard let key = key, let out = out else { return false }
-    if String(cString: key) == "level" {
-        out.pointee = state.level()
+    let k = String(cString: key)
+    switch k {
+    case "position":
+        out.pointee = state.position()
         return true
+    case "current_index":
+        out.pointee = 0.0
+        return true
+    default:
+        // viz_0 .. viz_11
+        if k.hasPrefix("viz_"), let idx = Int(k.dropFirst(4)), idx >= 0 && idx <= 11 {
+            out.pointee = state.viz(idx)
+            return true
+        }
+        return false
     }
-    return false
 }
 
 func getStr(
@@ -74,7 +119,22 @@ func getStr(
     _ buf: UnsafeMutablePointer<CChar>?,
     _ cap: Int
 ) -> Bool {
-    return false
+    guard let key = key, let buf = buf, cap > 0 else { return false }
+    let k = String(cString: key)
+    let value: String
+    switch k {
+    case "track_title": value = "Headspace · Ambient Demo"
+    case "time":        value = state.timeString()
+    default:            return false
+    }
+    // Copy at most cap-1 UTF-8 bytes + NUL terminator.
+    let bytes = Array(value.utf8)
+    let toCopy = min(bytes.count, cap - 1)
+    for i in 0..<toCopy {
+        buf[i] = Int8(bitPattern: bytes[i])
+    }
+    buf[toCopy] = 0
+    return true
 }
 
 func invokeAction(
@@ -84,8 +144,8 @@ func invokeAction(
     guard let action = action else { return }
     let name = String(cString: action)
     print("[host] invoke: \(name)")
-    if name == "toggle" {
-        state.paused.toggle()
+    if name == "toggle_play" {
+        state.togglePlay()
         print("[host] paused =", state.paused)
     }
 }
@@ -99,7 +159,7 @@ final class SkinView: NSView {
     var surface: IOSurface!
     var last = CACurrentMediaTime()
 
-    // Fix C: accept the first click even when the window is not yet key,
+    // Accept the first click even when the window is not yet key,
     // and make the view the first responder so keyboard/mouse events land here.
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override var acceptsFirstResponder: Bool { true }
@@ -124,21 +184,28 @@ final class SkinView: NSView {
         )
 
         // Derive skin path relative to this source file.
-        // #filePath  = .../embed-spike/macos-sample/Sources/EmbedSpike/main.swift
-        // hop 1 → strip main.swift   → .../Sources/EmbedSpike/
-        // hop 2 → strip EmbedSpike/  → .../Sources/
-        // hop 3 → strip Sources/     → .../macos-sample/
-        // hop 4 → strip macos-sample/→ .../embed-spike/
-        // + "skin"                   → .../embed-spike/skin  ✓  (verified empirically)
+        // #filePath  = .../crates/embed-spike/macos-sample/Sources/EmbedSpike/main.swift
+        // hop 1 → strip main.swift         → .../Sources/EmbedSpike/
+        // hop 2 → strip EmbedSpike/        → .../Sources/
+        // hop 3 → strip Sources/           → .../macos-sample/
+        // hop 4 → strip macos-sample/      → .../embed-spike/
+        // hop 5 → strip embed-spike/       → .../crates/
+        // + carapace-demo/skins/reference  → real Headspace skin dir ✓
         let thisFile = URL(fileURLWithPath: #filePath)
         let skinURL = thisFile
             .deletingLastPathComponent()   // → .../Sources/EmbedSpike/
             .deletingLastPathComponent()   // → .../Sources/
             .deletingLastPathComponent()   // → .../macos-sample/
             .deletingLastPathComponent()   // → .../embed-spike/
-            .appendingPathComponent("skin")
+            .deletingLastPathComponent()   // → .../crates/
+            .appendingPathComponent("carapace-demo/skins/reference")
         let skinDir = skinURL.path
         print("[carapace] skin dir:", skinDir)
+        let skinExists = FileManager.default.fileExists(atPath: skinDir)
+        print("[carapace] skin dir exists:", skinExists)
+        if !skinExists {
+            print("[carapace] WARNING: skin directory not found — engine will fail to load")
+        }
 
         engine = skinDir.withCString { carapace_create($0, vt, surface, W, H) }
         if engine == nil {
@@ -182,7 +249,7 @@ let app = NSApplication.shared
 app.setActivationPolicy(.regular)
 
 let win = NSWindow(
-    contentRect: NSRect(x: 200, y: 200, width: 480, height: 160),
+    contentRect: NSRect(x: 200, y: 200, width: Int(W), height: Int(H)),
     styleMask: [.titled, .closable, .miniaturizable],
     backing: .buffered,
     defer: false
@@ -193,18 +260,14 @@ let view = SkinView(frame: win.contentLayoutRect)
 view.autoresizingMask = [.width, .height]
 win.contentView = view
 win.makeKeyAndOrderFront(nil)
-win.makeFirstResponder(view)    // Fix C: route events directly to SkinView
+win.makeFirstResponder(view)    // route events directly to SkinView
 
-// CVDisplayLink drives ticks at the display refresh rate
-var displayLink: CVDisplayLink?
-CVDisplayLinkCreateWithActiveCGDisplays(&displayLink)
-if let dl = displayLink {
-    CVDisplayLinkSetOutputHandler(dl) { _, _, _, _, _ in
-        DispatchQueue.main.async { view.tick() }
-        return kCVReturnSuccess
-    }
-    CVDisplayLinkStart(dl)
+// LAG FIX: Replace CVDisplayLink (which dispatched async onto main, building a queue backlog)
+// with a main-run-loop Timer. Coalesces naturally; fires during mouse tracking (.common mode).
+let timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { _ in
+    view.tick()
 }
+RunLoop.main.add(timer, forMode: .common)
 
 app.activate(ignoringOtherApps: true)
 app.run()

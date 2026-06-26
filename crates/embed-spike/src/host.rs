@@ -19,7 +19,18 @@ pub struct CarapaceHostVTable {
 unsafe impl Send for CarapaceHostVTable {}
 unsafe impl Sync for CarapaceHostVTable {}
 
-const ACTIONS: &[ActionSpec] = &[ActionSpec { name: "toggle" }];
+const ACTIONS: &[ActionSpec] = &[
+    ActionSpec { name: "toggle" },
+    ActionSpec { name: "toggle_play" },
+    ActionSpec { name: "stop" },
+    ActionSpec { name: "prev" },
+    ActionSpec { name: "next" },
+    ActionSpec { name: "seek" },
+    ActionSpec { name: "play_index" },
+    ActionSpec { name: "begin_drag" },
+    ActionSpec { name: "minimize" },
+    ActionSpec { name: "close" },
+];
 
 pub struct FfiHost {
     vtable: CarapaceHostVTable,
