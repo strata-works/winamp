@@ -125,13 +125,16 @@ pub unsafe extern "C" fn carapace_tick(ptr: *mut CarapaceEngine, dt_seconds: f64
     match present {
         // Tier 2: render into the Rgba8 offscreen, then GPU-blit it into the IOSurface texture.
         // No CPU readback, no swizzle copy — the blitter reorders RGBA→BGRA on the GPU.
+        // wait=false: blit() is the single poll on this path; skipping the render_frame stall
+        // removes a redundant GPU wait and reduces Tier-2 latency.
         Present::Shared { off, iosurface_view, blitter, .. } => {
-            render_frame(engine, renderer, gpu, &off.view, w, h, dt);
+            render_frame(engine, renderer, gpu, &off.view, w, h, dt, false);
             blit(gpu, blitter, &off.view, iosurface_view);
         }
         // Tier 1: render, read back, swizzle-copy into the IOSurface.
+        // wait=true: readback_rgba must see completed GPU work before it maps the buffer.
         Present::Readback { off } => {
-            render_frame(engine, renderer, gpu, &off.view, w, h, dt);
+            render_frame(engine, renderer, gpu, &off.view, w, h, dt, true);
             let rgba = readback_rgba(gpu, &off.tex, w, h);
             unsafe { copy_into_iosurface(*surface, &rgba, w, h) };
         }

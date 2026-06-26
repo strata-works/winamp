@@ -69,6 +69,12 @@ pub fn new_offscreen(device: &wgpu::Device, w: u32, h: u32) -> OffscreenTarget {
 }
 
 /// The one draw path every tier shares: drain+tick, reflow, draw into `view`.
+///
+/// `wait`: set `true` when the caller needs all prior GPU work complete before returning
+/// (e.g. Readback path — `readback_rgba` runs immediately after). Set `false` when the
+/// caller does its own poll afterwards, e.g. the Shared blit path — `blit()` already calls
+/// `poll(Wait)`, so a second stall here would be redundant.
+#[allow(clippy::too_many_arguments)]
 pub fn render_frame(
     engine: &mut Engine,
     renderer: &mut Renderer,
@@ -77,6 +83,7 @@ pub fn render_frame(
     w: u32,
     h: u32,
     dt: Duration,
+    wait: bool,
 ) {
     engine.update(dt); // drains queued host actions, ticks host
     let scene = engine.layout(w as f32, h as f32);
@@ -94,8 +101,12 @@ pub fn render_frame(
             base_color: Color { r: 0, g: 0, b: 0, a: 0 },
         },
     );
-    // Ensure GPU work is complete before the caller reads back / composites.
-    let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+    // Poll only when the caller requests it. The Shared path skips this stall because
+    // blit() is the single poll for that path; the Readback path passes wait=true so
+    // readback_rgba can safely map the texture.
+    if wait {
+        let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+    }
 }
 
 /// Copy an RGBA8 texture back to CPU, returning tightly-packed rows (no padding).
@@ -238,7 +249,9 @@ pub unsafe fn try_shared(
 
 /// GPU-blit an `Rgba8Unorm` source view into a `Bgra8Unorm` destination view. The blitter's
 /// shader handles the RGBA→BGRA channel reorder, so colours stay correct. Pure GPU work — no
-/// CPU readback. Caller must `poll(Wait)` afterwards before CoreAnimation composites.
+/// CPU readback. This function calls `poll(Wait)` itself, making it the single GPU stall on
+/// the Shared path; callers should pass `wait = false` to `render_frame` to avoid a redundant
+/// stall before this blit.
 pub fn blit(
     gpu: &GpuCtx,
     blitter: &wgpu::util::TextureBlitter,

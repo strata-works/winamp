@@ -37,7 +37,7 @@ fn main() {
     let mut renderer = carapace::render::Renderer::new(&gpu.device);
     let target = new_offscreen(&gpu.device, w, h);
 
-    render_frame(&mut engine, &mut renderer, &gpu, &target.view, w, h, Duration::from_millis(16));
+    render_frame(&mut engine, &mut renderer, &gpu, &target.view, w, h, Duration::from_millis(16), true);
     let rgba = readback_rgba(&gpu, &target.tex, w, h);
 
     // The value bar (green ~120,230,80) must appear somewhere — assert non-empty + has a green-ish pixel.
