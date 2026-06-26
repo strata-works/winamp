@@ -137,6 +137,18 @@ func getStr(
     return true
 }
 
+// ---------------------------------------------------------------------------
+// Weak-reference box so C closures can call back into the window.
+// ---------------------------------------------------------------------------
+
+final class WeakWindowBox {
+    weak var window: SkinWindow?
+    init(_ w: SkinWindow) { window = w }
+}
+
+// Will be set after the window is created; the C callback captures it.
+var windowBox: WeakWindowBox? = nil
+
 func invokeAction(
     _ ctx: UnsafeMutableRawPointer?,
     _ action: UnsafePointer<CChar>?
@@ -144,10 +156,32 @@ func invokeAction(
     guard let action = action else { return }
     let name = String(cString: action)
     print("[host] invoke: \(name)")
-    if name == "toggle_play" {
+    switch name {
+    case "toggle_play":
         state.togglePlay()
         print("[host] paused =", state.paused)
+    case "minimize":
+        DispatchQueue.main.async {
+            windowBox?.window?.miniaturize(nil)
+        }
+    case "close":
+        DispatchQueue.main.async {
+            NSApp.terminate(nil)
+        }
+    default:
+        // begin_drag and anything else: just log (window drag handled manually).
+        break
     }
+}
+
+// ---------------------------------------------------------------------------
+// Borderless window subclass — .borderless windows cannot become key/main
+// by default; override to restore click-to-focus and keyboard focus.
+// ---------------------------------------------------------------------------
+
+final class SkinWindow: NSWindow {
+    override var canBecomeKey:  Bool { true }
+    override var canBecomeMain: Bool { true }
 }
 
 // ---------------------------------------------------------------------------
@@ -158,6 +192,11 @@ final class SkinView: NSView {
     var engine: OpaquePointer?
     var surface: IOSurface!
     var last = CACurrentMediaTime()
+
+    // Drag state
+    private var dragStartMouse:  NSPoint?
+    private var dragStartOrigin: NSPoint?
+    private var didDrag = false
 
     // Accept the first click even when the window is not yet key,
     // and make the view the first responder so keyboard/mouse events land here.
@@ -223,17 +262,48 @@ final class SkinView: NSView {
         let dt = now - last
         last = now
         carapace_tick(engine, dt)
+        // Keep layer transparent so desktop shows through clear pixels.
+        layer?.isOpaque = false
+        layer?.backgroundColor = NSColor.clear.cgColor
         layer?.contents = surface          // zero-copy hand-off to CA
         layer?.contentsGravity = .resize
     }
 
+    // MARK: - Mouse events for drag + tap dispatch
+
     override func mouseDown(with e: NSEvent) {
-        let p = convert(e.locationInWindow, from: nil)
-        // AppKit y is bottom-up; canvas y is top-down.
-        let cx = Double(p.x) * Double(W) / Double(bounds.width)
-        let cy = (Double(bounds.height) - Double(p.y)) * Double(H) / Double(bounds.height)
-        print("[input] pointer press at canvas (\(Int(cx)), \(Int(cy)))")
-        carapace_pointer(engine, cx, cy, 0)
+        // Record screen-space anchor; do NOT forward to the engine yet —
+        // we only forward on mouseUp if the gesture was a tap (no drag).
+        dragStartMouse  = NSEvent.mouseLocation
+        dragStartOrigin = window?.frame.origin
+        didDrag = false
+    }
+
+    override func mouseDragged(with e: NSEvent) {
+        guard let start  = dragStartMouse,
+              let origin = dragStartOrigin else { return }
+        let now = NSEvent.mouseLocation
+        let dx = now.x - start.x
+        let dy = now.y - start.y
+        if abs(dx) > 3 || abs(dy) > 3 {
+            didDrag = true
+        }
+        window?.setFrameOrigin(NSPoint(x: origin.x + dx, y: origin.y + dy))
+    }
+
+    override func mouseUp(with e: NSEvent) {
+        if !didDrag {
+            // It was a tap — forward to the engine as a press+release.
+            let p  = convert(e.locationInWindow, from: nil)
+            let cx = Double(p.x) * Double(W) / Double(bounds.width)
+            let cy = (Double(bounds.height) - Double(p.y)) * Double(H) / Double(bounds.height)
+            print("[input] pointer tap at canvas (\(Int(cx)), \(Int(cy)))")
+            carapace_pointer(engine, cx, cy, 0)
+        }
+        // If didDrag: window already moved; nothing more to do.
+        dragStartMouse  = nil
+        dragStartOrigin = nil
+        didDrag = false
     }
 
     deinit {
@@ -248,13 +318,19 @@ final class SkinView: NSView {
 let app = NSApplication.shared
 app.setActivationPolicy(.regular)
 
-let win = NSWindow(
+// 1. Borderless + transparent + shaped window
+let win = SkinWindow(
     contentRect: NSRect(x: 200, y: 200, width: Int(W), height: Int(H)),
-    styleMask: [.titled, .closable, .miniaturizable],
+    styleMask: [.borderless],
     backing: .buffered,
     defer: false
 )
-win.title = "embed-spike"
+win.isOpaque = false
+win.backgroundColor = .clear
+win.hasShadow = true   // drop-shadow follows the shaped silhouette
+
+// Wire up the weak box so invokeAction can reach the window.
+windowBox = WeakWindowBox(win)
 
 let view = SkinView(frame: win.contentLayoutRect)
 view.autoresizingMask = [.width, .height]
