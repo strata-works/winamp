@@ -253,75 +253,102 @@ pub unsafe fn try_shared(
     Some(tex)
 }
 
-/// Import a caller-owned BGRA8 IOSurface as a *sampled* wgpu `Bgra8Unorm` texture (zero CPU
-/// copy) suitable for the engine's `view{}` composite path. Same import recipe as `try_shared`
-/// but the MTLTexture is created with `ShaderRead` usage and the wgpu texture with
-/// `TEXTURE_BINDING`, so the engine can sample it into a view cutout. Returns `None` on any
-/// failure (caller then supplies no host content).
+/// Create a NORMAL (non-aliased) wgpu `Bgra8Unorm` texture for the engine's `view{}` composite
+/// path. Unlike an IOSurface-aliased import, this texture is wgpu-owned memory that we re-upload
+/// the host's content into every frame via `upload_iosurface_to_texture`. That per-frame copy is
+/// what guarantees CPU→GPU coherency: the GPU always samples this frame's content, never a stale
+/// first-frame cache (the bug an aliased import exhibits because the GPU caches the import).
 ///
-/// # Safety
-/// `surface` must be a live IOSurface of at least `w`×`h` BGRA8 pixels that outlives the texture.
-#[allow(deprecated)]
-pub unsafe fn try_import_sampled(
+/// `COPY_DST` so `queue.write_texture` can upload into it; `TEXTURE_BINDING` so the engine can
+/// sample it into the cutout.
+pub fn make_content_texture(
     device: &wgpu::Device,
-    surface: IOSurfaceRef,
     w: u32,
     h: u32,
-) -> Option<wgpu::Texture> {
-    use objc2::runtime::ProtocolObject;
-    use objc2_metal::{
-        MTLDevice, MTLPixelFormat, MTLStorageMode, MTLTextureDescriptor, MTLTextureType,
-        MTLTextureUsage,
-    };
+) -> (wgpu::Texture, wgpu::TextureView) {
+    let tex = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("embed-spike-content"),
+        size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Bgra8Unorm,
+        usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    });
+    let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+    (tex, view)
+}
 
-    // 1. Reach wgpu's underlying MTLDevice through the Metal HAL.
-    let hal_device = device.as_hal::<wgpu::hal::api::Metal>()?;
-    let mtl_device: &ProtocolObject<dyn MTLDevice> = hal_device.raw_device();
+/// Read the current bytes of a caller-owned BGRA8 IOSurface and upload them into `tex` via
+/// `queue.write_texture`. Called every frame BEFORE rendering so the engine samples this frame's
+/// host content (the fix for the frozen-`view{}` coherency bug — see `make_content_texture`).
+///
+/// ## 256-byte `bytes_per_row` alignment
+/// `queue.write_texture` requires `bytes_per_row` to be a multiple of
+/// `COPY_BYTES_PER_ROW_ALIGNMENT` (256). An IOSurface's stride is whatever CoreGraphics chose and
+/// is frequently NOT a multiple of 256 (e.g. a 404-wide BGRA surface has stride 1616, which is
+/// `404*4` and `1616 % 256 == 80 != 0`). When the surface stride is already 256-aligned we hand
+/// it straight to wgpu; otherwise we repack each row into a 256-aligned staging buffer first
+/// (mirroring the padded-stride pattern in `readback_rgba`), then upload that with the padded
+/// stride.
+///
+/// # Safety
+/// `surface` must be a live IOSurface of at least `w`×`h` BGRA8 pixels. `tex` must be a
+/// `Bgra8Unorm` texture of at least `w`×`h` with `COPY_DST` usage.
+#[allow(deprecated)]
+pub unsafe fn upload_iosurface_to_texture(
+    queue: &wgpu::Queue,
+    surface: IOSurfaceRef,
+    tex: &wgpu::Texture,
+    w: u32,
+    h: u32,
+) {
+    let mut seed: u32 = 0;
+    // Read-only lock: we only read the surface's bytes here.
+    IOSurfaceLock(surface, 0x1 /* kIOSurfaceLockReadOnly */, &mut seed);
+    let base = IOSurfaceGetBaseAddress(surface) as *const u8;
+    let stride = IOSurfaceGetBytesPerRow(surface) as u32;
 
-    // 2. Build an MTLTextureDescriptor matching the BGRA IOSurface, sampled (ShaderRead) only.
-    let desc = MTLTextureDescriptor::new();
-    desc.setTextureType(MTLTextureType::Type2D);
-    desc.setPixelFormat(MTLPixelFormat::BGRA8Unorm);
-    // setWidth/setHeight are `unsafe`; our values come straight from the surface dimensions.
-    unsafe {
-        desc.setWidth(w as usize);
-        desc.setHeight(h as usize);
-    }
-    desc.setUsage(MTLTextureUsage::ShaderRead);
-    desc.setStorageMode(MTLStorageMode::Shared);
-
-    // 3. Create an MTLTexture backed by the IOSurface (plane 0).
-    let io: &objc2_io_surface::IOSurfaceRef =
-        unsafe { (surface as *const objc2_io_surface::IOSurfaceRef).as_ref()? };
-    let mtl_tex = mtl_device.newTextureWithDescriptor_iosurface_plane(&desc, io, 0)?;
-
-    // 4. Wrap the MTLTexture as a wgpu-hal texture, then import it into wgpu as TEXTURE_BINDING.
-    let hal_tex = unsafe {
-        <wgpu::hal::api::Metal as wgpu::hal::Api>::Device::texture_from_raw(
-            mtl_tex,
-            wgpu::TextureFormat::Bgra8Unorm,
-            MTLTextureType::Type2D,
-            1, // array layers
-            1, // mip levels
-            wgpu::hal::CopyExtent { width: w, height: h, depth: 1 },
-        )
-    };
-    let tex = unsafe {
-        device.create_texture_from_hal::<wgpu::hal::api::Metal>(
-            hal_tex,
-            &wgpu::TextureDescriptor {
-                label: Some("iosurface-content-sampled"),
-                size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Bgra8Unorm,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING,
-                view_formats: &[],
+    let extent = wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 };
+    let copy = |bytes: &[u8], bytes_per_row: u32| {
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
             },
-        )
+            bytes,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(bytes_per_row),
+                rows_per_image: Some(h),
+            },
+            extent,
+        );
     };
-    Some(tex)
+
+    let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+    if stride.is_multiple_of(align) {
+        // Stride is already 256-aligned: upload the surface bytes directly, no repack.
+        let bytes = unsafe { std::slice::from_raw_parts(base, (stride * h) as usize) };
+        copy(bytes, stride);
+    } else {
+        // Stride is not 256-aligned: repack each row into a padded staging buffer whose row
+        // stride IS a multiple of 256, then upload that.
+        let row_bytes = (w * 4) as usize;
+        let padded = stride.div_ceil(align) * align;
+        let mut staging = vec![0u8; (padded * h) as usize];
+        for y in 0..h as usize {
+            let src = unsafe { std::slice::from_raw_parts(base.add(y * stride as usize), row_bytes) };
+            let dst_start = y * padded as usize;
+            staging[dst_start..dst_start + row_bytes].copy_from_slice(src);
+        }
+        copy(&staging, padded);
+    }
+
+    IOSurfaceUnlock(surface, 0x1, &mut seed);
 }
 
 /// GPU-blit an `Rgba8Unorm` source view into a `Bgra8Unorm` destination view. The blitter's

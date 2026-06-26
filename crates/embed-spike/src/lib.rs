@@ -13,8 +13,8 @@ use io_surface::IOSurfaceRef;
 
 use crate::host::{CarapaceHostVTable, FfiHost};
 use crate::render::{
-    blit, copy_into_iosurface, init_gpu, new_offscreen, readback_rgba, render_frame,
-    try_import_sampled, try_shared, GpuCtx, OffscreenTarget, Tier,
+    blit, copy_into_iosurface, init_gpu, make_content_texture, new_offscreen, readback_rgba,
+    render_frame, try_shared, upload_iosurface_to_texture, GpuCtx, OffscreenTarget, Tier,
 };
 
 /// How a rendered frame reaches the caller's IOSurface.
@@ -36,15 +36,20 @@ enum Present {
     Readback { off: OffscreenTarget },
 }
 
-/// Host-supplied live content for a skin `view{}` cutout. Imported from a second caller-owned
-/// IOSurface as a sampled `Bgra8Unorm` texture; the engine composites `view` into the matching
-/// `view{ id = "host" }` rect each tick. Kept alive for the engine's lifetime — the wgpu texture
-/// internally retains the underlying IOSurface, so we only need to hold the texture + its view.
+/// Host-supplied live content for a skin `view{}` cutout. We hold a NORMAL wgpu `Bgra8Unorm`
+/// texture (`tex`/`view`) plus the caller-owned content `surface`. Each tick we re-read the
+/// surface's current bytes and upload them into `tex` (see `carapace_tick`), so the engine
+/// composites THIS frame's host content into the matching `view{ id = "host" }` rect — fixing the
+/// frozen-content bug an IOSurface-aliased import causes (the GPU caches the first frame and never
+/// re-reads the CPU's per-frame writes).
+#[allow(deprecated)]
 struct ContentTex {
-    _surface_kept: (),
+    surface: IOSurfaceRef,
     #[allow(dead_code)]
     tex: wgpu::Texture,
     view: wgpu::TextureView,
+    w: u32,
+    h: u32,
 }
 
 /// Opaque handle handed across the C ABI.
@@ -139,10 +144,10 @@ pub unsafe extern "C" fn carapace_create(
         if cw == 0 || ch == 0 {
             None
         } else {
-            unsafe { try_import_sampled(&gpu.device, content_surface, cw, ch) }.map(|tex| {
-                let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
-                ContentTex { _surface_kept: (), tex, view }
-            })
+            // A NORMAL wgpu texture we re-upload the content surface into every tick (CPU→GPU
+            // coherency). No IOSurface aliasing here — that's what froze the content before.
+            let (tex, view) = make_content_texture(&gpu.device, cw, ch);
+            Some(ContentTex { surface: content_surface, tex, view, w: cw, h: ch })
         }
     };
 
@@ -171,7 +176,12 @@ pub unsafe extern "C" fn carapace_tick(ptr: *mut CarapaceEngine, dt_seconds: f64
     // &present — both live under `e`, so destructure into disjoint field borrows.
     let CarapaceEngine { gpu, renderer, engine, present, surface, content, w, h, .. } = e;
     let (w, h) = (*w, *h);
-    // Supply the host's live content texture for the skin's `view{ id = "host" }` cutout.
+    // Upload THIS frame's host content into the content texture before rendering, so the engine
+    // samples fresh bytes (the CPU→GPU coherency fix). Then supply that texture for the skin's
+    // `view{ id = "host" }` cutout.
+    if let Some(c) = content.as_ref() {
+        unsafe { upload_iosurface_to_texture(&gpu.queue, c.surface, &c.tex, c.w, c.h) };
+    }
     let host_view = content.as_ref().map(|c| ("host", &c.view));
     match present {
         // Tier 2: render into the Rgba8 offscreen, then GPU-blit it into the IOSurface texture.
