@@ -304,7 +304,12 @@ final class SkinView: NSView {
             bitmapInfo:       bmp
         ) else { return }
 
-        // flipped:true => top-left origin, upright text — no manual CTM needed.
+        // Flip the raw bitmap context (which is y-up / bottom-left origin) to a top-left
+        // origin so BOTH the layout (y grows down) AND AppKit text render upright and
+        // un-mirrored. Verified in isolation via a PNG harness: translate+scale(1,-1) THEN
+        // NSGraphicsContext(flipped:true). (flipped:true alone, with no CTM flip, 180°-inverts.)
+        cg.translateBy(x: 0, y: CGFloat(ch))
+        cg.scaleBy(x: 1, y: -1)
         let ns = NSGraphicsContext(cgContext: cg, flipped: true)
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = ns
@@ -405,26 +410,40 @@ final class SkinView: NSView {
         didDrag = false
     }
 
-    // MARK: - Scroll-wheel zoom (aspect-locked)
+    // MARK: - Zoom (scroll, pinch, or +/- keys) — aspect-locked, anchored top-left.
 
-    override func scrollWheel(with e: NSEvent) {
-        zoom *= (1 + e.scrollingDeltaY * 0.002)
-        zoom  = max(0.5, min(3.0, zoom))
-        let newSize = NSSize(width: baseW * zoom, height: baseH * zoom)
-        window?.setContentSize(newSize)
-        print(String(format: "[zoom] %.2fx", zoom))
+    /// Multiply the zoom by `factor` (clamped 0.5…3.0) and resize the window via an explicit
+    /// setFrame (more reliable than setContentSize on a borderless window), keeping the top
+    /// edge fixed so it grows downward and stays on screen.
+    private func applyZoomDelta(_ factor: CGFloat) {
+        let newZoom = max(0.5, min(3.0, zoom * factor))
+        guard let win = window, newZoom != zoom else { zoom = newZoom; return }
+        zoom = newZoom
+        let newW = baseW * zoom, newH = baseH * zoom
+        let f = win.frame
+        let top = f.origin.y + f.size.height
+        win.setFrame(NSRect(x: f.origin.x, y: top - newH, width: newW, height: newH), display: true)
+        print(String(format: "[zoom] %.2fx (%.0f×%.0f)", zoom, newW, newH))
     }
 
-    // MARK: - Pinch-to-zoom (trackpad)
+    override func scrollWheel(with e: NSEvent) {
+        // The old 0.002 step was imperceptible; 0.01 makes a normal scroll visibly resize.
+        applyZoomDelta(1 + e.scrollingDeltaY * 0.01)
+    }
+
+    /// Guaranteed resize path that doesn't depend on scroll sensitivity or gesture recognition.
+    override func keyDown(with e: NSEvent) {
+        switch e.charactersIgnoringModifiers {
+        case "+", "=": applyZoomDelta(1.1)
+        case "-", "_": applyZoomDelta(1.0 / 1.1)
+        default:       super.keyDown(with: e)
+        }
+    }
 
     @objc func handlePinch(_ r: NSMagnificationGestureRecognizer) {
         guard r.state == .changed else { return }
-        zoom *= (1 + r.magnification)
-        r.magnification = 0          // reset so deltas don't accumulate across changed events
-        zoom  = max(0.5, min(3.0, zoom))
-        let newSize = NSSize(width: baseW * zoom, height: baseH * zoom)
-        window?.setContentSize(newSize)
-        print(String(format: "[zoom] %.2fx", zoom))
+        applyZoomDelta(1 + r.magnification)
+        r.magnification = 0          // reset so deltas don't accumulate across .changed events
     }
 
     deinit {
