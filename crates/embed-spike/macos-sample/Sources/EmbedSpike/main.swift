@@ -4,6 +4,9 @@ import IOSurface
 import IOKit.ps
 import CCarapace
 
+// Fix A: unbuffer stdout so runtime prints flush immediately to a non-TTY pipe.
+setvbuf(stdout, nil, _IONBF, 0)
+
 let W: UInt32 = 240, H: UInt32 = 80
 
 // ---------------------------------------------------------------------------
@@ -12,18 +15,16 @@ let W: UInt32 = 240, H: UInt32 = 80
 
 final class HostState {
     var paused = false
-    var lastLevel: Double = 0.5
+    var lastLevel: Double = 0.0
+    let start = CACurrentMediaTime()
 
     func level() -> Double {
         if paused { return lastLevel }
-        if let frac = batteryFraction() {
-            lastLevel = frac
-            return frac
-        }
-        // Wall-clock sweep: 0→1 over 10 seconds
-        let sweep = Date().timeIntervalSince1970.truncatingRemainder(dividingBy: 10.0) / 10.0
-        lastLevel = sweep
-        return sweep
+        // Triangle wave 0→1→0 over ~3s — Swift-computed state, served over FFI each frame.
+        let t = (CACurrentMediaTime() - start).truncatingRemainder(dividingBy: 3.0) / 3.0
+        let v = t < 0.5 ? t * 2.0 : (1.0 - t) * 2.0
+        lastLevel = v
+        return v
     }
 }
 
@@ -47,6 +48,8 @@ func batteryFraction() -> Double? {
 }
 
 let state = HostState()
+// Fix B: log real battery value once at startup (demonstration of native macOS read).
+print("[host] battery fraction (native read):", batteryFraction().map { String($0) } ?? "n/a")
 
 // ---------------------------------------------------------------------------
 // Host vtable callbacks — top-level C-compatible functions
@@ -95,6 +98,11 @@ final class SkinView: NSView {
     var engine: OpaquePointer?
     var surface: IOSurface!
     var last = CACurrentMediaTime()
+
+    // Fix C: accept the first click even when the window is not yet key,
+    // and make the view the first responder so keyboard/mouse events land here.
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override var acceptsFirstResponder: Bool { true }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -185,6 +193,7 @@ let view = SkinView(frame: win.contentLayoutRect)
 view.autoresizingMask = [.width, .height]
 win.contentView = view
 win.makeKeyAndOrderFront(nil)
+win.makeFirstResponder(view)    // Fix C: route events directly to SkinView
 
 // CVDisplayLink drives ticks at the display refresh rate
 var displayLink: CVDisplayLink?
