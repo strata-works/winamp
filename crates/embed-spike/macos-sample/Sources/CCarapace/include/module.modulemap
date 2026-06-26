@@ -1,0 +1,5 @@
+module CCarapace {
+    header "carapace.h"
+    link "embed_spike"
+    export *
+}
