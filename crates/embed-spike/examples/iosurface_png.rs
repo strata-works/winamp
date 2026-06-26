@@ -2,7 +2,7 @@
 //!
 //! Creates a BGRA8 IOSurface, feeds it to `carapace_create`, ticks once, then reads the
 //! surface memory back (un-swizzling BGRA→RGBA) and saves it as a PNG.
-//! Asserts: tier == 1 (Readback) and the green value bar is visible.
+//! Reports the active tier (1 or 2) and asserts the green value bar is visible.
 #![allow(deprecated)] // io-surface 0.16 intentionally used
 
 use std::ffi::{c_char, c_void, CStr, CString};
@@ -70,7 +70,12 @@ fn main() {
 
         embed_spike::carapace_tick(e, 0.016);
 
-        assert_eq!(embed_spike::carapace_active_tier(e), 1, "expected Tier 1 readback");
+        // This headless harness creates its own BGRA IOSurface, so with Task 6 it may now
+        // reach Tier 2 (zero-copy import). Accept whichever tier is reached and just report it;
+        // the real proof below is that the green bar lands in the surface with correct colors.
+        let tier = embed_spike::carapace_active_tier(e);
+        assert!(tier == 1 || tier == 2, "unexpected tier {tier}");
+        println!("active tier: {tier}");
 
         // Read the surface back and un-swizzle BGRA → RGBA for the PNG.
         let mut seed: u32 = 0;

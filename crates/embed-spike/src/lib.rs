@@ -13,9 +13,28 @@ use io_surface::IOSurfaceRef;
 
 use crate::host::{CarapaceHostVTable, FfiHost};
 use crate::render::{
-    copy_into_iosurface, init_gpu, new_offscreen, readback_rgba, render_frame, GpuCtx,
-    OffscreenTarget, Tier,
+    blit, copy_into_iosurface, init_gpu, new_offscreen, readback_rgba, render_frame, try_shared,
+    GpuCtx, OffscreenTarget, Tier,
 };
+
+/// How a rendered frame reaches the caller's IOSurface.
+enum Present {
+    /// Tier 2 (zero CPU copy): vello renders into an `Rgba8` storage offscreen, then a GPU
+    /// blit copies+reorders it into the `Bgra8` texture that aliases the IOSurface. Nothing
+    /// touches the CPU. (Blit variant — chosen for robustness; see task-6-report.md.)
+    Shared {
+        off: OffscreenTarget,
+        // Held only to keep the imported wgpu texture (and the MTLTexture aliasing the
+        // IOSurface) alive for the engine's lifetime; we render through `iosurface_view`.
+        #[allow(dead_code)]
+        iosurface_tex: wgpu::Texture,
+        iosurface_view: wgpu::TextureView,
+        blitter: wgpu::util::TextureBlitter,
+    },
+    /// Tier 1 (fallback): render into the offscreen, read it back to CPU, swizzle-copy into
+    /// the IOSurface.
+    Readback { off: OffscreenTarget },
+}
 
 /// Opaque handle handed across the C ABI.
 #[allow(deprecated)]
@@ -23,7 +42,7 @@ pub struct CarapaceEngine {
     gpu: GpuCtx,
     renderer: Renderer,
     engine: Engine,
-    off: OffscreenTarget,
+    present: Present,
     surface: IOSurfaceRef,
     tier: Tier,
     w: u32,
@@ -68,10 +87,27 @@ pub unsafe extern "C" fn carapace_create(
     };
     let gpu = init_gpu();
     let renderer = Renderer::new(&gpu.device);
-    let off = new_offscreen(&gpu.device, w, h);
-    // Task 6 will try Tier::Shared first and fall back to Readback.
-    let tier = Tier::Readback;
-    Box::into_raw(Box::new(CarapaceEngine { gpu, renderer, engine, off, surface, tier, w, h }))
+
+    // Try Tier 2 (zero-copy IOSurface import) first; fall back to Tier 1 readback on any
+    // failure. The IOSurface texture only needs RENDER_ATTACHMENT — the blitter renders into
+    // it, so no BGRA storage feature is required.
+    let (present, tier) = match unsafe {
+        try_shared(&gpu.device, surface, w, h, wgpu::TextureUsages::RENDER_ATTACHMENT)
+    } {
+        Some(iosurface_tex) => {
+            let iosurface_view =
+                iosurface_tex.create_view(&wgpu::TextureViewDescriptor::default());
+            let blitter =
+                wgpu::util::TextureBlitter::new(&gpu.device, wgpu::TextureFormat::Bgra8Unorm);
+            let off = new_offscreen(&gpu.device, w, h);
+            (
+                Present::Shared { off, iosurface_tex, iosurface_view, blitter },
+                Tier::Shared,
+            )
+        }
+        None => (Present::Readback { off: new_offscreen(&gpu.device, w, h) }, Tier::Readback),
+    };
+    Box::into_raw(Box::new(CarapaceEngine { gpu, renderer, engine, present, surface, tier, w, h }))
 }
 
 /// Tick + render one frame into the engine's target surface.
@@ -82,10 +118,23 @@ pub unsafe extern "C" fn carapace_create(
 pub unsafe extern "C" fn carapace_tick(ptr: *mut CarapaceEngine, dt_seconds: f64) {
     let Some(e) = (unsafe { ptr.as_mut() }) else { return };
     let dt = Duration::from_secs_f64(dt_seconds.max(0.0));
-    render_frame(&mut e.engine, &mut e.renderer, &e.gpu, &e.off.view, e.w, e.h, dt);
-    if e.tier == Tier::Readback {
-        let rgba = readback_rgba(&e.gpu, &e.off.tex, e.w, e.h);
-        unsafe { copy_into_iosurface(e.surface, &rgba, e.w, e.h) };
+    // Split the borrows: render_frame needs &mut engine/renderer while the present path needs
+    // &present — both live under `e`, so destructure into disjoint field borrows.
+    let CarapaceEngine { gpu, renderer, engine, present, surface, w, h, .. } = e;
+    let (w, h) = (*w, *h);
+    match present {
+        // Tier 2: render into the Rgba8 offscreen, then GPU-blit it into the IOSurface texture.
+        // No CPU readback, no swizzle copy — the blitter reorders RGBA→BGRA on the GPU.
+        Present::Shared { off, iosurface_view, blitter, .. } => {
+            render_frame(engine, renderer, gpu, &off.view, w, h, dt);
+            blit(gpu, blitter, &off.view, iosurface_view);
+        }
+        // Tier 1: render, read back, swizzle-copy into the IOSurface.
+        Present::Readback { off } => {
+            render_frame(engine, renderer, gpu, &off.view, w, h, dt);
+            let rgba = readback_rgba(gpu, &off.tex, w, h);
+            unsafe { copy_into_iosurface(*surface, &rgba, w, h) };
+        }
     }
 }
 

@@ -23,9 +23,19 @@ pub fn init_gpu() -> GpuCtx {
         force_fallback_adapter: false,
     }))
     .expect("Metal adapter");
-    let (device, queue) =
-        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
-            .expect("wgpu device");
+    // Request BGRA8UNORM_STORAGE if the adapter exposes it: it's the prerequisite for the
+    // Tier-2 "direct" variant (vello's compute shader writing straight into a BGRA IOSurface
+    // texture). On Apple silicon it is typically available; if absent we degrade to the blit
+    // variant of Tier 2, which doesn't need it.
+    let mut required_features = wgpu::Features::empty();
+    if adapter.features().contains(wgpu::Features::BGRA8UNORM_STORAGE) {
+        required_features |= wgpu::Features::BGRA8UNORM_STORAGE;
+    }
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        required_features,
+        ..Default::default()
+    }))
+    .expect("wgpu device");
     GpuCtx { device, queue }
 }
 
@@ -135,6 +145,110 @@ pub fn readback_rgba(gpu: &GpuCtx, tex: &wgpu::Texture, w: u32, h: u32) -> Vec<u
     drop(data);
     buf.unmap();
     out
+}
+
+/// Import a caller-owned IOSurface as a wgpu `Bgra8Unorm` texture that aliases the surface's
+/// memory (zero CPU copy). Returns `None` on any failure so the caller falls back to Tier 1.
+///
+/// `usage` controls which wgpu usages the imported texture is created with; the matching
+/// `MTLTextureUsage` is derived from it. For the blit variant of Tier 2 pass
+/// `RENDER_ATTACHMENT` (the blitter renders into it); for the direct variant additionally pass
+/// `STORAGE_BINDING | TEXTURE_BINDING` (requires `Features::BGRA8UNORM_STORAGE`).
+///
+/// # Safety
+/// `surface` must be a live IOSurface of at least `w`×`h` BGRA8 pixels that outlives the texture.
+#[allow(deprecated)]
+pub unsafe fn try_shared(
+    device: &wgpu::Device,
+    surface: IOSurfaceRef,
+    w: u32,
+    h: u32,
+    usage: wgpu::TextureUsages,
+) -> Option<wgpu::Texture> {
+    use objc2::runtime::ProtocolObject;
+    use objc2_metal::{
+        MTLDevice, MTLPixelFormat, MTLStorageMode, MTLTextureDescriptor, MTLTextureType,
+        MTLTextureUsage,
+    };
+
+    // Derive the MTLTextureUsage from the requested wgpu usage.
+    let mut mtl_usage = MTLTextureUsage::empty();
+    if usage.contains(wgpu::TextureUsages::RENDER_ATTACHMENT) {
+        mtl_usage |= MTLTextureUsage::RenderTarget;
+    }
+    if usage.contains(wgpu::TextureUsages::STORAGE_BINDING) {
+        mtl_usage |= MTLTextureUsage::ShaderWrite;
+    }
+    if usage.contains(wgpu::TextureUsages::TEXTURE_BINDING) {
+        mtl_usage |= MTLTextureUsage::ShaderRead;
+    }
+
+    // 1. Reach wgpu's underlying MTLDevice through the Metal HAL.
+    let hal_device = device.as_hal::<wgpu::hal::api::Metal>()?;
+    let mtl_device: &ProtocolObject<dyn MTLDevice> = hal_device.raw_device();
+
+    // 2. Build an MTLTextureDescriptor matching the BGRA IOSurface.
+    let desc = MTLTextureDescriptor::new();
+    desc.setTextureType(MTLTextureType::Type2D);
+    desc.setPixelFormat(MTLPixelFormat::BGRA8Unorm);
+    // setWidth/setHeight are `unsafe` (they can over-allocate); our values come straight from
+    // the surface dimensions so they're sound.
+    unsafe {
+        desc.setWidth(w as usize);
+        desc.setHeight(h as usize);
+    }
+    desc.setUsage(mtl_usage);
+    desc.setStorageMode(MTLStorageMode::Shared);
+
+    // 3. Create an MTLTexture backed by the IOSurface (plane 0).
+    //    `io_surface::IOSurfaceRef` is `*const __IOSurface`; objc2's `IOSurfaceRef` is the same
+    //    opaque ObjC type. Reborrow the raw pointer as objc2's `&IOSurfaceRef`.
+    let io: &objc2_io_surface::IOSurfaceRef =
+        unsafe { (surface as *const objc2_io_surface::IOSurfaceRef).as_ref()? };
+    let mtl_tex = mtl_device.newTextureWithDescriptor_iosurface_plane(&desc, io, 0)?;
+
+    // 4. Wrap the MTLTexture as a wgpu-hal texture, then import it into wgpu.
+    let hal_tex = unsafe {
+        <wgpu::hal::api::Metal as wgpu::hal::Api>::Device::texture_from_raw(
+            mtl_tex,
+            wgpu::TextureFormat::Bgra8Unorm,
+            MTLTextureType::Type2D,
+            1, // array layers
+            1, // mip levels
+            wgpu::hal::CopyExtent { width: w, height: h, depth: 1 },
+        )
+    };
+    let tex = unsafe {
+        device.create_texture_from_hal::<wgpu::hal::api::Metal>(
+            hal_tex,
+            &wgpu::TextureDescriptor {
+                label: Some("iosurface-shared"),
+                size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Bgra8Unorm,
+                usage,
+                view_formats: &[],
+            },
+        )
+    };
+    Some(tex)
+}
+
+/// GPU-blit an `Rgba8Unorm` source view into a `Bgra8Unorm` destination view. The blitter's
+/// shader handles the RGBA→BGRA channel reorder, so colours stay correct. Pure GPU work — no
+/// CPU readback. Caller must `poll(Wait)` afterwards before CoreAnimation composites.
+pub fn blit(
+    gpu: &GpuCtx,
+    blitter: &wgpu::util::TextureBlitter,
+    src: &wgpu::TextureView,
+    dst: &wgpu::TextureView,
+) {
+    let mut enc = gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    blitter.copy(&gpu.device, &mut enc, src, dst);
+    gpu.queue.submit([enc.finish()]);
+    let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
 }
 
 /// Tier identifies which present path the engine is using.
