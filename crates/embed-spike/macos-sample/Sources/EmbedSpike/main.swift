@@ -396,6 +396,9 @@ final class SkinView: NSView {
     // MARK: - Mouse events for drag + tap dispatch
 
     override func mouseDown(with e: NSEvent) {
+        // acceptsFirstMouse delivers clicks WITHOUT making the window key, so keyDown never
+        // fires. Explicitly make it key here so +/- keyboard zoom works after a click.
+        window?.makeKey()
         // Record screen-space anchor; do NOT forward to the engine yet —
         // we only forward on mouseUp if the gesture was a tap (no drag).
         dragStartMouse  = NSEvent.mouseLocation
@@ -414,12 +417,15 @@ final class SkinView: NSView {
             didDrag = true
         }
         if e.modifierFlags.contains(.option) {
-            // ⌥-drag = RESIZE (uses the proven mouse path; setFrame is known-good because
-            // setFrameOrigin moves the window). Drag DOWN/RIGHT grows it, aspect-locked.
+            // ⌥-drag = RESIZE. Drag DOWN/RIGHT grows it, aspect-locked.
             setZoom(dragStartZoom * (1 + (dx - dy) * 0.004))
         } else {
             // Plain drag = MOVE the window.
+            let was = window?.frame.origin ?? .zero
             window?.setFrameOrigin(NSPoint(x: origin.x + dx, y: origin.y + dy))
+            let now2 = window?.frame.origin ?? .zero
+            print(String(format: "[drag] d=%.0f,%.0f origin %.0f,%.0f→%.0f,%.0f",
+                         dx, dy, was.x, was.y, now2.x, now2.y))
         }
     }
 
@@ -461,16 +467,19 @@ final class SkinView: NSView {
     private func applyZoomDelta(_ factor: CGFloat) { setZoom(zoom * factor) }
 
     override func scrollWheel(with e: NSEvent) {
-        // scrollWheel DOES fire (confirmed via logs) — the old proportional step was just too
-        // tiny to move zoom. Clamp the (often fractional) per-event delta so a normal scroll
-        // produces a visible ±step; the 0.5…3.0 clamp bounds momentum scrolling.
-        let d = max(-3.0, min(3.0, e.scrollingDeltaY))
-        applyZoomDelta(1 + d * 0.04)
+        // The logged events had scrollingDeltaY≈0 (trackpad phase events), so a proportional
+        // step never moved zoom. Use a FIXED ±step per real notch, with a deadzone.
+        let dy = e.scrollingDeltaY
+        let factor: CGFloat = dy > 0.5 ? 1.05 : (dy < -0.5 ? 0.95 : 1.0)
+        print(String(format: "[scroll] dy=%.2f factor=%.2f", dy, factor))
+        if factor != 1.0 { applyZoomDelta(factor) }
     }
 
-    /// Guaranteed resize path that doesn't depend on scroll sensitivity or gesture recognition.
+    /// Guaranteed resize path (works once the window is key — see makeKey() in mouseDown).
     override func keyDown(with e: NSEvent) {
-        switch e.charactersIgnoringModifiers {
+        let c = e.charactersIgnoringModifiers ?? "?"
+        print("[key] \(c)")
+        switch c {
         case "+", "=": applyZoomDelta(1.1)
         case "-", "_": applyZoomDelta(1.0 / 1.1)
         default:       super.keyDown(with: e)
