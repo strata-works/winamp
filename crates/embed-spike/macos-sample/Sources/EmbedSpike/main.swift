@@ -280,7 +280,22 @@ final class SkinView: NSView {
         // Pinch-to-zoom gesture recognizer.
         let pinch = NSMagnificationGestureRecognizer(target: self, action: #selector(handlePinch(_:)))
         addGestureRecognizer(pinch)
+
+        // Visible +/− resize buttons (the input device reports 0 scroll delta, and a
+        // borderless window has no OS resize handles — so give explicit on-screen controls).
+        let minus = NSButton(title: "−", target: self, action: #selector(zoomOut))
+        let plus  = NSButton(title: "+", target: self, action: #selector(zoomIn))
+        for (i, b) in [minus, plus].enumerated() {
+            b.bezelStyle = .circular
+            b.font = NSFont.boldSystemFont(ofSize: 16)
+            b.frame = NSRect(x: 10 + i * 36, y: 8, width: 30, height: 30)
+            b.autoresizingMask = []          // stay pinned to the window's bottom-left
+            addSubview(b)
+        }
     }
+
+    @objc private func zoomIn()  { applyZoomDelta(1.1) }
+    @objc private func zoomOut() { applyZoomDelta(1.0 / 1.1) }
 
     required init?(coder: NSCoder) { fatalError() }
 
