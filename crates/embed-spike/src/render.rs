@@ -91,7 +91,12 @@ pub fn render_frame(
     host_view: Option<(&str, &wgpu::TextureView)>,
 ) {
     engine.update(dt); // drains queued host actions, ticks host
-    let scene = engine.layout(w as f32, h as f32);
+    // Lay out at the DESIGN CANVAS, not the surface (`w,h`) size. The renderer computes
+    // sx = target.width / scene.canvas.0, so laying out at the canvas and rendering into a 2×
+    // surface scales the skin up to fill the surface SHARPLY. When surface == canvas (the 1:1
+    // callers) sx = 1 and behavior is identical.
+    let (cw, ch) = engine.scene().canvas;
+    let scene = engine.layout(cw as f32, ch as f32);
     let view_tex = |id: &str| host_view.and_then(|(vid, v)| if vid == id { Some(v) } else { None });
     renderer.draw(
         &scene,

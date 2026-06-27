@@ -63,8 +63,15 @@ pub struct CarapaceEngine {
     /// Optional live host content composited into the skin's `view{ id = "host" }` cutout.
     content: Option<ContentTex>,
     tier: Tier,
+    /// Surface (output) pixel size — the IOSurface / offscreen / Tier-2 textures are this size.
+    /// On a 2× Retina display this is 2× the design canvas (e.g. 684×788 for Headspace).
     w: u32,
     h: u32,
+    /// Design canvas size (e.g. 342×394 for Headspace). Layout & hit-testing happen at this size;
+    /// the renderer scales the design canvas up to fill the `w`×`h` surface (sx = w/cw), so the
+    /// skin is drawn 2× and stays sharp at native backing-pixel resolution.
+    cw: u32,
+    ch: u32,
 }
 
 // SAFETY: the spike runs entirely on one thread; the IOSurfaceRef is only touched in tick()
@@ -106,6 +113,11 @@ pub unsafe extern "C" fn carapace_create(
         Ok(e) => e,
         Err(_) => return std::ptr::null_mut(),
     };
+    // Design canvas (e.g. 342×394) — what the skin author authored at. Layout & hit-testing use
+    // this; the `w,h` PARAMS carry the SURFACE pixel size (Swift passes 2× on Retina). Decoupling
+    // these is what lets us render into a 2× surface while keeping coordinates in design space.
+    let (cw, ch) = engine.scene().canvas;
+
     let gpu = init_gpu();
     let renderer = Renderer::new(&gpu.device);
 
@@ -161,6 +173,8 @@ pub unsafe extern "C" fn carapace_create(
         tier,
         w,
         h,
+        cw,
+        ch,
     }))
 }
 
@@ -215,9 +229,12 @@ pub unsafe extern "C" fn carapace_pointer(
 ) {
     let Some(e) = (unsafe { ptr.as_mut() }) else { return };
     if kind == 0 {
+        // Hit-test at the DESIGN CANVAS (cw,ch), NOT the surface pixel size. `x,y` arrive in
+        // design coords from the caller (Swift maps the click into 0..cw / 0..ch), so layout +
+        // hit-test must use the same coordinate space.
         e.engine.handle_pointer_resolved(
-            e.w as f32,
-            e.h as f32,
+            e.cw as f32,
+            e.ch as f32,
             Pt { x: x as f32, y: y as f32 },
             PointerEvent::Press,
         );

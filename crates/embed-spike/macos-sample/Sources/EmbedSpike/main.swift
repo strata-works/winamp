@@ -223,9 +223,19 @@ final class SkinView: NSView {
         super.init(frame: frame)
         wantsLayer = true
 
+        // RETINA SHARPNESS: render into a backing-scale (e.g. 2×) IOSurface while keeping the
+        // window/view in POINTS (W×H). The CALayer then maps sw×sh surface pixels 1:1 onto the
+        // backing pixels of the W×H-point view → no CoreAnimation upscale → crisp.
+        // Layout/hit-testing stay at the W×H DESIGN canvas (Rust lays out at scene.canvas and
+        // scales up to fill the surface).
+        let scale = NSScreen.main?.backingScaleFactor ?? 2.0
+        let sw = Int((CGFloat(W) * scale).rounded())
+        let sh = Int((CGFloat(H) * scale).rounded())
+        print("[carapace] backing scale:", scale, "surface px:", sw, "×", sh)
+
         surface = IOSurface(properties: [
-            .width: Int(W),
-            .height: Int(H),
+            .width: sw,
+            .height: sh,
             .bytesPerElement: 4,
             .pixelFormat: 0x42475241 as UInt32   // 'BGRA'
         ])!
@@ -269,7 +279,10 @@ final class SkinView: NSView {
             print("[carapace] WARNING: skin directory not found — engine will fail to load")
         }
 
-        engine = skinDir.withCString { carapace_create($0, vt, surface, content, W, H) }
+        // Pass the SURFACE pixel size (sw×sh) — the engine sizes its offscreen/IOSurface textures
+        // to this and renders the W×H design canvas scaled up to fill it. Hit-testing still uses
+        // the design canvas (Rust reads scene.canvas internally).
+        engine = skinDir.withCString { carapace_create($0, vt, surface, content, UInt32(sw), UInt32(sh)) }
         if engine == nil {
             print("[carapace] ERROR: carapace_create returned nil — check skin path and dylib")
         } else {
