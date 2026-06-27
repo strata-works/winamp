@@ -285,11 +285,14 @@ final class SkinView: NSView {
         // borderless window has no OS resize handles — so give explicit on-screen controls).
         let minus = NSButton(title: "−", target: self, action: #selector(zoomOut))
         let plus  = NSButton(title: "+", target: self, action: #selector(zoomIn))
+        let bw: CGFloat = 26, gap: CGFloat = 8
+        let startX = (CGFloat(W) - (bw * 2 + gap)) / 2   // horizontally centered on the chin
         for (i, b) in [minus, plus].enumerated() {
             b.bezelStyle = .circular
-            b.font = NSFont.boldSystemFont(ofSize: 16)
-            b.frame = NSRect(x: 10 + i * 36, y: 8, width: 30, height: 30)
-            b.autoresizingMask = []          // stay pinned to the window's bottom-left
+            b.font = NSFont.boldSystemFont(ofSize: 15)
+            b.frame = NSRect(x: startX + CGFloat(i) * (bw + gap), y: 12, width: bw, height: bw)
+            // Stay centered horizontally and fixed above the bottom edge as the window zooms.
+            b.autoresizingMask = [.minXMargin, .maxXMargin, .maxYMargin]
             addSubview(b)
         }
     }
