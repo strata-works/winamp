@@ -210,10 +210,6 @@ final class SkinView: NSView {
     private var dragStartZoom:   CGFloat = 1.0
     private var didDrag = false
 
-    // FPS diagnostics
-    private var frameCount = 0
-    private var fpsLast = CACurrentMediaTime()
-
     // Accept the first click even when the window is not yet key,
     // and make the view the first responder so keyboard/mouse events land here.
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
@@ -414,14 +410,6 @@ final class SkinView: NSView {
             let sel = Selector(("setContentsChanged"))
             if l.responds(to: sel) { l.perform(sel) }
         }
-
-        // FPS diagnostic: prints the real achieved frame rate once per second.
-        frameCount += 1
-        if now - fpsLast >= 1.0 {
-            print("[fps] \(frameCount)/s")
-            frameCount = 0
-            fpsLast = now
-        }
     }
 
     // MARK: - Mouse events for drag + tap dispatch
@@ -452,11 +440,7 @@ final class SkinView: NSView {
             setZoom(dragStartZoom * (1 + (dx - dy) * 0.004))
         } else {
             // Plain drag = MOVE the window.
-            let was = window?.frame.origin ?? .zero
             window?.setFrameOrigin(NSPoint(x: origin.x + dx, y: origin.y + dy))
-            let now2 = window?.frame.origin ?? .zero
-            print(String(format: "[drag] d=%.0f,%.0f origin %.0f,%.0f→%.0f,%.0f",
-                         dx, dy, was.x, was.y, now2.x, now2.y))
         }
     }
 
@@ -477,11 +461,8 @@ final class SkinView: NSView {
 
     // MARK: - Zoom (scroll, pinch, or +/- keys) — aspect-locked, anchored top-left.
 
-    /// Multiply the zoom by `factor` (clamped 0.5…3.0) and resize the window via an explicit
-    /// setFrame (more reliable than setContentSize on a borderless window), keeping the top
-    /// edge fixed so it grows downward and stays on screen.
-    /// Set the absolute zoom (clamped 0.5…3.0) and resize the window via explicit setFrame
-    /// (known-good: setFrameOrigin already moves this borderless window). Top edge stays fixed.
+    /// Set the absolute zoom (clamped 0.5…3.0) and resize the window via explicit setFrame,
+    /// keeping the top edge fixed so it grows downward and stays on screen.
     private func setZoom(_ z: CGFloat) {
         let nz = max(0.5, min(3.0, z))
         guard let win = window else { zoom = nz; return }
@@ -490,27 +471,21 @@ final class SkinView: NSView {
         let f = win.frame
         let top = f.origin.y + f.size.height
         win.setFrame(NSRect(x: f.origin.x, y: top - newH, width: newW, height: newH), display: true)
-        // Diagnostic: did setFrame actually change the window's size?
-        print(String(format: "[zoom] %.2fx  want=%.0f×%.0f  actual=%.0f×%.0f",
-                     zoom, newW, newH, win.frame.size.width, win.frame.size.height))
     }
 
     private func applyZoomDelta(_ factor: CGFloat) { setZoom(zoom * factor) }
 
     override func scrollWheel(with e: NSEvent) {
-        // The logged events had scrollingDeltaY≈0 (trackpad phase events), so a proportional
-        // step never moved zoom. Use a FIXED ±step per real notch, with a deadzone.
+        // Some devices report scrollingDeltaY≈0 (trackpad phase events), so step a FIXED ±notch
+        // past a deadzone rather than scaling by the (tiny) delta.
         let dy = e.scrollingDeltaY
         let factor: CGFloat = dy > 0.5 ? 1.05 : (dy < -0.5 ? 0.95 : 1.0)
-        print(String(format: "[scroll] dy=%.2f factor=%.2f", dy, factor))
         if factor != 1.0 { applyZoomDelta(factor) }
     }
 
-    /// Guaranteed resize path (works once the window is key — see makeKey() in mouseDown).
+    /// +/- keyboard zoom (works once the window is key — see makeKey() in mouseDown).
     override func keyDown(with e: NSEvent) {
-        let c = e.charactersIgnoringModifiers ?? "?"
-        print("[key] \(c)")
-        switch c {
+        switch e.charactersIgnoringModifiers ?? "" {
         case "+", "=": applyZoomDelta(1.1)
         case "-", "_": applyZoomDelta(1.0 / 1.1)
         default:       super.keyDown(with: e)
@@ -554,7 +529,6 @@ view.autoresizingMask = [.width, .height]
 win.contentView = view
 win.makeKeyAndOrderFront(nil)
 win.makeFirstResponder(view)    // route events directly to SkinView
-print("[win] isKeyWindow=\(win.isKeyWindow) firstResponder=\(String(describing: win.firstResponder))")
 
 // LAG FIX: Replace CVDisplayLink (which dispatched async onto main, building a queue backlog)
 // with a main-run-loop Timer. Coalesces naturally; fires during mouse tracking (.common mode).
