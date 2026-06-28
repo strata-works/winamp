@@ -9,16 +9,18 @@ crate-type = ["cdylib", "rlib"]   # cdylib for Swift to link; rlib so tests/exam
 
 [dependencies]
 carapace = { path = "../carapace" }
+libc = "0.2.186"
+pollster = "0.4.0"
+wgpu = "29.0.3"
+wgpu-hal = "=29.0.3"
+
+[target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.10.1"
 io-surface = "0.16.1"
-libc = "0.2.186"
 objc2 = "0.6"
 objc2-io-surface = "0.3.2"
 # `objc2-io-surface` feature gates MTLDevice::newTextureWithDescriptor:iosurface:plane:
 objc2-metal = { version = "0.3.2", features = ["objc2-io-surface"] }
-pollster = "0.4.0"
-wgpu = "29.0.3"
-wgpu-hal = "=29.0.3"
 
 [dev-dependencies]
 carapace = { path = "../carapace" }

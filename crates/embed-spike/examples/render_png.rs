@@ -1,22 +1,29 @@
 //! In-process proof: a fake host serves level=0.6; the engine ticks once and we dump the frame.
 //! Confirms engine + FfiHost + renderer compose without any IOSurface/Swift involved.
-use std::ffi::{c_char, c_void, CStr};
-use std::time::Duration;
 
-use embed_spike::host::CarapaceHostVTable;
-use embed_spike::render::{init_gpu, new_offscreen, readback_rgba, render_frame};
-
-extern "C" fn get_num(_ctx: *mut c_void, key: *const c_char, out: *mut f64) -> bool {
-    let k = unsafe { CStr::from_ptr(key) }.to_str().unwrap_or("");
-    if k == "level" {
-        unsafe { *out = 0.6 };
-        true
-    } else {
-        false
-    }
+#[cfg(not(target_os = "macos"))]
+fn main() {
+    eprintln!("embed-spike examples are macOS-only");
 }
 
+#[cfg(target_os = "macos")]
 fn main() {
+    use std::ffi::{c_char, c_void, CStr};
+    use std::time::Duration;
+
+    use embed_spike::host::CarapaceHostVTable;
+    use embed_spike::render::{init_gpu, new_offscreen, readback_rgba, render_frame};
+
+    extern "C" fn get_num(_ctx: *mut c_void, key: *const c_char, out: *mut f64) -> bool {
+        let k = unsafe { CStr::from_ptr(key) }.to_str().unwrap_or("");
+        if k == "level" {
+            unsafe { *out = 0.6 };
+            true
+        } else {
+            false
+        }
+    }
+
     let (w, h) = (240u32, 80u32);
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("skin");
     let (_m, source) = carapace::skin::load_dir(&dir).unwrap();
@@ -37,11 +44,23 @@ fn main() {
     let mut renderer = carapace::render::Renderer::new(&gpu.device);
     let target = new_offscreen(&gpu.device, w, h);
 
-    render_frame(&mut engine, &mut renderer, &gpu, &target.view, w, h, Duration::from_millis(16), true, None);
+    render_frame(
+        &mut engine,
+        &mut renderer,
+        &gpu,
+        &target.view,
+        w,
+        h,
+        Duration::from_millis(16),
+        true,
+        None,
+    );
     let rgba = readback_rgba(&gpu, &target.tex, w, h);
 
-    // The value bar (green ~120,230,80) must appear somewhere — assert non-empty + has a green-ish pixel.
-    let has_green = rgba.chunks_exact(4).any(|p| p[1] > 180 && p[0] < 180 && p[2] < 160 && p[3] > 0);
+    // The value bar (green ~120,230,80) must appear somewhere — assert non-empty + has a
+    // green-ish pixel.
+    let has_green =
+        rgba.chunks_exact(4).any(|p| p[1] > 180 && p[0] < 180 && p[2] < 160 && p[3] > 0);
     assert!(has_green, "expected the value bar to render");
 
     // Ensure target/ directory exists.
