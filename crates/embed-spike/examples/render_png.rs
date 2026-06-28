@@ -59,12 +59,20 @@ fn main() {
 
     // The value bar (green ~120,230,80) must appear somewhere — assert non-empty + has a
     // green-ish pixel.
-    let has_green =
-        rgba.chunks_exact(4).any(|p| p[1] > 180 && p[0] < 180 && p[2] < 160 && p[3] > 0);
+    let has_green = rgba
+        .chunks_exact(4)
+        .any(|p| p[1] > 180 && p[0] < 180 && p[2] < 160 && p[3] > 0);
     assert!(has_green, "expected the value bar to render");
 
     // Ensure target/ directory exists.
     std::fs::create_dir_all("target").unwrap();
-    image::save_buffer("target/render_png.png", &rgba, w, h, image::ColorType::Rgba8).unwrap();
+    image::save_buffer(
+        "target/render_png.png",
+        &rgba,
+        w,
+        h,
+        image::ColorType::Rgba8,
+    )
+    .unwrap();
     println!("wrote target/render_png.png");
 }

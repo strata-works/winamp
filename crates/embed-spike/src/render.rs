@@ -28,7 +28,10 @@ pub fn init_gpu() -> GpuCtx {
     // texture). On Apple silicon it is typically available; if absent we degrade to the blit
     // variant of Tier 2, which doesn't need it.
     let mut required_features = wgpu::Features::empty();
-    if adapter.features().contains(wgpu::Features::BGRA8UNORM_STORAGE) {
+    if adapter
+        .features()
+        .contains(wgpu::Features::BGRA8UNORM_STORAGE)
+    {
         required_features |= wgpu::Features::BGRA8UNORM_STORAGE;
     }
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
@@ -51,7 +54,11 @@ const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 pub fn new_offscreen(device: &wgpu::Device, w: u32, h: u32) -> OffscreenTarget {
     let tex = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("embed-spike-offscreen"),
-        size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        size: wgpu::Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: 1,
+        },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
@@ -91,10 +98,10 @@ pub fn render_frame(
     host_view: Option<(&str, &wgpu::TextureView)>,
 ) {
     engine.update(dt); // drains queued host actions, ticks host
-    // Lay out at the DESIGN CANVAS, not the surface (`w,h`) size. The renderer computes
-    // sx = target.width / scene.canvas.0, so laying out at the canvas and rendering into a 2×
-    // surface scales the skin up to fill the surface SHARPLY. When surface == canvas (the 1:1
-    // callers) sx = 1 and behavior is identical.
+                       // Lay out at the DESIGN CANVAS, not the surface (`w,h`) size. The renderer computes
+                       // sx = target.width / scene.canvas.0, so laying out at the canvas and rendering into a 2×
+                       // surface scales the skin up to fill the surface SHARPLY. When surface == canvas (the 1:1
+                       // callers) sx = 1 and behavior is identical.
     let (cw, ch) = engine.scene().canvas;
     let scene = engine.layout(cw as f32, ch as f32);
     let view_tex = |id: &str| host_view.and_then(|(vid, v)| if vid == id { Some(v) } else { None });
@@ -109,7 +116,12 @@ pub fn render_frame(
             width: w,
             height: h,
             // Transparent base so the IOSurface carries the skin's own alpha later.
-            base_color: Color { r: 0, g: 0, b: 0, a: 0 },
+            base_color: Color {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 0,
+            },
         },
     );
     // Poll only when the caller requests it. The Shared path skips this stall because
@@ -133,8 +145,9 @@ pub fn readback_rgba(gpu: &GpuCtx, tex: &wgpu::Texture, w: u32, h: u32) -> Vec<u
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
         mapped_at_creation: false,
     });
-    let mut enc =
-        gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    let mut enc = gpu
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
     enc.copy_texture_to_buffer(
         wgpu::TexelCopyTextureInfo {
             texture: tex,
@@ -150,7 +163,11 @@ pub fn readback_rgba(gpu: &GpuCtx, tex: &wgpu::Texture, w: u32, h: u32) -> Vec<u
                 rows_per_image: Some(h),
             },
         },
-        wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        wgpu::Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: 1,
+        },
     );
     gpu.queue.submit([enc.finish()]);
 
@@ -237,7 +254,11 @@ pub unsafe fn try_shared(
             MTLTextureType::Type2D,
             1, // array layers
             1, // mip levels
-            wgpu::hal::CopyExtent { width: w, height: h, depth: 1 },
+            wgpu::hal::CopyExtent {
+                width: w,
+                height: h,
+                depth: 1,
+            },
         )
     };
     let tex = unsafe {
@@ -245,7 +266,11 @@ pub unsafe fn try_shared(
             hal_tex,
             &wgpu::TextureDescriptor {
                 label: Some("iosurface-shared"),
-                size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                size: wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
@@ -273,7 +298,11 @@ pub fn make_content_texture(
 ) -> (wgpu::Texture, wgpu::TextureView) {
     let tex = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("embed-spike-content"),
-        size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        size: wgpu::Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: 1,
+        },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
@@ -315,7 +344,11 @@ pub unsafe fn upload_iosurface_to_texture(
     let base = IOSurfaceGetBaseAddress(surface) as *const u8;
     let stride = IOSurfaceGetBytesPerRow(surface) as u32;
 
-    let extent = wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 };
+    let extent = wgpu::Extent3d {
+        width: w,
+        height: h,
+        depth_or_array_layers: 1,
+    };
     let copy = |bytes: &[u8], bytes_per_row: u32| {
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {
@@ -346,7 +379,8 @@ pub unsafe fn upload_iosurface_to_texture(
         let padded = stride.div_ceil(align) * align;
         let mut staging = vec![0u8; (padded * h) as usize];
         for y in 0..h as usize {
-            let src = unsafe { std::slice::from_raw_parts(base.add(y * stride as usize), row_bytes) };
+            let src =
+                unsafe { std::slice::from_raw_parts(base.add(y * stride as usize), row_bytes) };
             let dst_start = y * padded as usize;
             staging[dst_start..dst_start + row_bytes].copy_from_slice(src);
         }
@@ -367,7 +401,9 @@ pub fn blit(
     src: &wgpu::TextureView,
     dst: &wgpu::TextureView,
 ) {
-    let mut enc = gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    let mut enc = gpu
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
     blitter.copy(&gpu.device, &mut enc, src, dst);
     gpu.queue.submit([enc.finish()]);
     let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());

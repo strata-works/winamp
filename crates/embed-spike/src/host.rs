@@ -21,7 +21,9 @@ unsafe impl Sync for CarapaceHostVTable {}
 
 const ACTIONS: &[ActionSpec] = &[
     ActionSpec { name: "toggle" },
-    ActionSpec { name: "toggle_play" },
+    ActionSpec {
+        name: "toggle_play",
+    },
     ActionSpec { name: "stop" },
     ActionSpec { name: "prev" },
     ActionSpec { name: "next" },

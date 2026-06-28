@@ -20,8 +20,8 @@ fn main() {
     use core_foundation::number::CFNumber;
     use core_foundation::string::CFString;
     use io_surface::{
-        IOSurfaceGetBaseAddress, IOSurfaceGetBytesPerRow, IOSurfaceLock, IOSurfaceUnlock,
         kIOSurfaceBytesPerElement, kIOSurfaceHeight, kIOSurfacePixelFormat, kIOSurfaceWidth,
+        IOSurfaceGetBaseAddress, IOSurfaceGetBytesPerRow, IOSurfaceLock, IOSurfaceUnlock,
     };
 
     use embed_spike::host::CarapaceHostVTable;
@@ -106,7 +106,7 @@ fn main() {
                 // PNG wants RGBA: out[0]=R, out[1]=G, out[2]=B, out[3]=A
                 out[0] = *p.add(2); // R
                 out[1] = *p.add(1); // G
-                out[2] = *p;        // B
+                out[2] = *p; // B
                 out[3] = *p.add(3); // A
             }
         }
@@ -122,11 +122,20 @@ fn main() {
         let has_green = rgba
             .chunks_exact(4)
             .any(|p| p[1] > 180 && p[0] < 180 && p[2] < 160 && p[3] > 0);
-        assert!(has_green, "value bar not visible in the IOSurface — check swizzle");
+        assert!(
+            has_green,
+            "value bar not visible in the IOSurface — check swizzle"
+        );
 
         std::fs::create_dir_all("target").unwrap();
-        image::save_buffer("target/iosurface_png.png", &rgba, w, h, image::ColorType::Rgba8)
-            .unwrap();
+        image::save_buffer(
+            "target/iosurface_png.png",
+            &rgba,
+            w,
+            h,
+            image::ColorType::Rgba8,
+        )
+        .unwrap();
         println!("wrote target/iosurface_png.png");
     }
 }

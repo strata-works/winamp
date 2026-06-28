@@ -130,7 +130,13 @@ mod ffi_impl {
         // failure. The IOSurface texture only needs RENDER_ATTACHMENT — the blitter renders into
         // it, so no BGRA storage feature is required.
         let (present, tier) = match unsafe {
-            try_shared(&gpu.device, surface, w, h, wgpu::TextureUsages::RENDER_ATTACHMENT)
+            try_shared(
+                &gpu.device,
+                surface,
+                w,
+                h,
+                wgpu::TextureUsages::RENDER_ATTACHMENT,
+            )
         } {
             Some(iosurface_tex) => {
                 let iosurface_view =
@@ -139,11 +145,21 @@ mod ffi_impl {
                     wgpu::util::TextureBlitter::new(&gpu.device, wgpu::TextureFormat::Bgra8Unorm);
                 let off = new_offscreen(&gpu.device, w, h);
                 (
-                    Present::Shared { off, iosurface_tex, iosurface_view, blitter },
+                    Present::Shared {
+                        off,
+                        iosurface_tex,
+                        iosurface_view,
+                        blitter,
+                    },
                     Tier::Shared,
                 )
             }
-            None => (Present::Readback { off: new_offscreen(&gpu.device, w, h) }, Tier::Readback),
+            None => (
+                Present::Readback {
+                    off: new_offscreen(&gpu.device, w, h),
+                },
+                Tier::Readback,
+            ),
         };
 
         // Optionally import the host's content IOSurface as a sampled texture for the skin's
@@ -165,7 +181,13 @@ mod ffi_impl {
                 // (CPU→GPU coherency). No IOSurface aliasing here — that's what froze the
                 // content before.
                 let (tex, view) = make_content_texture(&gpu.device, cw, ch);
-                Some(ContentTex { surface: content_surface, tex, view, w: cw, h: ch })
+                Some(ContentTex {
+                    surface: content_surface,
+                    tex,
+                    view,
+                    w: cw,
+                    h: ch,
+                })
             }
         };
 
@@ -190,11 +212,23 @@ mod ffi_impl {
     /// `ptr` must come from `carapace_create` and not be destroyed.
     #[no_mangle]
     pub unsafe extern "C" fn carapace_tick(ptr: *mut CarapaceEngine, dt_seconds: f64) {
-        let Some(e) = (unsafe { ptr.as_mut() }) else { return };
+        let Some(e) = (unsafe { ptr.as_mut() }) else {
+            return;
+        };
         let dt = Duration::from_secs_f64(dt_seconds.max(0.0));
         // Split the borrows: render_frame needs &mut engine/renderer while the present path needs
         // &present — both live under `e`, so destructure into disjoint field borrows.
-        let CarapaceEngine { gpu, renderer, engine, present, surface, content, w, h, .. } = e;
+        let CarapaceEngine {
+            gpu,
+            renderer,
+            engine,
+            present,
+            surface,
+            content,
+            w,
+            h,
+            ..
+        } = e;
         let (w, h) = (*w, *h);
         // Upload THIS frame's host content into the content texture before rendering, so the
         // engine samples fresh bytes (the CPU→GPU coherency fix). Then supply that texture for
@@ -208,7 +242,12 @@ mod ffi_impl {
             // texture. No CPU readback, no swizzle copy — the blitter reorders RGBA→BGRA on
             // the GPU. wait=false: blit() is the single poll on this path; skipping the
             // render_frame stall removes a redundant GPU wait and reduces Tier-2 latency.
-            Present::Shared { off, iosurface_view, blitter, .. } => {
+            Present::Shared {
+                off,
+                iosurface_view,
+                blitter,
+                ..
+            } => {
                 render_frame(engine, renderer, gpu, &off.view, w, h, dt, false, host_view);
                 blit(gpu, blitter, &off.view, iosurface_view);
             }
@@ -227,13 +266,10 @@ mod ffi_impl {
     /// # Safety
     /// `ptr` must come from `carapace_create`.
     #[no_mangle]
-    pub unsafe extern "C" fn carapace_pointer(
-        ptr: *mut CarapaceEngine,
-        x: f64,
-        y: f64,
-        kind: i32,
-    ) {
-        let Some(e) = (unsafe { ptr.as_mut() }) else { return };
+    pub unsafe extern "C" fn carapace_pointer(ptr: *mut CarapaceEngine, x: f64, y: f64, kind: i32) {
+        let Some(e) = (unsafe { ptr.as_mut() }) else {
+            return;
+        };
         if kind == 0 {
             // Hit-test at the DESIGN CANVAS (cw,ch), NOT the surface pixel size. `x,y` arrive in
             // design coords from the caller (Swift maps the click into 0..cw / 0..ch), so layout
@@ -241,7 +277,10 @@ mod ffi_impl {
             e.engine.handle_pointer_resolved(
                 e.cw as f32,
                 e.ch as f32,
-                Pt { x: x as f32, y: y as f32 },
+                Pt {
+                    x: x as f32,
+                    y: y as f32,
+                },
                 PointerEvent::Press,
             );
         }
