@@ -129,3 +129,6 @@ rides the existing public API.
 - Premultiplied-alpha edge behavior on the shaped window looked clean here but was not formally
   characterized.
 - macOS/Metal only; Windows/Linux and the Flutter host are future work.
+- `init_gpu` uses `.expect()` for adapter/device acquisition, which runs inside `carapace_create`
+  across the C ABI — a panic there would unwind across FFI (UB). Unreachable on the target (Metal
+  is always present), but the real `carapace-ffi` layer must convert it to a null return.
