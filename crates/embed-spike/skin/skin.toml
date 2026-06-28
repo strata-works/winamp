@@ -1,0 +1,7 @@
+# Purpose-built spike skin: one bound value + one action. NOT a real product skin.
+schema = 1
+id = "embed-spike"
+name = "embed-spike"
+engine = "^0.1"
+canvas = { width = 240, height = 80 }
+entry = "main.lua"

@@ -1,0 +1,27 @@
+Building for debugging...
+[0/3] Write swift-version-69A768CDF2A0BEE1.txt
+Build of product 'EmbedSpike' complete! (0.19s)
+[host] battery fraction (native read): 1.0
+[carapace] skin dir: /Users/nexus/projects/experiments/winamp/crates/embed-spike/skin
+[carapace] active tier: 1 (Readback)
+[input] pointer press at canvas (127, 30)
+[host] invoke: toggle
+[host] paused = true
+[input] pointer press at canvas (82, 30)
+[host] invoke: toggle
+[host] paused = false
+[input] pointer press at canvas (80, 67)
+[host] invoke: toggle
+[host] paused = true
+[input] pointer press at canvas (83, 1)
+[host] invoke: toggle
+[host] paused = false
+[input] pointer press at canvas (63, 29)
+[host] invoke: toggle
+[host] paused = true
+[input] pointer press at canvas (74, 63)
+[host] invoke: toggle
+[host] paused = false
+[input] pointer press at canvas (100, 37)
+[host] invoke: toggle
+[host] paused = true
