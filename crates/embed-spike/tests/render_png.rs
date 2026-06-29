@@ -23,10 +23,8 @@ fn render_png_writes_a_file_and_state_drives_the_bar() {
     let low_c = CString::new(low.to_str().unwrap()).unwrap();
     let high_c = CString::new(high.to_str().unwrap()).unwrap();
 
-    let ok_low =
-        unsafe { carapace_render_png(skin_c.as_ptr(), 240, 80, 0.15, low_c.as_ptr()) };
-    let ok_high =
-        unsafe { carapace_render_png(skin_c.as_ptr(), 240, 80, 0.90, high_c.as_ptr()) };
+    let ok_low = unsafe { carapace_render_png(skin_c.as_ptr(), 240, 80, 0.15, low_c.as_ptr()) };
+    let ok_high = unsafe { carapace_render_png(skin_c.as_ptr(), 240, 80, 0.90, high_c.as_ptr()) };
 
     assert!(ok_low && ok_high, "render should succeed");
     assert!(low.exists() && high.exists(), "PNGs should be written");

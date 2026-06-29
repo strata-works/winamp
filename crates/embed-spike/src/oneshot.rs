@@ -58,7 +58,10 @@ pub unsafe extern "C" fn carapace_render_png(
     }
     let render = || -> Option<()> {
         let dir = PathBuf::from(unsafe { CStr::from_ptr(skin_dir) }.to_str().ok()?);
-        let out = unsafe { CStr::from_ptr(out_path) }.to_str().ok()?.to_string();
+        let out = unsafe { CStr::from_ptr(out_path) }
+            .to_str()
+            .ok()?
+            .to_string();
 
         let (_manifest, source) = carapace::skin::load_dir(&dir).ok()?;
         let mut engine = Engine::new(
