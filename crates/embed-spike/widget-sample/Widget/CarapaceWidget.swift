@@ -22,6 +22,22 @@ struct Provider: TimelineProvider {
     }
     private func entry() -> CarapaceEntry {
         let s = AppGroup.currentState()
+        #if WIDGET_RENDER_PROBE
+        // Task 6 stretch: try a live render INSIDE the extension. Enable with
+        // `WIDGET_RENDER_PROBE=1 ruby project.rb` (links carapace into the widget target).
+        // Finding: in the Simulator this returns false (Vello needs INDIRECT_EXECUTION),
+        // and the extension survives gracefully — it does not crash or get jetsam-killed.
+        if let skin = Bundle.main.url(forResource: "skin", withExtension: nil)?.path {
+            let tmp = NSTemporaryDirectory() + "ext-render.png"
+            let level = Double(s) / Double(AppGroup.stateCount - 1)
+            let ok = carapace_render_png(skin, 240, 80, level, tmp)
+            log.log("Provider PROBE: in-extension render ok=\(ok)")
+            if ok, let img = UIImage(contentsOfFile: tmp) {
+                return CarapaceEntry(date: Date(), state: s, image: img)
+            }
+        }
+        #endif
+        // Load the app-rendered PNG from the App Group.
         let path = AppGroup.pngURL(state: s).path
         let img = UIImage(contentsOfFile: path)
         log.log("Provider.entry: state=\(s) png=\(path) loaded=\(img != nil)")

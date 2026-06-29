@@ -122,6 +122,28 @@ widget.build_configurations.each do |c|
   )
 end
 
+# ---- Task 6 stretch probe: link carapace into the widget extension itself ----
+# Enable with WIDGET_RENDER_PROBE=1 ruby project.rb. Lets Provider.entry() attempt a
+# live render inside the extension process (see the probe edit in CarapaceWidget.swift).
+if ENV['WIDGET_RENDER_PROBE'] == '1'
+  widget.frameworks_build_phase.add_file_reference(dylib_ref)
+  %w[Metal MetalKit QuartzCore CoreGraphics IOSurface].each { |fw| widget.add_system_framework(fw) }
+  wembed = widget.new_copy_files_build_phase('Embed Libraries')
+  wembed.symbol_dst_subfolder_spec = :frameworks
+  wf = wembed.add_file_reference(dylib_ref)
+  wf.settings = { 'ATTRIBUTES' => ['CodeSignOnCopy'] }
+  widget.add_resources([skin_ref])
+  widget.build_configurations.each do |c|
+    c.build_settings.merge!(
+      'SWIFT_OBJC_BRIDGING_HEADER' => 'App/Bridging-Header.h',
+      'HEADER_SEARCH_PATHS' => '$(SRCROOT)/Vendor',
+      'LIBRARY_SEARCH_PATHS' => '$(SRCROOT)/Vendor',
+      'LD_RUNPATH_SEARCH_PATHS' => '$(inherited) @executable_path/Frameworks',
+      'SWIFT_ACTIVE_COMPILATION_CONDITIONS' => '$(inherited) WIDGET_RENDER_PROBE'
+    )
+  end
+end
+
 # ---------------------------------------------------- embed widget into the app
 app.add_dependency(widget)
 embed = app.new_copy_files_build_phase('Embed Foundation Extensions')
