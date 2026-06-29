@@ -29,8 +29,13 @@ pub fn init_gpu() -> GpuCtx {
     {
         required_features |= wgpu::Features::BGRA8UNORM_STORAGE;
     }
+    // Request exactly what the adapter supports rather than wgpu's defaults. The iOS Simulator's
+    // Metal adapter caps max_inter_stage_shader_variables at 15 (default wants 16), so the default
+    // limits fail request_device there; adapter.limits() is always satisfiable and ≥ defaults on
+    // a real GPU, so the macOS path is unaffected.
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         required_features,
+        required_limits: adapter.limits(),
         ..Default::default()
     }))
     .expect("wgpu device");
