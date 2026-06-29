@@ -40,4 +40,10 @@ int32_t carapace_active_tier(CarapaceEngine* e);
 /* Destroy the engine. Do not use e after this call. */
 void carapace_destroy(CarapaceEngine* e);
 
+/* One-shot headless render of a skin to a PNG file (CPU readback path).
+ * Stateless: `state` drives the skin's value_fill via host key "level".
+ * w,h are the output pixel size. Returns true on success, false on any failure. */
+bool carapace_render_png(const char* skin_dir, uint32_t w, uint32_t h,
+                         double state, const char* out_path);
+
 #endif /* CARAPACE_H */
