@@ -3,6 +3,7 @@ pub mod host;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub mod render;
 
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 pub mod oneshot;
 
 #[cfg(target_os = "macos")]
