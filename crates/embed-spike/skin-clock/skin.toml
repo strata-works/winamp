@@ -1,0 +1,6 @@
+schema = 1
+id = "embed-clock"
+name = "Clock (live-data demo)"
+engine = "^0.1"
+canvas = { width = 320, height = 140 }
+entry = "skin.lua"

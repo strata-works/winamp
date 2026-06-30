@@ -27,6 +27,17 @@ It also **fills the entire widget**: render the skin edge-to-edge and use it as 
 `containerBackground` with `.scaledToFill()` — no black margins, the system applies the rounded
 mask. Best fit when the skin canvas matches the family aspect (the wide card → `systemMedium`).
 
+**Live data is dynamic, proven end-to-end.** `skin-clock` rendered the *actual system time* at six
+successive moments (`16:56:02 → :05 → :07 → :09 → :11 → :12`, seconds-sweep bar advancing) — the
+output changes every render (`evidence/17-live-clock.gif`, via `cargo run -p embed-spike --example
+live_clock`). So the data → bind → render → bitmap loop is genuinely live, not a one-off.
+**Caveat — where live rendering can run:** on a real **device** the widget's `TimelineProvider`
+calls `carapace_render_info` with the current data per timeline entry, so the tile updates live
+(subject to WidgetKit's refresh budget — per-minute is fine, the model Apple's own clock uses). In
+the **Simulator** carapace cannot render at runtime (the INDIRECT_EXECUTION gap), so the tile shows
+a pre-baked frame and looks static there; the live loop is demonstrated on the host instead. A
+device build is the way to show the widget itself ticking.
+
 Transparency note: shaped skins render with real alpha (`carapace_render_png` preserves it; clear
 `base_color`), so a skin *floats* with no opaque box (`evidence/11-floating-proof.png`). But iOS
 does **not** let third-party home-screen widgets show the wallpaper through them (`Color.clear` → a
