@@ -1,3 +1,7 @@
+// The `oneshot` module these tests cover is gated to Apple targets (it needs Metal),
+// so gate the whole test file the same way — otherwise it fails to compile on Linux CI.
+#![cfg(any(target_os = "macos", target_os = "ios"))]
+
 use std::collections::HashMap;
 use std::ffi::CString;
 use std::path::PathBuf;
