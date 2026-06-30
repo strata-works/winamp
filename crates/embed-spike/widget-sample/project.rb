@@ -10,6 +10,14 @@ PROJ = File.join(ROOT, 'CarapaceWidgetSpike.xcodeproj')
 DEPLOY = '17.0'
 GROUP_ID = 'group.carapace.spike'
 
+# Device builds need real signing — the App Group can't provision under ad-hoc '-'.
+# Set DEVICE=1 (and optionally DEV_TEAM=XXXXXXXXXX) for an automatically-signed device
+# build; default stays ad-hoc Manual signing for the Simulator. When DEV_TEAM is blank
+# under DEVICE, the team is left empty so it can be picked once in Xcode (the .xcodeproj
+# is gitignored/generated, so don't regenerate after setting it there).
+DEVICE   = ENV['DEVICE'] == '1' || !ENV['DEV_TEAM'].to_s.empty?
+DEV_TEAM = ENV['DEV_TEAM'].to_s
+
 FileUtils.rm_rf(PROJ)
 project = Xcodeproj::Project.new(PROJ)
 
@@ -24,15 +32,26 @@ project.build_configurations.each do |c|
     'CLANG_ENABLE_MODULES' => 'YES',
     'ALWAYS_SEARCH_USER_PATHS' => 'NO',
     'TARGETED_DEVICE_FAMILY' => '1,2',
+    'CODE_SIGNING_REQUIRED' => 'YES',
+    'CODE_SIGNING_ALLOWED' => 'YES'
+  )
+  if DEVICE
+    # Real device: automatic signing so Xcode provisions the App Group for the team.
+    c.build_settings.merge!(
+      'CODE_SIGN_STYLE' => 'Automatic',
+      'CODE_SIGN_IDENTITY' => 'Apple Development',
+      'DEVELOPMENT_TEAM' => DEV_TEAM
+    )
+  else
     # Simulator: ad-hoc sign so App Group entitlements are honored, no team needed.
     # REQUIRED must be YES or Xcode skips entitlement processing and the App Group
     # container never resolves.
-    'CODE_SIGN_STYLE' => 'Manual',
-    'CODE_SIGN_IDENTITY' => '-',
-    'CODE_SIGNING_REQUIRED' => 'YES',
-    'CODE_SIGNING_ALLOWED' => 'YES',
-    'DEVELOPMENT_TEAM' => ''
-  )
+    c.build_settings.merge!(
+      'CODE_SIGN_STYLE' => 'Manual',
+      'CODE_SIGN_IDENTITY' => '-',
+      'DEVELOPMENT_TEAM' => ''
+    )
+  end
   c.build_settings['ONLY_ACTIVE_ARCH'] = 'YES' if c.name == 'Debug'
 end
 

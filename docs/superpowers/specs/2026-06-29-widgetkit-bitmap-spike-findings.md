@@ -154,3 +154,46 @@ confirm (a) the live `carapace_render_png` succeeds on-device and (b) whether in
 survives the budget. If (a) holds — very likely — ship the **app-renders-into-App-Group** model
 (robust, what this sample does) and treat in-extension render as an optimization probed per-OS.
 Carry forward the cdylib-not-staticlib decision and the `project.rb` generator.
+
+## Device-build follow-up (2026-06-30) — the open questions, answered
+
+Ran exactly this sample on a **physical device** (iPhone 16 Pro Max, iOS 27.0, Apple A18 Pro)
+with automatic signing under a paid team (App Group `group.carapace.spike` provisioned cleanly).
+Built the device-arch cdylib (`aarch64-apple-ios`, vendored via `install_name_tool` +
+`@rpath`), drove it headlessly with `xcodebuild` + `xcrun devicectl` (XcodeBuildMCP here is
+Simulator-only — no device tools). Evidence in `widget-sample/evidence/2x-device-*.png`.
+
+- **(a) Live render on-device: ✅ CONFIRMED.** The app's `carapace_render_info` GPU path runs on
+  real Apple-GPU Metal — `INDIRECT_EXECUTION` is present, so Vello renders. The app reports
+  `live GPU render` (not the seeded fallback). The Simulator gap was Simulator-only, as predicted.
+  (`20-device-app-live-render.png`)
+- **Live-data path: ✅ PROVEN, not a baked asset.** Injecting distinct host data
+  (`track="Carapace Live ✓"`, `time="9:13 / 9:99"`, `position=0.20`) rendered verbatim, and the
+  ✓ (U+2713) came out as a missing-glyph **tofu box** — proof Vello is *shaping our string live*,
+  bounded by the skin font's glyph coverage (a baked PNG could never tofu our exact input).
+  (`21-device-live-data-proof.png`)
+- **App → App Group → home-screen widget tile: ✅ WORKS on-device.** The tile shows the live
+  app-rendered bitmap. (`22-device-home-screen-widget.png`)
+- **(b) In-extension live render: ❌ NOT VIABLE — over the widget memory budget.** Built with
+  `WIDGET_RENDER_PROBE=1` (carapace linked into the appex) so `Provider.entry()` attempts a live
+  render *inside the extension process*, with staged breadcrumbs written to the App Group at each
+  stage. The breadcrumb stuck at **`2-pre-render avail=26MB`** and never reached `3-post-render`:
+  the extension is **jetsam-killed during `carapace_render_info`**. The widget extension gets only
+  ~**26 MB**, and carapace's wgpu + Vello + Metal device + render buffers exceed it mid-render.
+  The kill is silent to WidgetKit — it just keeps the last good (app-rendered) snapshot, which is
+  why earlier reloads showed no change and no overlay. (`23-device-in-extension-jetsam-26mb.png`)
+
+  This was isolated with the systematic boundary-instrumentation approach: ruled out a missing
+  resource (the appex *does* bundle `skin-nowplaying` + `libembed_spike.dylib`), confirmed the
+  fallback was clean (so not a graceful `false`), then proved the kill point with the staged
+  App-Group breadcrumb the app reads back. `os_proc_available_memory()` gave the 26 MB figure.
+
+### Verdict for `carapace-widgets`
+
+Ship the **app-renders-into-App-Group** model — it is now device-proven end to end. Treat
+in-extension rendering as **off the table** under the current renderer: 26 MB cannot hold the
+wgpu/Vello/Metal stack. If in-extension render is ever wanted, it needs a fundamentally lighter
+path (a CPU/software rasterizer, or a much smaller GPU footprint), not a tweak — out of scope here.
+Everything still rides the existing public C ABI with **zero engine change**. Device signing +
+`aarch64-apple-ios` cdylib + the `DEVICE`/`DEV_TEAM`/`WIDGET_RENDER_PROBE` `project.rb` switches are
+the carry-forward artifacts.

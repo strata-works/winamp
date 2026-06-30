@@ -10,10 +10,10 @@ enum CarapaceBridge {
     /// The live "now playing" data the skin renders. On a real device this would come from the
     /// player; here it is sample data passed straight into carapace_render_info.
     static let nowPlaying: [String: String] = [
-        "track": "Midnight City",
-        "artist": "M83",
-        "time": "2:14 / 4:03",
-        "position": "0.55",
+        "track": "Carapace Live \u{2713}",
+        "artist": "device data probe",
+        "time": "9:13 / 9:99",
+        "position": "0.20",
     ]
 
     /// Render the "Now Playing" skin (with live data) into the App Group.
