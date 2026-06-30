@@ -57,10 +57,11 @@ app.add_file_references([shared_swift])
 app_group.new_file(File.join(ROOT, 'App/Bridging-Header.h'))
 app_group.new_file(File.join(ROOT, 'App/CarapaceWidgetSpike.entitlements'))
 
-# Skin as a folder reference (blue) -> copied wholesale into the app bundle as "skin".
-skin_ref = project.main_group.new_file(File.join(ROOT, '..', 'skin'))
+# Skin as a folder reference (blue) -> copied wholesale into the app bundle as "skin-headspace"
+# (the Headspace faceplate: shaped artwork + assets, transparent background).
+skin_ref = project.main_group.new_file(File.join(ROOT, '..', 'skin-headspace'))
 skin_ref.last_known_file_type = 'folder'
-skin_ref.name = 'skin'
+skin_ref.name = 'skin-headspace'
 app.add_resources([skin_ref])
 
 # Host-rendered fallback PNGs (Simulator can't run the live GPU render). Folder reference so
@@ -103,7 +104,7 @@ end
 # ============================================================== WIDGET TARGET ==
 widget = project.new_target(:app_extension, 'CarapaceWidgetExtension', :ios, DEPLOY)
 
-%w[Widget/CarapaceWidget.swift Widget/BumpIntent.swift].each do |rel|
+%w[Widget/CarapaceWidget.swift].each do |rel|
   ref = widget_group.new_file(File.join(ROOT, rel))
   widget.add_file_references([ref])
 end

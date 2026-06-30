@@ -7,42 +7,30 @@ enum RenderMode: String {
 }
 
 enum CarapaceBridge {
-    /// Populate the App Group with a PNG per state.
+    /// Render the Headspace faceplate into the App Group.
     ///
-    /// Tries the live carapace GPU render first. On a real device this draws every state with
-    /// the engine. In the iOS Simulator the render fails (Vello needs GPU INDIRECT_EXECUTION,
-    /// which the Simulator's Metal lacks), so we fall back to the host-rendered PNGs bundled
-    /// under `Seeded/`. Either way the App Group ends up with state-0…N png for the widget.
+    /// Tries the live carapace GPU render first (works on a real device). In the iOS Simulator
+    /// the render fails (Vello needs GPU INDIRECT_EXECUTION, which the Simulator's Metal lacks),
+    /// so we fall back to the host-rendered `Seeded/faceplate.png`. Either way the App Group ends
+    /// up with the shaped, transparent faceplate the widget floats.
     @discardableResult
-    static func populateStates(width: UInt32 = 240, height: UInt32 = 80) -> RenderMode {
-        if renderAllStatesLive(width: width, height: height) { return .live }
+    static func renderFaceplate(width: UInt32 = 684, height: UInt32 = 788) -> RenderMode {
+        if let skin = Bundle.main.url(forResource: "skin-headspace", withExtension: nil)?.path,
+           carapace_render_png(skin, width, height, 0.0, AppGroup.faceplateURL.path) {
+            return .live
+        }
         if seedFromBundle() { return .seeded }
         return .failed
     }
 
-    /// Live path: render every state with the engine straight into the App Group.
-    private static func renderAllStatesLive(width: UInt32, height: UInt32) -> Bool {
-        guard let skinDir = Bundle.main.url(forResource: "skin", withExtension: nil)?.path
-        else { return false }
-        for i in 0..<AppGroup.stateCount {
-            let level = Double(i) / Double(AppGroup.stateCount - 1)   // 0.0 … 1.0
-            let out = AppGroup.pngURL(state: i).path
-            if !carapace_render_png(skinDir, width, height, level, out) { return false }
-        }
-        return true
-    }
-
-    /// Fallback path: copy the bundled host-rendered PNGs into the App Group.
+    /// Fallback: copy the bundled host-rendered faceplate into the App Group.
     private static func seedFromBundle() -> Bool {
+        guard let src = Bundle.main.url(forResource: "faceplate", withExtension: "png",
+                                        subdirectory: "Seeded")
+        else { return false }
+        let dst = AppGroup.faceplateURL
         let fm = FileManager.default
-        for i in 0..<AppGroup.stateCount {
-            guard let src = Bundle.main.url(forResource: "state-\(i)", withExtension: "png",
-                                            subdirectory: "Seeded")
-            else { return false }
-            let dst = AppGroup.pngURL(state: i)
-            try? fm.removeItem(at: dst)
-            do { try fm.copyItem(at: src, to: dst) } catch { return false }
-        }
-        return true
+        try? fm.removeItem(at: dst)
+        do { try fm.copyItem(at: src, to: dst); return true } catch { return false }
     }
 }

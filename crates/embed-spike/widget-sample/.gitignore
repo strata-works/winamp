@@ -13,3 +13,5 @@ evidence/*.txt
 evidence/01-app-render.png
 evidence/04-homescreen.png
 evidence/05-after-tap1.png
+evidence/08-widget-probe-fallback.png
+evidence/10-widget-faceplate-home.png

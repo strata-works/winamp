@@ -23,12 +23,10 @@ impl Host for OneShotHost {
         "oneshot"
     }
     fn tick(&mut self, _dt: Duration) {}
-    fn get(&self, key: &str) -> Option<StateValue> {
-        if key == "level" {
-            Some(StateValue::Scalar(self.level))
-        } else {
-            None
-        }
+    // Serve the state scalar for ANY numeric key a skin binds (level, position, cpu, …) so a
+    // single one-shot host can render arbitrary showcase skins, not just ones bound to "level".
+    fn get(&self, _key: &str) -> Option<StateValue> {
+        Some(StateValue::Scalar(self.level))
     }
     fn actions(&self) -> &[ActionSpec] {
         ACTIONS
