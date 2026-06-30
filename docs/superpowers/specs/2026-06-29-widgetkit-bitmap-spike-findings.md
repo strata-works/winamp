@@ -12,6 +12,28 @@ in a **real home-screen WidgetKit tile**, with an **AppIntent button** discretel
 displayed bitmap. All three success-bars were met in the Simulator (screenshots in
 `widget-sample/evidence/`).
 
+## Follow-on (the part that makes a widget worth shipping): LIVE DATA, full-bleed
+
+A static bitmap is a poster, not a widget. The decisive follow-on result: a carapace skin renders
+**live information** natively. Carapace already supports data binding — `text{ value = "key" }`
+reads a host **string** (`StateValue::Str`), `value_fill{ value = "key" }` reads a host **number**.
+A new `carapace_render_info(skin, w, h, n, keys, vals, out)` feeds a key→value map to an `InfoHost`
+(values that parse as numbers → `Scalar`, else `Str`). The sample's `skin-nowplaying` renders a
+"Now Playing" card — track / artist / elapsed-time text + a seek bar — from host data
+(`evidence/14-app-nowplaying.png`, `16-widget-fill.png`). On a real device the Provider would call
+`carapace_render_info` with the *current* track each timeline reload.
+
+It also **fills the entire widget**: render the skin edge-to-edge and use it as the widget's
+`containerBackground` with `.scaledToFill()` — no black margins, the system applies the rounded
+mask. Best fit when the skin canvas matches the family aspect (the wide card → `systemMedium`).
+
+Transparency note: shaped skins render with real alpha (`carapace_render_png` preserves it; clear
+`base_color`), so a skin *floats* with no opaque box (`evidence/11-floating-proof.png`). But iOS
+does **not** let third-party home-screen widgets show the wallpaper through them (`Color.clear` → a
+system dark material); the "faux-transparency" wallpaper-crop trick works mechanically but needs the
+user's own bare-wallpaper capture to align — you can't reconstruct it from iOS's layered wallpaper
+assets. A self-contained card skin (like Now Playing) sidesteps this.
+
 The one caveat is the most important finding: **carapace's renderer (Vello) cannot run in the iOS
 Simulator** — it needs a GPU capability the Simulator's Metal does not expose (see Risk 2). So the
 *live* render runs on the **macOS host** (unit test passes) and is expected to run on a **real

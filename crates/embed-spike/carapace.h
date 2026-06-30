@@ -46,4 +46,13 @@ void carapace_destroy(CarapaceEngine* e);
 bool carapace_render_png(const char* skin_dir, uint32_t w, uint32_t h,
                          double state, const char* out_path);
 
+
+/* One-shot LIVE-INFO render: n parallel keys/vals string pairs become the host data a skin binds
+ * via text{ value = "key" } (strings) and value_fill{ value = "key" } (numbers). Lets a widget
+ * render real information (track, artist, time, position, ...) through a carapace skin.
+ * Returns true on success, false on any failure. */
+bool carapace_render_info(const char* skin_dir, uint32_t w, uint32_t h, uint32_t n,
+                          const char* const* keys, const char* const* vals,
+                          const char* out_path);
+
 #endif /* CARAPACE_H */

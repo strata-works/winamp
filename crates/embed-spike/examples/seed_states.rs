@@ -5,10 +5,11 @@
 //! demo the WidgetKit pipeline in the Simulator, the sample app bundles this host-rendered
 //! PNG and seeds it into the App Group when the live render fails.
 //!
-//! Renders the Headspace faceplate (shaped, transparent background → floats in the widget).
+//! Renders the "Now Playing" skin with sample data — proving the widget shows LIVE INFORMATION
+//! (bound text + a seek bar), not just a static bitmap.
 //!
 //! Run: `cargo run -p embed-spike --example seed_states`
-//! Writes faceplate.png into widget-sample/App/Seeded/.
+//! Writes nowplaying.png into widget-sample/App/Seeded/.
 
 #[cfg(not(target_os = "macos"))]
 fn main() {
@@ -17,21 +18,32 @@ fn main() {
 
 #[cfg(target_os = "macos")]
 fn main() {
-    use std::ffi::CString;
+    use std::collections::HashMap;
     use std::path::PathBuf;
 
-    use embed_spike::oneshot::carapace_render_png;
+    use embed_spike::oneshot::{render_skin_with_host, InfoHost};
 
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let skin = manifest.join("skin-headspace"); // native 342×394, transparent background
+    let skin = manifest.join("skin-nowplaying");
     let out_dir = manifest.join("widget-sample/App/Seeded");
     std::fs::create_dir_all(&out_dir).expect("create Seeded dir");
 
-    let skin_c = CString::new(skin.to_str().unwrap()).unwrap();
-    let out = out_dir.join("faceplate.png");
-    let out_c = CString::new(out.to_str().unwrap()).unwrap();
-    // 2× the native canvas for a crisp retina widget; state is unused by this static skin.
-    let ok = unsafe { carapace_render_png(skin_c.as_ptr(), 684, 788, 0.0, out_c.as_ptr()) };
-    assert!(ok, "faceplate render failed");
+    let mut values = HashMap::new();
+    values.insert("track".into(), "Midnight City".to_string());
+    values.insert("artist".into(), "M83".to_string());
+    values.insert("time".into(), "2:14 / 4:03".to_string());
+    values.insert("position".into(), "0.55".to_string());
+
+    let out = out_dir.join("nowplaying.png");
+    // 2× the native 320×140 canvas for a crisp retina widget.
+    let ok = render_skin_with_host(
+        &skin,
+        Box::new(InfoHost { values }),
+        640,
+        280,
+        out.to_str().unwrap(),
+    )
+    .is_some();
+    assert!(ok, "now-playing render failed");
     println!("wrote {}", out.display());
 }

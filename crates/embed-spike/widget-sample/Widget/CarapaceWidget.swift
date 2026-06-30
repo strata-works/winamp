@@ -20,9 +20,9 @@ struct Provider: TimelineProvider {
         completion(Timeline(entries: [entry()], policy: .never))
     }
     private func entry() -> CarapaceEntry {
-        let path = AppGroup.faceplateURL.path
+        let path = AppGroup.renderURL.path
         let img = UIImage(contentsOfFile: path)
-        log.log("Provider.entry: faceplate=\(path) loaded=\(img != nil)")
+        log.log("Provider.entry: render=\(path) loaded=\(img != nil)")
         return CarapaceEntry(date: Date(), image: img)
     }
 }
@@ -30,16 +30,16 @@ struct Provider: TimelineProvider {
 struct CarapaceWidgetView: View {
     var entry: CarapaceEntry
     var body: some View {
-        ZStack {
+        // The skin fills the ENTIRE widget: rendered edge-to-edge by carapace and used as the
+        // container background with scaledToFill, so it covers the whole tile (the system applies
+        // the rounded-rect mask). No black margins.
+        Color.clear.containerBackground(for: .widget) {
             if let img = entry.image {
-                // The faceplate is shaped with a transparent background, so it floats over the
-                // widget's container — no opaque box, just the skin.
-                Image(uiImage: img).resizable().scaledToFit()
+                Image(uiImage: img).resizable().scaledToFill()
             } else {
-                Text("no render").foregroundStyle(.secondary)
+                Color.black
             }
         }
-        .containerBackground(for: .widget) { Color.clear }
     }
 }
 
@@ -50,7 +50,7 @@ struct CarapaceWidget: Widget {
             CarapaceWidgetView(entry: entry)
         }
         .configurationDisplayName("Carapace")
-        .description("A carapace skin rendered to a widget.")
+        .description("A carapace skin rendering live data in a widget.")
         .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
     }
 }

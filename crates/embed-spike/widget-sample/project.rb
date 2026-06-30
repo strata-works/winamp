@@ -57,11 +57,11 @@ app.add_file_references([shared_swift])
 app_group.new_file(File.join(ROOT, 'App/Bridging-Header.h'))
 app_group.new_file(File.join(ROOT, 'App/CarapaceWidgetSpike.entitlements'))
 
-# Skin as a folder reference (blue) -> copied wholesale into the app bundle as "skin-headspace"
-# (the Headspace faceplate: shaped artwork + assets, transparent background).
-skin_ref = project.main_group.new_file(File.join(ROOT, '..', 'skin-headspace'))
+# Skin as a folder reference (blue) -> copied wholesale into the app bundle as "skin-nowplaying"
+# (the live-info skin: bound text + a seek bar rendered from host data).
+skin_ref = project.main_group.new_file(File.join(ROOT, '..', 'skin-nowplaying'))
 skin_ref.last_known_file_type = 'folder'
-skin_ref.name = 'skin-headspace'
+skin_ref.name = 'skin-nowplaying'
 app.add_resources([skin_ref])
 
 # Host-rendered fallback PNGs (Simulator can't run the live GPU render). Folder reference so
