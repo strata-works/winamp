@@ -1,8 +1,3 @@
-// io-surface 0.16 is deprecated in favour of objc2-io-surface; we knowingly use it here.
-#[allow(deprecated)]
-use io_surface::{
-    IOSurfaceGetBaseAddress, IOSurfaceGetBytesPerRow, IOSurfaceLock, IOSurfaceRef, IOSurfaceUnlock,
-};
 use std::time::Duration;
 
 use carapace::engine::Engine;
@@ -34,8 +29,13 @@ pub fn init_gpu() -> GpuCtx {
     {
         required_features |= wgpu::Features::BGRA8UNORM_STORAGE;
     }
+    // Request exactly what the adapter supports rather than wgpu's defaults. The iOS Simulator's
+    // Metal adapter caps max_inter_stage_shader_variables at 15 (default wants 16), so the default
+    // limits fail request_device there; adapter.limits() is always satisfiable and ≥ defaults on
+    // a real GPU, so the macOS path is unaffected.
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         required_features,
+        required_limits: adapter.limits(),
         ..Default::default()
     }))
     .expect("wgpu device");
@@ -186,6 +186,13 @@ pub fn readback_rgba(gpu: &GpuCtx, tex: &wgpu::Texture, w: u32, h: u32) -> Vec<u
     out
 }
 
+// io-surface 0.16 is deprecated in favour of objc2-io-surface; we knowingly use it here.
+#[cfg(target_os = "macos")]
+#[allow(deprecated)]
+use io_surface::{
+    IOSurfaceGetBaseAddress, IOSurfaceGetBytesPerRow, IOSurfaceLock, IOSurfaceRef, IOSurfaceUnlock,
+};
+
 /// Import a caller-owned IOSurface as a wgpu `Bgra8Unorm` texture that aliases the surface's
 /// memory (zero CPU copy). Returns `None` on any failure so the caller falls back to Tier 1.
 ///
@@ -196,6 +203,7 @@ pub fn readback_rgba(gpu: &GpuCtx, tex: &wgpu::Texture, w: u32, h: u32) -> Vec<u
 ///
 /// # Safety
 /// `surface` must be a live IOSurface of at least `w`×`h` BGRA8 pixels that outlives the texture.
+#[cfg(target_os = "macos")]
 #[allow(deprecated)]
 pub unsafe fn try_shared(
     device: &wgpu::Device,
@@ -291,6 +299,7 @@ pub unsafe fn try_shared(
 ///
 /// `COPY_DST` so `queue.write_texture` can upload into it; `TEXTURE_BINDING` so the engine can
 /// sample it into the cutout.
+#[cfg(target_os = "macos")]
 pub fn make_content_texture(
     device: &wgpu::Device,
     w: u32,
@@ -330,6 +339,7 @@ pub fn make_content_texture(
 /// # Safety
 /// `surface` must be a live IOSurface of at least `w`×`h` BGRA8 pixels. `tex` must be a
 /// `Bgra8Unorm` texture of at least `w`×`h` with `COPY_DST` usage.
+#[cfg(target_os = "macos")]
 #[allow(deprecated)]
 pub unsafe fn upload_iosurface_to_texture(
     queue: &wgpu::Queue,
@@ -423,6 +433,7 @@ pub enum Tier {
 /// # Safety
 /// `surface` must be a valid, live IOSurface of at least w×h pixels.
 /// `rgba` must contain exactly `w * h * 4` bytes of packed RGBA8 data.
+#[cfg(target_os = "macos")]
 #[allow(deprecated)]
 pub unsafe fn copy_into_iosurface(surface: IOSurfaceRef, rgba: &[u8], w: u32, h: u32) {
     let mut seed: u32 = 0;

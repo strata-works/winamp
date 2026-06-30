@@ -5,7 +5,7 @@ edition = "2021"
 publish = false
 
 [lib]
-crate-type = ["cdylib", "rlib"]   # cdylib for Swift to link; rlib so tests/examples can use it
+crate-type = ["cdylib", "rlib", "staticlib"]   # +staticlib: iOS links a static archive
 
 [dependencies]
 carapace = { path = "../carapace" }
@@ -13,6 +13,7 @@ libc = "0.2.186"
 pollster = "0.4.0"
 wgpu = "29.0.3"
 wgpu-hal = "=29.0.3"
+image = { version = "0.24", default-features = false, features = ["png"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.10.1"
@@ -24,4 +25,3 @@ objc2-metal = { version = "0.3.2", features = ["objc2-io-surface"] }
 
 [dev-dependencies]
 carapace = { path = "../carapace" }
-image = "0.24"

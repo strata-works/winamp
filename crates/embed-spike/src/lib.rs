@@ -1,7 +1,10 @@
 pub mod host;
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 pub mod render;
+
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+pub mod oneshot;
 
 #[cfg(target_os = "macos")]
 mod ffi_impl {

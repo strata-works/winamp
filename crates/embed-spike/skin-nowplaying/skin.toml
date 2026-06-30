@@ -1,0 +1,6 @@
+schema = 1
+id = "embed-nowplaying"
+name = "Now Playing (live-info demo)"
+engine = "^0.1"
+canvas = { width = 320, height = 140 }
+entry = "skin.lua"
