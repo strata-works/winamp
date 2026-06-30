@@ -7,6 +7,30 @@ app can embed the carapace engine and round-trip input, reusing the engine's exi
 See the prior findings: `docs/superpowers/specs/2026-06-25-host-embedding-spike-findings.md`
 (finding #6 explicitly greenlights a Flutter `Texture`-widget embedding off the IOSurface result).
 
+## Realignment (2026-06-30) — supersedes the Simulator/staticlib choices below
+
+The same-day **WidgetKit device build** (`2026-06-29-widgetkit-bitmap-spike-findings.md`,
+"Device-build follow-up") changed two premises of the original plan:
+
+1. **Target = physical iOS device, not the Simulator.** Carapace's Vello renderer needs GPU
+   `INDIRECT_EXECUTION`, which the iOS **Simulator's Metal lacks** — proven: in the Simulator the
+   render dies at GPU init. On a **real device** (iPhone 16 Pro Max / iOS 27) the app-process
+   `carapace_render_info` GPU render WORKS. So success bar #1 ("skin pixels in a Flutter texture")
+   is only achievable on a device. The Flutter app runs in an app process (not a memory-capped
+   extension), so the ~26 MB widget budget that blocked the *in-extension* render does **not** apply.
+   ⇒ Build `aarch64-apple-ios` (device), automatic signing, drive via `xcodebuild` + `xcrun
+   devicectl` (XcodeBuildMCP is Simulator-only in this environment).
+
+2. **Link the cdylib, NOT the staticlib** (reverses "Components & layout" below). The staticlib
+   leaks **mlua's crate-private symbols** as cross-object local references the system linker can't
+   resolve; the **cdylib** (`@rpath`, embedded + CodeSignOnCopy) links fully and exports only the
+   public C ABI. The device-arch `libembed_spike.dylib` is already built and device-proven by the
+   widget spike — reuse it.
+
+Everything else (Tier-1 readback acceptable, tap round-trip, the IOSurface→`CVPixelBuffer`→Flutter
+external-texture question as the genuinely new unknown, zero engine diff) stands. Where the sections
+below say "Simulator" / "staticlib", read "device" / "cdylib".
+
 ## Goal & success bar
 
 A Flutter iOS app running in the **iOS Simulator** must:
