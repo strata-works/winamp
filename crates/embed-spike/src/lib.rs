@@ -11,10 +11,10 @@ mod ffi_impl {
     use std::ffi::{c_char, CStr};
     use std::time::Duration;
 
+    use crate::render::IOSurfaceRef;
     use carapace::engine::{Engine, PointerEvent};
     use carapace::render::Renderer;
     use carapace::scene::Pt;
-    use crate::render::IOSurfaceRef;
 
     use crate::host::{CarapaceHostVTable, FfiHost};
     use crate::render::{
