@@ -15,6 +15,8 @@ findings (`2026-06-19-window-replacement-spike-findings.md`).
 
 - **Platform:** Apple (macOS/iOS) only. Single-threaded — no render thread yet. Proven `wgpu-hal`
   IOSurface Tier-2 (zero-copy) path + Tier-1 readback fallback, ported from the spike.
+  **Windows, Linux, and Android are explicitly future work** — out of scope for v1 (see Non-goals);
+  the C ABI is designed to accept them additively without breaking.
 - **Crate:** new `crates/carapace-ffi`. `embed-spike` stays **frozen** as reference; its samples
   keep linking it. No sample is ported in this increment.
 - **Safety:** every export is panic-guarded — catch-unwind + poison + error code. **Never `abort()`**
@@ -255,8 +257,14 @@ the skin consume it vs. click-through) before dispatching it.
 
 - **Render thread + command queue** — the research's central recommendation; the next increment.
   Relaxes the single-thread handle constraint and fixes synchronous readback latency.
-- **Windows / Linux / Android backends** — the `wgpu-hal` D3D11→Vulkan, dmabuf, and AHardwareBuffer
-  paths from the research.
+- **Windows / Linux / Android backends (future work).** All three are deferred; v1 ships Apple only.
+  The per-platform zero-copy paths from the research are: Windows → `wgpu-hal` D3D11 shared-handle
+  imported into the Vulkan backend (`texture_from_d3d11_shared_handle`, `VK_KHR_external_memory_win32`);
+  Linux → Vulkan `texture_from_dmabuf_fd` (dmabuf, trunk-only at research time — verify the pinned
+  wgpu version before committing); Android → AHardwareBuffer import on the `wgpu-hal` Vulkan side.
+  Each host toolkit's external-texture surface (WinUI/Flutter-Windows, GTK4/Flutter-Linux) is
+  unverified and part of that future work. The C ABI + descriptor-struct + additive-export design in
+  this spec is what lets these slot in without an ABI break.
 - **Per-pixel GPU-alpha shaped mask / click-through** — refines C1's geometry coverage.
 - **Push engine→host event channel** (callbacks on region change) — pairs with the render thread's
   threading contract.
