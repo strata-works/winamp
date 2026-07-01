@@ -145,6 +145,16 @@ fn parse_paint(args: &Table) -> Result<Paint, BuildError> {
     }
 }
 
+fn parse_role(args: &Table) -> Result<crate::scene::HotspotRole, BuildError> {
+    use crate::scene::HotspotRole;
+    // Lenient + additive: unknown/absent → Control (never rejects an existing skin).
+    Ok(match args.get::<Option<String>>("role")?.as_deref() {
+        Some("drag") => HotspotRole::Drag,
+        Some("passthrough") => HotspotRole::Passthrough,
+        _ => HotspotRole::Control,
+    })
+}
+
 /// If `on_press` is present, register it and build a Hotspot over `region`.
 fn maybe_hotspot(
     args: &Table,
@@ -155,6 +165,7 @@ fn maybe_hotspot(
         Some(f) => Ok(Some(Node::Hotspot {
             region,
             on_press: ctx.register_handler(f),
+            role: parse_role(args)?,
         })),
         None => Ok(None),
     }
@@ -223,6 +234,7 @@ impl Primitive for RegionPrim {
         Ok(vec![Node::Hotspot {
             region: crate::scene::region_of(&path),
             on_press: id,
+            role: parse_role(args)?,
         }])
     }
 }
@@ -827,7 +839,9 @@ mod tests {
         assert_eq!(v.len(), 2);
         assert!(matches!(v[0], Node::Image { .. }));
         match &v[1] {
-            Node::Hotspot { on_press, region } => {
+            Node::Hotspot {
+                on_press, region, ..
+            } => {
                 assert_eq!(*on_press, 7);
                 // dest rect (10,20)-(40,60): a point inside hits, one outside misses.
                 assert!(region.contains(hittest::Point { x: 25.0, y: 40.0 }));
@@ -989,6 +1003,39 @@ mod tests {
             FillPrim.build(&one_stop, &mut NoHandlers),
             Err(BuildError::BadType(_))
         ));
+    }
+
+    #[test]
+    fn hotspot_role_parses_control_default_drag_and_passthrough() {
+        use crate::scene::HotspotRole;
+        let lua = Lua::new();
+        // default (no role) = Control
+        let t = tbl(
+            &lua,
+            "return { path = {{x=0,y=0},{x=1,y=0},{x=1,y=1}}, on_press = function() end }",
+        );
+        match one(RegionPrim.build(&t, &mut NoHandlers)) {
+            Node::Hotspot { role, .. } => assert_eq!(role, HotspotRole::Control),
+            other => panic!("expected Hotspot, got {other:?}"),
+        }
+        // explicit drag
+        let t = tbl(
+            &lua,
+            "return { path = {{x=0,y=0},{x=1,y=0},{x=1,y=1}}, role='drag', on_press = function() end }",
+        );
+        match one(RegionPrim.build(&t, &mut NoHandlers)) {
+            Node::Hotspot { role, .. } => assert_eq!(role, HotspotRole::Drag),
+            other => panic!("expected Hotspot, got {other:?}"),
+        }
+        // explicit passthrough
+        let t = tbl(
+            &lua,
+            "return { path = {{x=0,y=0},{x=1,y=0},{x=1,y=1}}, role='passthrough', on_press = function() end }",
+        );
+        match one(RegionPrim.build(&t, &mut NoHandlers)) {
+            Node::Hotspot { role, .. } => assert_eq!(role, HotspotRole::Passthrough),
+            other => panic!("expected Hotspot, got {other:?}"),
+        }
     }
 
     #[test]

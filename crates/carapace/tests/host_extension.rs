@@ -30,6 +30,7 @@ impl Primitive for ActionButton {
         Ok(vec![Node::Hotspot {
             region: region_of(&path),
             on_press: hid,
+            role: carapace::scene::HotspotRole::Control,
         }])
     }
 }

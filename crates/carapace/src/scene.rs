@@ -160,6 +160,18 @@ impl RowCell {
     }
 }
 
+/// Author-declared interaction role for a `hotspot{}`, reported by [`Scene::hit_kind`] so a host
+/// can classify an OS event without firing the hotspot's Lua handler. Default is `Control`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HotspotRole {
+    /// Skin consumes the event (a button/control). Default.
+    Control,
+    /// Host should treat the region as window chrome (move the window).
+    Drag,
+    /// Event falls through to whatever is behind the skin (a deliberate hole).
+    Passthrough,
+}
+
 #[derive(Clone, Debug)]
 pub enum Node {
     Fill {
@@ -169,6 +181,7 @@ pub enum Node {
     Hotspot {
         region: Region,
         on_press: HandlerId,
+        role: HotspotRole,
     },
     ValueFill {
         path: Vec<Pt>,
@@ -421,7 +434,9 @@ impl Scene {
     /// Topmost hotspot containing `p` (later nodes draw on top → iterate in reverse).
     pub fn hit(&self, p: Pt) -> Option<HandlerId> {
         for node in self.nodes.iter().rev() {
-            if let Node::Hotspot { region, on_press } = node
+            if let Node::Hotspot {
+                region, on_press, ..
+            } = node
                 && region.contains(Point { x: p.x, y: p.y })
             {
                 return Some(*on_press);
@@ -436,7 +451,9 @@ impl Scene {
     pub fn hit_any(&self, p: Pt) -> Option<Hit> {
         for node in self.nodes.iter().rev() {
             match node {
-                Node::Hotspot { region, on_press } if region.contains(Point { x: p.x, y: p.y }) => {
+                Node::Hotspot {
+                    region, on_press, ..
+                } if region.contains(Point { x: p.x, y: p.y }) => {
                     return Some(Hit::Handler(*on_press));
                 }
                 Node::List {
@@ -513,6 +530,7 @@ mod tests {
                 Node::Hotspot {
                     region: region_of(&full),
                     on_press: 7,
+                    role: HotspotRole::Control,
                 },
                 // a list drawn on top of it
                 Node::List {
@@ -562,6 +580,7 @@ mod tests {
         Node::Hotspot {
             region: region_of(path),
             on_press: id,
+            role: HotspotRole::Control,
         }
     }
 
@@ -600,6 +619,7 @@ mod tests {
                 Node::Hotspot {
                     region: region_of(&l_path()),
                     on_press: 2,
+                    role: HotspotRole::Control,
                 },
                 Node::ValueFill {
                     path: vec![Pt { x: 0.0, y: 0.0 }],
