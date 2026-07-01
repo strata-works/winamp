@@ -74,9 +74,17 @@ fn main() {
     unsafe {
         // No content surface for the headless harness: pass a null IOSurfaceRef so the engine
         // supplies no host content (this skin has no view{} anyway).
-        let null_content = std::ptr::null() as io_surface::IOSurfaceRef;
-        let e =
-            embed_spike::carapace_create(cdir.as_ptr(), vtable, surface_ref, null_content, w, h);
+        // The C ABI takes a raw `*mut c_void` IOSurfaceRef now (see render.rs); cast from the
+        // io-surface crate's pointer type used to build the surface here.
+        let null_content: *mut c_void = std::ptr::null_mut();
+        let e = embed_spike::carapace_create(
+            cdir.as_ptr(),
+            vtable,
+            surface_ref as *mut c_void,
+            null_content,
+            w,
+            h,
+        );
         assert!(!e.is_null(), "carapace_create returned null");
 
         embed_spike::carapace_tick(e, 0.016);

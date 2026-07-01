@@ -186,12 +186,23 @@ pub fn readback_rgba(gpu: &GpuCtx, tex: &wgpu::Texture, w: u32, h: u32) -> Vec<u
     out
 }
 
-// io-surface 0.16 is deprecated in favour of objc2-io-surface; we knowingly use it here.
-#[cfg(target_os = "macos")]
-#[allow(deprecated)]
-use io_surface::{
-    IOSurfaceGetBaseAddress, IOSurfaceGetBytesPerRow, IOSurfaceLock, IOSurfaceRef, IOSurfaceUnlock,
-};
+// IOSurface accessors from the system IOSurface.framework (present on BOTH macOS and iOS). We
+// declare them directly rather than via the `io-surface` crate, which transitively links the
+// macOS-only OpenGL framework (through `cgl`) and therefore fails to link for iOS. The framework
+// is linked explicitly so the symbols resolve regardless of which other crate requests it.
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+pub type IOSurfaceRef = *mut core::ffi::c_void;
+
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[link(name = "IOSurface", kind = "framework")]
+extern "C" {
+    fn IOSurfaceLock(buffer: IOSurfaceRef, options: u32, seed: *mut u32) -> i32;
+    fn IOSurfaceUnlock(buffer: IOSurfaceRef, options: u32, seed: *mut u32) -> i32;
+    fn IOSurfaceGetBaseAddress(buffer: IOSurfaceRef) -> *mut core::ffi::c_void;
+    fn IOSurfaceGetBytesPerRow(buffer: IOSurfaceRef) -> usize;
+    pub fn IOSurfaceGetWidth(buffer: IOSurfaceRef) -> usize;
+    pub fn IOSurfaceGetHeight(buffer: IOSurfaceRef) -> usize;
+}
 
 /// Import a caller-owned IOSurface as a wgpu `Bgra8Unorm` texture that aliases the surface's
 /// memory (zero CPU copy). Returns `None` on any failure so the caller falls back to Tier 1.
@@ -203,7 +214,7 @@ use io_surface::{
 ///
 /// # Safety
 /// `surface` must be a live IOSurface of at least `w`×`h` BGRA8 pixels that outlives the texture.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 #[allow(deprecated)]
 pub unsafe fn try_shared(
     device: &wgpu::Device,
@@ -299,7 +310,7 @@ pub unsafe fn try_shared(
 ///
 /// `COPY_DST` so `queue.write_texture` can upload into it; `TEXTURE_BINDING` so the engine can
 /// sample it into the cutout.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 pub fn make_content_texture(
     device: &wgpu::Device,
     w: u32,
@@ -339,7 +350,7 @@ pub fn make_content_texture(
 /// # Safety
 /// `surface` must be a live IOSurface of at least `w`×`h` BGRA8 pixels. `tex` must be a
 /// `Bgra8Unorm` texture of at least `w`×`h` with `COPY_DST` usage.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 #[allow(deprecated)]
 pub unsafe fn upload_iosurface_to_texture(
     queue: &wgpu::Queue,
@@ -433,7 +444,7 @@ pub enum Tier {
 /// # Safety
 /// `surface` must be a valid, live IOSurface of at least w×h pixels.
 /// `rgba` must contain exactly `w * h * 4` bytes of packed RGBA8 data.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 #[allow(deprecated)]
 pub unsafe fn copy_into_iosurface(surface: IOSurfaceRef, rgba: &[u8], w: u32, h: u32) {
     let mut seed: u32 = 0;

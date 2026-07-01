@@ -1,0 +1,6 @@
+schema = 1
+id = "embed-door"
+name = "Medieval Door Frame"
+engine = "^0.1"
+canvas = { width = 360, height = 640 }
+entry = "skin.lua"
