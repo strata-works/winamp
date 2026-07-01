@@ -4,14 +4,15 @@
 
 **Goal:** Promote the throwaway `embed-spike` into a real, safe, versioned C ABI crate `carapace-ffi` for Apple (macOS/iOS): panic-guarded, opaque-handle, cbindgen header, full pointer input, and an engine→host hit-test channel.
 
-**Architecture:** A thin `#[no_mangle] extern "C"` layer wraps an opaque `CarapaceEngine` handle. Every export runs inside a `catch_unwind` guard that, on panic, records a thread-local message and *poisons* the handle (never `abort()`s the host). GPU/present internals port verbatim from the spike except `init_gpu` now returns `Result`. Two small additive changes to the `carapace` engine crate (a hotspot `role` + non-firing `Scene::hit_kind`/`covers`) back the hit-test channel.
+**Architecture:** A thin `#[unsafe(no_mangle)] extern "C"` layer wraps an opaque `CarapaceEngine` handle. Every export runs inside a `catch_unwind` guard that, on panic, records a thread-local message and *poisons* the handle (never `abort()`s the host). GPU/present internals port verbatim from the spike except `init_gpu` now returns `Result`. Two small additive changes to the `carapace` engine crate (a hotspot `role` + non-firing `Scene::hit_kind`/`covers`) back the hit-test channel.
 
-**Tech Stack:** Rust (edition 2021), `wgpu`/`wgpu-hal` `=29.0.3`, Metal via `objc2`/`objc2-metal`/`objc2-io-surface`, IOSurface.framework, `cbindgen` for the C header, `mlua` (engine), `pollster`.
+**Tech Stack:** Rust (edition 2024), `wgpu`/`wgpu-hal` `=29.0.3`, Metal via `objc2`/`objc2-metal`/`objc2-io-surface`, IOSurface.framework, `cbindgen` for the C header, `mlua` (engine), `pollster`.
 
 ## Global Constraints
 
 - **Platform:** Apple only. All GPU/handle/ABI code is `#[cfg(any(target_os = "macos", target_os = "ios"))]`-gated; the crate still compiles (as a near-empty shell exporting only `carapace_abi_version`/`carapace_last_error`) on other targets so Linux CI stays green. Windows/Linux/Android are future work.
 - **Never `abort()`** at the boundary. Panics are caught; the host process must survive.
+- **Edition 2024 FFI syntax (this crate is 2024; the spike it ports from is 2021).** When porting code from `embed-spike`, apply three edition-2024 changes or it will not compile / will fail the lint gate: (1) every bare `#[no_mangle]` becomes **`#[unsafe(no_mangle)]`**; (2) every `extern "C" { … }` block (e.g. the IOSurface framework block in `render.rs`) becomes **`unsafe extern "C" { … }`**; (3) `unsafe_op_in_unsafe_fn` is warn-by-default in 2024, so ported `unsafe fn`s that call the IOSurface externs *bare* (e.g. `IOSurfaceLock(...)` inside `upload_iosurface_to_texture` / `copy_into_iosurface`) now need those calls wrapped — the pragmatic choice for verbatim FFI glue is a single inner attribute **`#![allow(unsafe_op_in_unsafe_fn)]`** at the top of `render.rs` (these bodies are inherently unsafe); the alternative is wrapping each bare op in `unsafe {}`. Function-pointer *types* in structs (`extern "C" fn(...)`) and `unsafe extern "C" fn` *definitions* are unchanged. Every export shown in this plan's snippets is already written the 2024 way (`#[unsafe(no_mangle)]`).
 - **wgpu pinned** at `=29.0.3` and `wgpu-hal = "=29.0.3"` (the versions the spike proved). Do not bump.
 - **Zero `free()` contract:** strings out are copied into caller buffers; carapace never returns a pointer the caller must free, and never frees a caller pointer.
 - **Additive-only ABI:** exports and enum variants are appended, never reordered/removed. `carapace_abi_version()` = `MAJOR<<16 | MINOR`, currently MAJOR=0 MINOR=1.
@@ -339,7 +340,7 @@ resolver = "2"
 [package]
 name = "carapace-ffi"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"   # repo standard (rustfmt.toml + all non-spike crates); see edition-2024 FFI note below
 
 [lib]
 crate-type = ["cdylib", "staticlib", "rlib"]   # cdylib+staticlib: host apps link one or the other
@@ -371,7 +372,7 @@ cbindgen = "0.29"
 ```rust
 //! Panic-safety, status codes, and the thread-local error channel shared by every export.
 //!
-//! Boundary policy: every `#[no_mangle]` export wraps its body in `ffi_guard!`, which catches any
+//! Boundary policy: every `#[unsafe(no_mangle)]` export wraps its body in `ffi_guard!`, which catches any
 //! panic (so nothing unwinds into the host's foreign frames) and turns it into `ErrPanic`. Handle-
 //! bearing calls additionally *poison* the handle. We NEVER `abort()`: carapace runs inside the
 //! host's process.
@@ -455,7 +456,7 @@ pub(crate) use ffi_guard;
 ///
 /// # Safety
 /// `buf` must be null or point to at least `cap` writable bytes.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn carapace_last_error(buf: *mut c_char, cap: usize) -> usize {
     LAST_ERROR.with(|e| {
         let s = e.borrow();
@@ -533,7 +534,7 @@ pub use hit::*;
 
 /// The ABI version this library implements: `MAJOR << 16 | MINOR`. Additive changes bump MINOR;
 /// breaking changes bump MAJOR. A host compares this against the header's constants at load time.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn carapace_abi_version() -> u32 {
     (CARAPACE_ABI_MAJOR << 16) | CARAPACE_ABI_MINOR
 }
@@ -562,7 +563,7 @@ pub use guard::{carapace_last_error, CarapaceStatus, CARAPACE_ABI_MAJOR, CARAPAC
 // #[cfg(any(target_os = "macos", target_os = "ios"))] pub use handle::*;
 // #[cfg(any(target_os = "macos", target_os = "ios"))] pub use hit::*;
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn carapace_abi_version() -> u32 {
     (CARAPACE_ABI_MAJOR << 16) | CARAPACE_ABI_MINOR
 }
@@ -626,7 +627,7 @@ git -c user.name='Daniel Agbemava' -c user.email='danagbemava@gmail.com' commit 
 **Interfaces:**
 - Produces: `pub struct GpuCtx { device, queue }`; `pub fn init_gpu() -> Result<GpuCtx, String>`; plus the ported `OffscreenTarget`, `new_offscreen`, `render_frame`, `readback_rgba`, `try_shared`, `make_content_texture`, `upload_iosurface_to_texture`, `blit`, `copy_into_iosurface`, `Tier`, `IOSurfaceRef`, `IOSurfaceGetWidth/Height`.
 
-- [ ] **Step 1: Copy `crates/embed-spike/src/render.rs` verbatim** to `crates/carapace-ffi/src/render.rs`.
+- [ ] **Step 1: Copy `crates/embed-spike/src/render.rs` verbatim** to `crates/carapace-ffi/src/render.rs`, then apply the edition-2024 fixes: (a) add `#![allow(unsafe_op_in_unsafe_fn)]` as the first line (inner attribute) so the ported `unsafe fn`s that call the IOSurface externs bare still pass `-D warnings`; (b) change the IOSurface framework block from `extern "C" { … }` to **`unsafe extern "C" { … }`** (keep the `#[link(name = "IOSurface", kind = "framework")]` attribute on it). These plus Step 2 are the only changes to the file.
 
 - [ ] **Step 2: Change `init_gpu` to return `Result`.** Replace the `pub fn init_gpu() -> GpuCtx { ... }` body's two `.expect(...)` calls so the function becomes:
 
@@ -774,7 +775,7 @@ pub struct CarapaceCreateDesc {
 /// `desc` must be a valid pointer; its `skin_dir` a valid NUL-terminated UTF-8 path; `surface` a
 /// live `w`x`h` BGRA IOSurface outliving the engine; `vtable` fn pointers outliving the engine.
 /// `out` must be a valid pointer to a `*mut CarapaceEngine`.
-#[no_mangle]
+#[unsafe(no_mangle)]
 #[allow(deprecated)]
 pub unsafe extern "C" fn carapace_create(
     desc: *const CarapaceCreateDesc,
@@ -851,7 +852,7 @@ pub unsafe extern "C" fn carapace_create(
 ///
 /// # Safety
 /// `ptr` must come from `carapace_create` and not be used afterward.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn carapace_destroy(ptr: *mut CarapaceEngine) {
     if !ptr.is_null() {
         drop(unsafe { Box::from_raw(ptr) });
@@ -955,7 +956,7 @@ pub enum CarapaceTier {
 ///
 /// # Safety
 /// `ptr` must come from `carapace_create` and not be destroyed.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn carapace_tick(ptr: *mut CarapaceEngine, dt_seconds: f64) -> CarapaceStatus {
     let Some(e) = (unsafe { ptr.as_mut() }) else {
         return CarapaceStatus::ErrNullArg;
@@ -973,7 +974,7 @@ pub unsafe extern "C" fn carapace_tick(ptr: *mut CarapaceEngine, dt_seconds: f64
 }
 
 /// Report the active present tier. `# Safety`: `ptr` from `carapace_create`; `out` non-null.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn carapace_active_tier(
     ptr: *mut CarapaceEngine,
     out: *mut CarapaceTier,
@@ -1097,7 +1098,7 @@ pub enum CarapacePointerKind {
 ///
 /// # Safety
 /// `ptr` must come from `carapace_create`.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn carapace_pointer(
     ptr: *mut CarapaceEngine,
     x: f64,
@@ -1198,7 +1199,7 @@ pub enum CarapaceHitKind {
 ///
 /// # Safety
 /// `ptr` must come from `carapace_create`; `out` must be non-null.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn carapace_hit_test(
     ptr: *mut CarapaceEngine,
     x: f64,
@@ -1386,7 +1387,7 @@ git -c user.name='Daniel Agbemava' -c user.email='danagbemava@gmail.com' commit 
 
 ```rust
 #[cfg(all(test, target_os = "macos"))]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn carapace_force_panic(ptr: *mut CarapaceEngine) -> CarapaceStatus {
     let Some(e) = (unsafe { ptr.as_mut() }) else { return CarapaceStatus::ErrNullArg; };
     if e.poisoned { return CarapaceStatus::ErrPoisoned; }
