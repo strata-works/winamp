@@ -372,8 +372,10 @@ mod tests {
         // `math` is exposed to the sandbox (pure + capability-free) so skins can compute geometry.
         // math.sin(pi/2) == 1, so x resolves to 15.
         let skin = load(
-            &src("fill{ path = rect{x=10 + math.sin(math.pi/2)*5, y=0, w=10, h=10}, \
-                  color={r=0,g=0,b=0} }"),
+            &src(
+                "fill{ path = rect{x=10 + math.sin(math.pi/2)*5, y=0, w=10, h=10}, \
+                  color={r=0,g=0,b=0} }",
+            ),
             &FixtureHost::new(),
             Rc::new(VocabRegistry::base()),
             new_queue(),
