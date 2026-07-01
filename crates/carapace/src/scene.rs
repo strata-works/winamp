@@ -498,6 +498,75 @@ impl Scene {
         }
         None
     }
+
+    /// True if `p` falls inside any drawn node's bounds — the skin's opaque coverage geometry.
+    /// Rect-bounded nodes use their dest/region; polygon nodes use `region_of(path)`. `Text` is
+    /// ignored (no reliable glyph bounds). This is the geometry a host uses for a shaped-window /
+    /// click-through mask.
+    pub fn covers(&self, p: Pt) -> bool {
+        let inside_rect =
+            |x: f32, y: f32, w: f32, h: f32| p.x >= x && p.x <= x + w && p.y >= y && p.y <= y + h;
+        self.nodes.iter().any(|node| match node {
+            Node::Hotspot { region, .. } => region.contains(Point { x: p.x, y: p.y }),
+            Node::Fill { path, .. } | Node::ValueFill { path, .. } => {
+                region_of(path).contains(Point { x: p.x, y: p.y })
+            }
+            Node::Image { dest, .. } | Node::Frame { dest, .. } | Node::View { dest, .. } => {
+                inside_rect(dest.x, dest.y, dest.w, dest.h)
+            }
+            Node::List { region, .. } | Node::Scrub { region, .. } => {
+                inside_rect(region.x, region.y, region.w, region.h)
+            }
+            Node::Text { .. } => false,
+        })
+    }
+
+    /// Classify `p` for a host embedder WITHOUT firing any Lua handler (unlike
+    /// `handle_pointer_resolved`). Topmost interactive node decides; otherwise opaque coverage vs.
+    /// transparent. See [`HitKind`].
+    pub fn hit_kind(&self, p: Pt) -> HitKind {
+        let pt = Point { x: p.x, y: p.y };
+        for node in self.nodes.iter().rev() {
+            match node {
+                Node::Hotspot { region, role, .. } if region.contains(pt) => {
+                    return match role {
+                        HotspotRole::Drag => HitKind::Drag,
+                        HotspotRole::Passthrough => HitKind::Passthrough,
+                        HotspotRole::Control => HitKind::Control,
+                    };
+                }
+                Node::List {
+                    region,
+                    row_height,
+                    on_select: Some(_),
+                    count,
+                    ..
+                } if *row_height > 0.0
+                    && *count > 0
+                    && p.x >= region.x
+                    && p.x <= region.x + region.w
+                    && p.y >= region.y
+                    && ((p.y - region.y) / row_height).floor() < *count as f32 =>
+                {
+                    return HitKind::Control;
+                }
+                Node::Scrub { region, .. }
+                    if p.x >= region.x
+                        && p.x <= region.x + region.w
+                        && p.y >= region.y
+                        && p.y <= region.y + region.h =>
+                {
+                    return HitKind::Control;
+                }
+                _ => {}
+            }
+        }
+        if self.covers(p) {
+            HitKind::Control
+        } else {
+            HitKind::Passthrough
+        }
+    }
 }
 
 /// The topmost interactive node under a point — see [`Scene::hit_any`].
@@ -509,6 +578,17 @@ pub enum Hit {
     Row { action: String, index: usize },
     /// A `scrub{}` bar: the `on_seek` host action + the 0..1 click fraction.
     Scrub { action: String, fraction: f32 },
+}
+
+/// Coarse interaction classification of a point for a host embedder — see [`Scene::hit_kind`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HitKind {
+    /// Event should fall through the skin (transparent, or a `role=passthrough` region).
+    Passthrough,
+    /// The skin consumes the event (a control, or opaque non-interactive skin).
+    Control,
+    /// Host should move the window (a `role=drag` region).
+    Drag,
 }
 
 #[cfg(test)]
@@ -965,5 +1045,49 @@ mod tests {
             canvas: (200, 200),
         };
         assert_eq!(s.hit(Pt { x: 50.0, y: 50.0 }), Some(2));
+    }
+
+    #[test]
+    fn hit_kind_classifies_drag_control_and_passthrough() {
+        // A 100x100 canvas: a drag hotspot over the left half, an opaque fill over the right
+        // half. No test `DecodedImage` constructor exists, so a `Node::Fill` stands in for the
+        // opaque image — `covers`/`hit_kind` treat any `Fill`'s `region_of(path)` as opaque.
+        let drag = Node::Hotspot {
+            region: region_of(&[
+                Pt { x: 0.0, y: 0.0 },
+                Pt { x: 50.0, y: 0.0 },
+                Pt { x: 50.0, y: 100.0 },
+                Pt { x: 0.0, y: 100.0 },
+            ]),
+            on_press: 0,
+            role: HotspotRole::Drag,
+        };
+        let fill = Node::Fill {
+            path: vec![
+                Pt { x: 50.0, y: 0.0 },
+                Pt { x: 100.0, y: 0.0 },
+                Pt { x: 100.0, y: 100.0 },
+                Pt { x: 50.0, y: 100.0 },
+            ],
+            paint: Paint::Solid(Color {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 255,
+            }),
+        };
+        let scene = Scene {
+            nodes: vec![drag, fill],
+            canvas: (100, 100),
+        };
+
+        assert_eq!(scene.hit_kind(Pt { x: 10.0, y: 50.0 }), HitKind::Drag); // over drag hotspot
+        assert_eq!(scene.hit_kind(Pt { x: 75.0, y: 50.0 }), HitKind::Control); // over opaque fill
+        assert_eq!(
+            scene.hit_kind(Pt { x: 200.0, y: 200.0 }),
+            HitKind::Passthrough
+        ); // outside all nodes
+        assert!(scene.covers(Pt { x: 75.0, y: 50.0 }));
+        assert!(!scene.covers(Pt { x: 200.0, y: 200.0 }));
     }
 }
