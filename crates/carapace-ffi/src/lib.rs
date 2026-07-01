@@ -6,8 +6,10 @@ pub mod host;
 
 pub use guard::{CARAPACE_ABI_MAJOR, CARAPACE_ABI_MINOR, CarapaceStatus, carapace_last_error};
 
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+mod render;
+
 // Apple-gated modules are added in later tasks:
-// #[cfg(any(target_os = "macos", target_os = "ios"))] mod render;   // Task 6
 // #[cfg(any(target_os = "macos", target_os = "ios"))] mod handle;   // Task 7
 // #[cfg(any(target_os = "macos", target_os = "ios"))] mod hit;      // Task 10
 // #[cfg(any(target_os = "macos", target_os = "ios"))] pub use handle::*;
