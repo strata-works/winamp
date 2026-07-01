@@ -207,9 +207,16 @@ pub fn load(
     })?;
     env.set("rounded_rect", rounded_rect)?;
 
-    // Run the skin once under the sandboxed env.  The env exposes only the registry
-    // primitive constructors + the `host` table of allowlisted action shims; `io`, `os`,
-    // `require`, `load`, and all other base globals are absent.  One deliberate subtlety:
+    // Lua's standard `math` library. Every function in it (sin/cos/sqrt/pi/floor/min/max/random/…)
+    // is a PURE, capability-free computation — no filesystem, process, or module access — exactly
+    // like the string methods documented below, and genuinely useful for procedural geometry
+    // (arcs, radial layouts). Exposing it keeps skins from hand-rolling trig tables. `io`, `os`,
+    // `package`, and the other capability-bearing base libraries stay absent.
+    env.set("math", lua.globals().get::<Table>("math")?)?;
+
+    // Run the skin once under the sandboxed env.  The env exposes the registry primitive
+    // constructors, the `host` table of allowlisted action shims, and the safe `math` library;
+    // `io`, `os`, `require`, `load`, and all other base globals are absent.  One deliberate subtlety:
     // Lua's string metatable is wired by the VM at startup and is not detached by swapping
     // `_ENV`, so string methods on literals (e.g. `('x'):upper()`) remain reachable — but
     // they carry no capability (no filesystem, process, or module access) and are useful,
@@ -355,6 +362,26 @@ mod tests {
         match &skin.scene.nodes[0] {
             crate::scene::Node::Fill { path, .. } => {
                 assert_eq!(path.len(), 48, "default circle segments");
+            }
+            other => panic!("expected Fill, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn math_library_is_available_to_skins() {
+        // `math` is exposed to the sandbox (pure + capability-free) so skins can compute geometry.
+        // math.sin(pi/2) == 1, so x resolves to 15.
+        let skin = load(
+            &src("fill{ path = rect{x=10 + math.sin(math.pi/2)*5, y=0, w=10, h=10}, \
+                  color={r=0,g=0,b=0} }"),
+            &FixtureHost::new(),
+            Rc::new(VocabRegistry::base()),
+            new_queue(),
+        )
+        .expect("a skin using math should load");
+        match &skin.scene.nodes[0] {
+            crate::scene::Node::Fill { path, .. } => {
+                assert_eq!(path[0].x as i32, 15, "math.sin(pi/2)*5 + 10");
             }
             other => panic!("expected Fill, got {other:?}"),
         }
