@@ -138,3 +138,43 @@ and Qt docs; the two first-party-blog items (Slint/Servo) are corroborated by Kh
 Two 2-1 split votes (the dmabuf API and the #4067 framing) were independently corroborated against
 source trees. `abi_stable`/`stabby` evidence is solid but not compared head-to-head with `cbindgen`
 for carapace's specific needs.
+
+## Addendum — review pass (2026-07-01)
+
+Once-over of this doc against the actual embed-spike ABI it productionizes. The recommended
+architecture stands (versioned C ABI over opaque handles; dedicated render thread + command queue;
+`wgpu-hal` for zero-copy); the items below correct the doc or widen the brainstorm scope.
+
+1. **The panic-safety bullet contradicts itself, and buries a product decision.** The bottom line
+   says "abort-on-panic (non-negotiable)" then prescribes internal `catch_unwind` → error codes —
+   opposite policies (kill the process vs. report and continue). It also pairs `extern "C-unwind"`
+   with internal `catch_unwind`, which is backwards: if panics are caught inside, plain `extern "C"`
+   is the right declaration; `"C-unwind"` exists to *permit* unwinding across the boundary. And
+   line-19's "unwinding into foreign frames is UB" contradicts §1's own (correct) claim that it's a
+   guaranteed abort since Rust 1.81. The buried decision: carapace runs inside a **host's** process —
+   abort kills the host app. For UI chrome, catch + poison the engine handle + error code is the
+   friendlier contract, with abort only as the uncatchable fallback (panic-in-drop, double panic).
+   The spec must pick one policy deliberately.
+2. **`abi_stable`/`stabby` are likely a dead end — close the question early.** Both solve Rust↔Rust
+   dynamic-linking ABI stability. Carapace's hosts are Swift, Dart, C++, eventually Kotlin — none can
+   consume `abi_stable`'s layout verification, prefix types, or `RString`. Unless a Rust host ever
+   loads carapace as a Rust plugin, the answer is a flat cbindgen C ABI with versioning via an
+   exported `carapace_abi_version()` + additive-only exports.
+3. **Frames-out is covered; three other ABI directions are not.** The spike already exports
+   `carapace_create/tick/pointer/active_tier/destroy` *plus* a host vtable
+   (`get_num`/`get_str`/`invoke` in `crates/embed-spike/src/host.rs`). Once the engine owns a render
+   thread (this doc's own recommendation), the unaddressed questions are:
+   - **Host callbacks:** the vtable is invoked from engine code — i.e. the render thread. Reentrancy
+     and blocking rules, and callback string lifetimes, are unspecified.
+   - **Input latency:** pointer events must round-trip the command queue fast enough that
+     window-drag feels native — belongs in the triple-buffering open question.
+   - **North-star surface:** total-window-replacement and live-host-view need hit-test/drag-region
+     results, a shaped-window mask, and region rects flowing engine→host — an engine→host event
+     channel that shapes the ABI as much as texture sharing does.
+   - Plus a doc-wide convention for error reporting and string ownership (who frees).
+4. **Android is a one-word aside.** It appears only in the `GL_EXT_memory_object_fd` parenthetical;
+   the real Android path is AHardwareBuffer import (wgpu-hal Vulkan side). Give it a line or declare
+   it out of scope — right now "cross-platform" silently means desktop + iOS.
+
+Verified in passing: the `init_gpu().expect()` holes this doc references are real and live
+(`crates/embed-spike/src/render.rs:20,41`); the `unwrap()`s in `host.rs` are test-only.
