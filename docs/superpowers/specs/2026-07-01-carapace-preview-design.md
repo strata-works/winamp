@@ -19,10 +19,16 @@ click-to-interact, and an editable panel for the host data the skin binds.
 4. **Data-bound:** a side panel edits the host values the skin binds (`value_fill{ value="level" }`,
    `text{ value="track" }`, …); edits re-render live.
 5. **Animated skins play** (the engine ticks continuously).
+6. **Edit → code:** a **property inspector** (click a node → edit its literal props) and a **skin
+   parameters** panel (edit the skin's top-level `local` literals) **rewrite `skin.lua` on disk**;
+   the watcher reloads and re-renders. Only literal-backed props / literal params are editable;
+   loop-generated & computed nodes are read-only (with the reason), tunable via their parameters.
 
-Non-goals (v1): editing the skin *in* the browser (you use your own editor), multi-skin galleries,
-a hosted/public deployment, WASM/in-browser rendering (that's the W2 alternative, deferred),
-recording/export, and any change to the `carapace` engine crate.
+Non-goals (v1): a from-scratch visual authoring canvas (that's the **skin studio**, a separate
+future project — see the end), *individual* editing of loop-generated nodes (no code to map to
+without unrolling — you tune them via parameters), multi-skin galleries, a hosted/public deployment,
+WASM/in-browser rendering (the W2 alternative, deferred), recording/export, and any change to the
+`carapace` engine crate.
 
 ## Architecture & data flow
 
@@ -63,11 +69,16 @@ and reading the frame back to RGBA. The browser is a display + control surface o
   `PreviewHost`. A `notify` watcher on the dir triggers a reload: rebuild the `Engine`, preserving
   the current host-value map + canvas size. **A load failure is captured, not fatal** — the error
   string is streamed to the browser and the last good frame stays up.
+- **`provenance.rs` — source ↔ scene mapping + write-back.** Captures node→call-span at load
+  (mlua debug), parses `skin.lua` (`full_moon`) into literal-field and top-level-`local` indices,
+  answers node-pick (topmost node at a point) + editability, and applies a `setProp`/`setParam` by
+  rewriting the exact literal span in the source file. (See "Editing" below.)
 - **`server.rs` — HTTP + WebSocket.** Serves the single static viewer page and one WebSocket:
   - **down (server→browser):** `frame` (PNG bytes), `actionlog` (invoked action), `error` (Lua load
-    error / cleared), `meta` (skin name, canvas size).
-  - **up (browser→server):** `pointer{x,y}` (canvas coords), `setValue{key, value}`,
-    `setCanvas{w,h}`.
+    error / cleared), `meta` (skin name, canvas size), `nodeInfo` (picked node's editable/read-only
+    props + reasons), `params` (the skin's editable parameter list).
+  - **up (browser→server):** `pointer{x,y}`, `pick{x,y}` (select node for the inspector),
+    `setValue{key, value}`, `setCanvas{w,h}`, `setProp{nodeId, field, value}`, `setParam{name, value}`.
 - **`main.rs`** — parse `<skin-dir>` + `--port`, wire the session + render loop + server, open the
   browser.
 
@@ -78,6 +89,35 @@ and reading the frame back to RGBA. The browser is a display + control surface o
 - **Control panel:** rows to add/edit host `key → value` (number or string) → `setValue`; a
   canvas-size input → `setCanvas`; a scrolling **action log**; the skin name; and an **error banner**
   shown when a `error` message is live.
+- **Inspector + parameters** (see next section): a node inspector (populated on node-pick) and a
+  skin-parameters list; edits emit `setProp` / `setParam` and the file is rewritten on disk.
+
+## Editing: inspector + parameters → write-back to `skin.lua`
+
+The tool doesn't just preview — literal-backed edits rewrite the skin source, so the file stays the
+single source of truth. Two editing surfaces, both built on **source provenance**:
+
+- **Provenance capture (at load).** Two correlated sources:
+  - *Runtime:* an mlua debug hook / `inspect_stack` reads the **caller source line** each time a
+    primitive ctor closure runs, tagging every emitted scene `Node` with the **source span of the
+    `fill{}`/`text{}`/… call** that produced it.
+  - *Static:* parse `skin.lua` to a Lua AST (`full_moon`) and index, per primitive call, its
+    **literal fields** — `color` rgba, `x/y/w/h`, `radius`, `size`, text — each `(value, exact
+    span)`; variable/expression fields (`color = STONE_M`, `x = 10 + …`) are flagged non-literal.
+    Also index the skin's **top-level `local <NAME> = <literal>`** definitions (the parameters).
+- **Node inspector.** Click the preview → server returns the topmost node whose bounds contain the
+  point (a scene-level pick, broader than the region-only hit-test) → the browser shows its editable
+  props. A prop is **editable iff** its field is a literal at the call site **and** the call emitted
+  a **single node** (not loop-multiplied). Non-editable props show read-only **with the reason**
+  ("bound to `level`", "from a loop", "computed"). Edit → `setProp{nodeId, field, value}` → server
+  rewrites the field's literal span in `skin.lua`.
+- **Parameters panel.** Lists the top-level `local` literals (`RI=90`, `RO=150`, `STONE_L={…}`, loop
+  bounds like `for k = 1, 9` → a count, …). Editing one → `setParam{name, value}` → rewrites that
+  `local`'s literal span → the whole skin responds (this is how procedural art like the voussoir
+  arch is edited: reshape via `RI`/`RO`, recolor via `STONE_*`, change the voussoir count). Clicking
+  a computed/loop node may **highlight the params it depends on** (best-effort).
+- **Write-back.** Every edit is a text rewrite of the exact literal span on disk (never a
+  regeneration of the file), then the watcher reloads. Formatting/comments elsewhere are untouched.
 
 ## Data flow details
 
@@ -92,8 +132,8 @@ and reading the frame back to RGBA. The browser is a display + control surface o
   mutate host values (the panel owns those) — the log proves the wiring; the user sets values to see
   effects.
 - **Web stack.** Light and synchronous: `tiny_http` (serving) + `tungstenite` (WebSocket), avoiding
-  the `axum`/`tokio` async tree. New third-party deps are fetched via `sfw` (Socket Firewall) on
-  first add, per repo convention.
+  the `axum`/`tokio` async tree. Plus `full_moon` (Lua AST for provenance) and `notify` (file watch).
+  New third-party deps are fetched via `sfw` (Socket Firewall) on first add, per repo convention.
 
 ## Error handling
 
@@ -112,10 +152,27 @@ and reading the frame back to RGBA. The browser is a display + control surface o
   hash → resend.
 - Headless smoke test: load a tiny fixture skin, render one frame, assert non-empty RGBA of the
   expected dimensions (reuses the offscreen render path).
+- **Provenance + write-back:** for a fixture skin, a literal `color`/`x` field maps to the right
+  source span; `setProp` rewrites exactly that span (surrounding text/comments untouched) and the
+  re-parse reflects it; a loop-generated node reports read-only with a reason; `setParam` rewrites a
+  top-level `local` literal.
 - The single-file viewer JS is thin and validated by eye against a running server.
 
 ## Deliverables
 
 - `crates/carapace-preview/` (bin) + its single-file browser viewer.
-- A short README: `carapace-preview <skin-dir>`, the panel, hot-reload, limitations.
+- A short README: `carapace-preview <skin-dir>`, the panels (host data, inspector, parameters),
+  hot-reload, write-back, and the literal-only editing limitation.
 - Wired into the workspace `Cargo.toml` members.
+
+## Future direction: skin studio (out of scope here, noted)
+
+A from-scratch **visual authoring** tool — drag primitives onto a canvas, style them, wire host
+bindings/actions — that **generates** the Lua carapace needs. It runs **one-way** (studio document →
+Lua), so it never has to reverse-engineer arbitrary code — the wall this previewer hits on loop /
+computed nodes. It is the previewer **plus** a visual editing canvas + a Lua code-generator on the
+**same** live-render + host-data + write-to-file foundation built here, which is why `carapace-preview`
+is the sensible first step. Trade-off to carry forward: studio output is **declarative** Lua (explicit
+primitives, no loops), so procedural skins stay hand-authored; and the studio authors its own
+documents rather than importing arbitrary hand-written Lua. Its own brainstorm → spec → plan when we
+get there.
