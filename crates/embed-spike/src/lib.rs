@@ -6,17 +6,15 @@ pub mod render;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub mod oneshot;
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 mod ffi_impl {
     use std::ffi::{c_char, CStr};
     use std::time::Duration;
 
+    use crate::render::IOSurfaceRef;
     use carapace::engine::{Engine, PointerEvent};
     use carapace::render::Renderer;
     use carapace::scene::Pt;
-    // io-surface 0.16 is deprecated in favour of objc2-io-surface; we knowingly use it here.
-    #[allow(deprecated)]
-    use io_surface::IOSurfaceRef;
 
     use crate::host::{CarapaceHostVTable, FfiHost};
     use crate::render::{
@@ -173,8 +171,8 @@ mod ffi_impl {
         } else {
             let (cw, ch) = unsafe {
                 (
-                    io_surface::IOSurfaceGetWidth(content_surface) as u32,
-                    io_surface::IOSurfaceGetHeight(content_surface) as u32,
+                    crate::render::IOSurfaceGetWidth(content_surface) as u32,
+                    crate::render::IOSurfaceGetHeight(content_surface) as u32,
                 )
             };
             if cw == 0 || ch == 0 {
@@ -311,5 +309,5 @@ mod ffi_impl {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use ffi_impl::*;
