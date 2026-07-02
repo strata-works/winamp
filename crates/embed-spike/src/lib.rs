@@ -20,6 +20,7 @@ mod ffi_impl {
     use carapace::scene::Pt;
 
     use crate::host::{CarapaceHostVTable, FfiHost};
+    use crate::paper_view::PaperView;
     use crate::render::{
         blit, copy_into_iosurface, init_gpu, make_content_texture, new_offscreen, readback_rgba,
         render_frame, try_shared, upload_iosurface_to_texture, GpuCtx, OffscreenTarget, Tier,
@@ -70,6 +71,10 @@ mod ffi_impl {
         pub surface: IOSurfaceRef,
         /// Optional live host content composited into the skin's `view{ id = "host" }` cutout.
         pub content: Option<ContentTex>,
+        /// Live paper mesh-gradient surround, composited into `view{ id = "paper" }`.
+        pub paper: Option<PaperView>,
+        /// Accumulated shader time (seconds), advanced by wall-clock dt each tick.
+        pub paper_time: f32,
         pub tier: Tier,
         /// Surface (output) pixel size — the IOSurface / offscreen / Tier-2 textures are this size.
         /// On a 2× Retina display this is 2× the design canvas (e.g. 684×788 for Headspace).
@@ -129,6 +134,16 @@ mod ffi_impl {
 
         let gpu = init_gpu();
         let renderer = Renderer::new(&gpu.device);
+
+        // Live paper shader surround, sized to the SURFACE (w×h). On failure the "paper"
+        // cutout simply shows nothing — never panic across the C ABI.
+        let paper = match PaperView::new(&gpu.device, &gpu.queue, w, h) {
+            Ok(pv) => Some(pv),
+            Err(e) => {
+                eprintln!("[carapace] paper shader disabled: {e}");
+                None
+            }
+        };
 
         // Try Tier 2 (zero-copy IOSurface import) first; fall back to Tier 1 readback on any
         // failure. The IOSurface texture only needs RENDER_ATTACHMENT — the blitter renders into
@@ -202,6 +217,8 @@ mod ffi_impl {
             present,
             surface,
             content,
+            paper,
+            paper_time: 0.0,
             tier,
             w,
             h,
@@ -229,6 +246,8 @@ mod ffi_impl {
             present,
             surface,
             content,
+            paper,
+            paper_time,
             w,
             h,
             ..
@@ -240,9 +259,17 @@ mod ffi_impl {
         if let Some(c) = content.as_ref() {
             unsafe { upload_iosurface_to_texture(&gpu.queue, c.surface, &c.tex, c.w, c.h) };
         }
-        // `content` view id stays "host" for the existing content path; the paper
-        // surround is added in Task 4. Build the slice fresh each frame.
+        // Advance + render the paper shader with this frame's wall-clock dt.
+        if let Some(pv) = paper.as_ref() {
+            *paper_time += dt.as_secs_f32();
+            pv.render(&gpu.device, &gpu.queue, *paper_time);
+        }
+        // Build the host-views slice fresh each frame. Scene order = z-order: "paper" first
+        // (behind), "host" content in front.
         let mut host_views: Vec<(&str, &wgpu::TextureView)> = Vec::new();
+        if let Some(pv) = paper.as_ref() {
+            host_views.push(("paper", pv.texture_view()));
+        }
         if let Some(c) = content.as_ref() {
             host_views.push(("host", &c.view));
         }
