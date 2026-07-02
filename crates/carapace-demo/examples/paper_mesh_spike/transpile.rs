@@ -212,4 +212,27 @@ mod tests {
             Rung::SpirV | Rung::Preprocessed | Rung::Direct
         ));
     }
+
+    /// One-off: write the raw transpiled WGSL for both stages to $PAPER_WGSL_OUT
+    /// (default /tmp/paper-wgsl). Regenerates the vendored Phase-2 assets.
+    #[test]
+    #[ignore]
+    fn dump_baked_wgsl() {
+        if !glslang_available() {
+            panic!("glslang required to regenerate WGSL (sfw brew install glslang)");
+        }
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("examples/paper_mesh_spike/shaders");
+        let frag = std::fs::read_to_string(dir.join("mesh_gradient.frag")).unwrap();
+        let vert = std::fs::read_to_string(dir.join("vertex.vert")).unwrap();
+        let f = transpile(&frag, naga::ShaderStage::Fragment).unwrap();
+        let v = transpile(&vert, naga::ShaderStage::Vertex).unwrap();
+        let out = std::path::PathBuf::from(
+            std::env::var("PAPER_WGSL_OUT").unwrap_or_else(|_| "/tmp/paper-wgsl".into()),
+        );
+        std::fs::create_dir_all(&out).unwrap();
+        std::fs::write(out.join("vertex.wgsl"), &v.wgsl).unwrap();
+        std::fs::write(out.join("mesh_gradient.wgsl"), &f.wgsl).unwrap();
+        eprintln!("wrote {}/{{vertex,mesh_gradient}}.wgsl", out.display());
+    }
 }
