@@ -240,7 +240,12 @@ mod ffi_impl {
         if let Some(c) = content.as_ref() {
             unsafe { upload_iosurface_to_texture(&gpu.queue, c.surface, &c.tex, c.w, c.h) };
         }
-        let host_view = content.as_ref().map(|c| ("host", &c.view));
+        // `content` view id stays "host" for the existing content path; the paper
+        // surround is added in Task 4. Build the slice fresh each frame.
+        let mut host_views: Vec<(&str, &wgpu::TextureView)> = Vec::new();
+        if let Some(c) = content.as_ref() {
+            host_views.push(("host", &c.view));
+        }
         match present {
             // Tier 2: render into the Rgba8 offscreen, then GPU-blit it into the IOSurface
             // texture. No CPU readback, no swizzle copy — the blitter reorders RGBA→BGRA on
@@ -252,13 +257,13 @@ mod ffi_impl {
                 blitter,
                 ..
             } => {
-                render_frame(engine, renderer, gpu, &off.view, w, h, dt, false, host_view);
+                render_frame(engine, renderer, gpu, &off.view, w, h, dt, false, &host_views);
                 blit(gpu, blitter, &off.view, iosurface_view);
             }
             // Tier 1: render, read back, swizzle-copy into the IOSurface.
             // wait=true: readback_rgba must see completed GPU work before it maps the buffer.
             Present::Readback { off } => {
-                render_frame(engine, renderer, gpu, &off.view, w, h, dt, true, host_view);
+                render_frame(engine, renderer, gpu, &off.view, w, h, dt, true, &host_views);
                 let rgba = readback_rgba(gpu, &off.tex, w, h);
                 unsafe { copy_into_iosurface(*surface, &rgba, w, h) };
             }
