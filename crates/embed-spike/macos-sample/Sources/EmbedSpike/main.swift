@@ -455,6 +455,11 @@ final class SkinView: NSView {
             l.backgroundColor = NSColor.clear.cgColor
             l.contents = surface
             l.contentsGravity = .resizeAspect
+            // Round the borderless window's corners to match a standard macOS window
+            // (~10pt on Big Sur+), so the gradient surround reads as a real shaped window
+            // rather than a hard rectangle (the drop shadow follows the rounded mask).
+            l.cornerRadius = 10
+            l.masksToBounds = true
             let sel = Selector(("setContentsChanged"))
             if l.responds(to: sel) { l.perform(sel) }
         }

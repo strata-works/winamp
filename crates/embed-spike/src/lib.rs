@@ -273,7 +273,7 @@ mod ffi_impl {
             host_views.push(("paper", pv.texture_view()));
         }
         if let Some(c) = content.as_ref() {
-            host_views.push(("host", &c.view));
+            host_views.push(("content", &c.view));
         }
         match present {
             // Tier 2: render into the Rgba8 offscreen, then GPU-blit it into the IOSurface
