@@ -26,4 +26,9 @@ exclude = [
   "IOSurfaceGetBytesPerRow",
   "IOSurfaceGetWidth",
   "IOSurfaceGetHeight",
+  # Test-only forced-panic export (`#[cfg(test)]` in handle.rs): cbindgen parses source
+  # statically and doesn't evaluate `test` as a cfg predicate, so without this explicit
+  # exclude it would leak into the header on every regeneration even though it never
+  # ships. See task-11-report.md.
+  "carapace_force_panic",
 ]

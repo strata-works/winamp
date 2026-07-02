@@ -90,6 +90,7 @@ What exists today:
 | [`crates/hittest`](crates/hittest) | Dependency-free even-odd point-in-region kernel for concave + holed shapes. The decoupled hit-testing module; **no** rendering/GPU dependency. |
 | [`crates/carapace`](crates/carapace) | The engine: scene graph + hit-testing, host command queue, external state + value bindings, transactional skin swap, Lua scripting in a capability sandbox, the base vocabulary, sandboxed asset loading + image decode, and a vello/`wgpu` direct-to-surface renderer. |
 | [`crates/carapace-demo`](crates/carapace-demo) | A borderless dual-domain embedder (`winit` + `wgpu`): a media-player host and a real `sysinfo` system-monitor host share one engine; **H** live-switches between them. Three bundled skins, including the real Headspace bitmap. |
+| [`crates/carapace-ffi`](crates/carapace-ffi) | The production C ABI (Apple/macOS+iOS) for embedding the engine as host UI: an opaque handle behind create/destroy/tick/pointer/hit-test, a panic-safe boundary (every export is guarded — a caught panic poisons the handle rather than unwinding into the host), and a generated cbindgen header at [`crates/carapace-ffi/include/carapace.h`](crates/carapace-ffi/include/carapace.h) for engine→host hit-test-driven window behavior. Windows/Linux/Android are future work. |
 
 **Phase 5a — asset loading + the `image` primitive: complete.** A type-agnostic,
 sandboxed `AssetResolver` scans a skin's `assets/` directory (Flutter-style: resolved =

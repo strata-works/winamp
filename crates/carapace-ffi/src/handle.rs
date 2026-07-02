@@ -171,6 +171,7 @@ pub unsafe extern "C" fn carapace_create(
 ) -> CarapaceStatus {
     install_panic_hook();
     if out.is_null() {
+        set_last_error("carapace_create: null out pointer");
         return CarapaceStatus::ErrNullArg;
     }
     unsafe { *out = std::ptr::null_mut() };
@@ -412,6 +413,122 @@ pub unsafe extern "C" fn carapace_pointer(
     })
 }
 
+/// Test-only export that panics unconditionally through the guarded path, so tests can prove the
+/// panic → poison → `ErrPoisoned` contract end-to-end without corrupting any real invariant.
+/// Never shipped: gated on `#[cfg(test)]`, so it cannot appear in a release build or the cbindgen
+/// header.
+///
+/// # Safety
+/// `ptr` must come from `carapace_create` (or be null).
+#[cfg(all(test, target_os = "macos"))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn carapace_force_panic(ptr: *mut CarapaceEngine) -> CarapaceStatus {
+    let Some(e) = (unsafe { ptr.as_mut() }) else {
+        return CarapaceStatus::ErrNullArg;
+    };
+    if e.poisoned {
+        return CarapaceStatus::ErrPoisoned;
+    }
+    ffi_guard!(ptr, {
+        panic!("forced panic for poison test");
+        #[allow(unreachable_code)]
+        CarapaceStatus::Ok
+    })
+}
+
+/// Test helpers shared by every `handle.rs`/`hit.rs`-adjacent test module (tick, pointer, poison):
+/// a real skin fixture + IOSurface, so each suite doesn't hand-roll its own `carapace_create` call.
+#[cfg(all(test, target_os = "macos"))]
+mod test_support {
+    use super::*;
+    use crate::host::CarapaceHostVTable;
+    use crate::render::IOSurfaceRef;
+
+    /// A workspace-sibling demo skin (300x140 canvas, visible content) — kept independent of the
+    /// frozen embed-spike crate.
+    pub(crate) const SKIN_DIR: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../carapace-demo/skins/classic"
+    );
+
+    pub(crate) fn empty_vtable() -> CarapaceHostVTable {
+        CarapaceHostVTable {
+            ctx: std::ptr::null_mut(),
+            get_num: None,
+            get_str: None,
+            invoke: None,
+        }
+    }
+
+    /// Build a caller-owned BGRA8 IOSurface of size `w`x`h` via the `io-surface` crate.
+    ///
+    /// `io_surface::new` returns an owning `IOSurface` wrapper (drop => `CFRelease`); we must NOT
+    /// let that wrapper drop before the test is done with the raw ref, so we `mem::forget` it and
+    /// intentionally leak the +1 Core Foundation reference for the lifetime of the test process.
+    #[allow(deprecated)] // `io_surface` (test-only dev-dep) is deprecated upstream in favor of
+    // `objc2-io-surface`; kept here only for its convenient IOSurface-creation + lock API.
+    pub(crate) fn make_bgra_iosurface(w: usize, h: usize) -> IOSurfaceRef {
+        use core_foundation::base::TCFType;
+        use core_foundation::dictionary::CFDictionary;
+        use core_foundation::number::CFNumber;
+        use core_foundation::string::CFString;
+        let props = CFDictionary::from_CFType_pairs(&[
+            (
+                CFString::new("IOSurfaceWidth"),
+                CFNumber::from(w as i64).as_CFType(),
+            ),
+            (
+                CFString::new("IOSurfaceHeight"),
+                CFNumber::from(h as i64).as_CFType(),
+            ),
+            (
+                CFString::new("IOSurfaceBytesPerElement"),
+                CFNumber::from(4i64).as_CFType(),
+            ),
+            (
+                CFString::new("IOSurfacePixelFormat"),
+                CFNumber::from(0x42475241i64 /* 'BGRA' */).as_CFType(),
+            ),
+        ]);
+        let owned = io_surface::new(&props);
+        let raw = owned.as_concrete_TypeRef();
+        std::mem::forget(owned); // keep the surface alive; the test owns it for its whole run
+        raw as IOSurfaceRef
+    }
+
+    /// Create a handle against the shared classic-skin fixture with an empty (no-op) vtable.
+    /// Returns the handle plus the IOSurface it renders into (some tests need to inspect pixels).
+    pub(crate) fn create_test_handle(w: u32, h: u32) -> (*mut CarapaceEngine, IOSurfaceRef) {
+        create_test_handle_with_vtable(w, h, empty_vtable())
+    }
+
+    /// Same as `create_test_handle`, but with a caller-supplied vtable (e.g. to observe
+    /// `host.invoke` calls fired by a pointer press).
+    pub(crate) fn create_test_handle_with_vtable(
+        w: u32,
+        h: u32,
+        vtable: CarapaceHostVTable,
+    ) -> (*mut CarapaceEngine, IOSurfaceRef) {
+        let surface = make_bgra_iosurface(w as usize, h as usize);
+        let path = std::ffi::CString::new(SKIN_DIR).unwrap();
+        let desc = CarapaceCreateDesc {
+            skin_dir: path.as_ptr(),
+            vtable,
+            surface,
+            content_surface: std::ptr::null_mut(),
+            w,
+            h,
+        };
+        let mut handle: *mut CarapaceEngine = std::ptr::null_mut();
+        assert_eq!(
+            unsafe { carapace_create(&desc, &mut handle) },
+            CarapaceStatus::Ok
+        );
+        assert!(!handle.is_null());
+        (handle, surface)
+    }
+}
+
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
@@ -468,54 +585,12 @@ mod tests {
 /// engine actually painted non-zero pixels into the caller's IOSurface.
 #[cfg(all(test, target_os = "macos"))]
 mod tick_tests {
+    use super::test_support::{create_test_handle, create_test_handle_with_vtable};
     use super::*;
     use crate::host::CarapaceHostVTable;
     use crate::render::{
         IOSurfaceGetBaseAddress, IOSurfaceGetBytesPerRow, IOSurfaceLock, IOSurfaceUnlock,
     };
-
-    // A workspace-sibling demo skin (300x140 canvas, visible content) — kept independent of the
-    // frozen embed-spike crate.
-    const SKIN_DIR: &str = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../carapace-demo/skins/classic"
-    );
-
-    /// Build a caller-owned BGRA8 IOSurface of size `w`x`h` via the `io-surface` crate.
-    ///
-    /// `io_surface::new` returns an owning `IOSurface` wrapper (drop => `CFRelease`); we must NOT
-    /// let that wrapper drop before the test is done with the raw ref, so we `mem::forget` it and
-    /// intentionally leak the +1 Core Foundation reference for the lifetime of the test process.
-    #[allow(deprecated)] // `io_surface` (test-only dev-dep) is deprecated upstream in favor of
-    // `objc2-io-surface`; kept here only for its convenient IOSurface-creation + lock API.
-    fn make_bgra_iosurface(w: usize, h: usize) -> IOSurfaceRef {
-        use core_foundation::base::TCFType;
-        use core_foundation::dictionary::CFDictionary;
-        use core_foundation::number::CFNumber;
-        use core_foundation::string::CFString;
-        let props = CFDictionary::from_CFType_pairs(&[
-            (
-                CFString::new("IOSurfaceWidth"),
-                CFNumber::from(w as i64).as_CFType(),
-            ),
-            (
-                CFString::new("IOSurfaceHeight"),
-                CFNumber::from(h as i64).as_CFType(),
-            ),
-            (
-                CFString::new("IOSurfaceBytesPerElement"),
-                CFNumber::from(4i64).as_CFType(),
-            ),
-            (
-                CFString::new("IOSurfacePixelFormat"),
-                CFNumber::from(0x42475241i64 /* 'BGRA' */).as_CFType(),
-            ),
-        ]);
-        let owned = io_surface::new(&props);
-        let raw = owned.as_concrete_TypeRef();
-        std::mem::forget(owned); // keep the surface alive; the test owns it for its whole run
-        raw as IOSurfaceRef
-    }
 
     /// Lock `surface` read-only and scan its `w`x`h` BGRA8 bytes for any non-zero byte.
     ///
@@ -544,28 +619,7 @@ mod tick_tests {
     #[test]
     fn create_tick_destroy_renders_nonblank() {
         let (w, h) = (300u32, 140u32);
-        let surface = make_bgra_iosurface(w as usize, h as usize);
-        let path = std::ffi::CString::new(SKIN_DIR).unwrap();
-        let vtable = CarapaceHostVTable {
-            ctx: std::ptr::null_mut(),
-            get_num: None,
-            get_str: None,
-            invoke: None,
-        };
-        let desc = CarapaceCreateDesc {
-            skin_dir: path.as_ptr(),
-            vtable,
-            surface,
-            content_surface: std::ptr::null_mut(),
-            w,
-            h,
-        };
-        let mut handle: *mut CarapaceEngine = std::ptr::null_mut();
-        assert_eq!(
-            unsafe { carapace_create(&desc, &mut handle) },
-            CarapaceStatus::Ok
-        );
-        assert!(!handle.is_null());
+        let (handle, surface) = create_test_handle(w, h);
 
         assert_eq!(unsafe { carapace_tick(handle, 0.016) }, CarapaceStatus::Ok);
 
@@ -612,28 +666,13 @@ mod tick_tests {
         PRESSED_TOGGLE_PLAY.store(false, std::sync::atomic::Ordering::SeqCst);
 
         let (w, h) = (300u32, 140u32);
-        let surface = make_bgra_iosurface(w as usize, h as usize);
-        let path = std::ffi::CString::new(SKIN_DIR).unwrap();
         let vtable = CarapaceHostVTable {
             ctx: std::ptr::null_mut(),
             get_num: None,
             get_str: None,
             invoke: Some(record_invoke),
         };
-        let desc = CarapaceCreateDesc {
-            skin_dir: path.as_ptr(),
-            vtable,
-            surface,
-            content_surface: std::ptr::null_mut(),
-            w,
-            h,
-        };
-        let mut handle: *mut CarapaceEngine = std::ptr::null_mut();
-        assert_eq!(
-            unsafe { carapace_create(&desc, &mut handle) },
-            CarapaceStatus::Ok
-        );
-        assert!(!handle.is_null());
+        let (handle, _surface) = create_test_handle_with_vtable(w, h, vtable);
 
         // The play button hotspot is `fill{ path = rect{x=20,y=20,w=70,h=70}, ... on_press =
         // function() host.toggle_play() end }` in skin.lua, in DESIGN-CANVAS (300x140) coords.
@@ -651,6 +690,42 @@ mod tick_tests {
             "expected a press over the play button to fire host.toggle_play()"
         );
 
+        unsafe { carapace_destroy(handle) };
+    }
+}
+
+/// Proves the panic → poison → `ErrPoisoned` contract end-to-end through a REAL panic (not a
+/// simulated status code): `carapace_force_panic` panics inside `ffi_guard!`, which must catch
+/// it, mark the handle poisoned, and return `ErrPanic`; every call after that must short-circuit
+/// with `ErrPoisoned` without touching engine state; the panic hook (installed by
+/// `carapace_create`) must have populated `carapace_last_error`; and `carapace_destroy` must still
+/// free a poisoned handle without crashing.
+#[cfg(all(test, target_os = "macos"))]
+mod poison_tests {
+    use super::test_support::create_test_handle;
+    use super::*;
+
+    #[test]
+    fn caught_panic_poisons_the_handle_and_last_error_is_set() {
+        let (handle, _surface) = create_test_handle(300, 140);
+
+        assert_eq!(
+            unsafe { carapace_force_panic(handle) },
+            CarapaceStatus::ErrPanic
+        );
+
+        // Subsequent calls short-circuit on the poisoned handle.
+        assert_eq!(
+            unsafe { carapace_tick(handle, 0.016) },
+            CarapaceStatus::ErrPoisoned
+        );
+
+        // The panic hook (installed by `carapace_create`) populated the thread-local error.
+        let mut buf = [0i8; 128];
+        let n = unsafe { crate::guard::carapace_last_error(buf.as_mut_ptr(), buf.len()) };
+        assert!(n > 0, "expected the panic hook to populate last_error");
+
+        // `carapace_destroy` must still free a poisoned handle without crashing.
         unsafe { carapace_destroy(handle) };
     }
 }
