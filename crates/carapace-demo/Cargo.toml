@@ -15,5 +15,10 @@ rodio = "0.22.2"
 name = "carapace-demo"
 path = "src/main.rs"
 
+[[example]]
+name = "paper_mesh_spike"
+path = "examples/paper_mesh_spike/main.rs"
+
 [dev-dependencies]
 image = { version = "0.25.10", default-features = false, features = ["png"] }
+naga = { version = "29", features = ["glsl-in", "wgsl-out", "spv-in"] }
