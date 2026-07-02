@@ -5,8 +5,6 @@ use carapace::engine::Engine;
 use carapace::render::{RenderTarget, Renderer};
 use carapace::scene::Color;
 
-// Not yet constructed outside this file's test; wired into the present path by Task 6 (handle.rs).
-#[allow(dead_code)]
 pub struct GpuCtx {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
@@ -14,8 +12,6 @@ pub struct GpuCtx {
 
 /// Headless Metal device — no surface, we render into our own textures. Returns `Err(msg)` instead
 /// of panicking so `carapace_create` can surface `ErrGpuInit` (the spike's `.expect()` holes).
-// Not yet called outside this file's test; the real production caller lands with Task 6 (handle.rs).
-#[allow(dead_code)]
 pub fn init_gpu() -> Result<GpuCtx, String> {
     let instance = wgpu::Instance::default();
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
@@ -48,8 +44,6 @@ pub fn init_gpu() -> Result<GpuCtx, String> {
     Ok(GpuCtx { device, queue })
 }
 
-// Not yet constructed outside this file's test; wired into the present path by Task 6 (handle.rs).
-#[allow(dead_code)]
 pub struct OffscreenTarget {
     pub tex: wgpu::Texture,
     pub view: wgpu::TextureView,
@@ -57,12 +51,8 @@ pub struct OffscreenTarget {
     pub h: u32,
 }
 
-// Unused until Task 6 (handle.rs) builds the offscreen target from it.
-#[allow(dead_code)]
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
-// Not yet called outside this file's test; the real production caller lands with Task 6 (handle.rs).
-#[allow(dead_code)]
 pub fn new_offscreen(device: &wgpu::Device, w: u32, h: u32) -> OffscreenTarget {
     let tex = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("embed-spike-offscreen"),
@@ -97,7 +87,7 @@ pub fn new_offscreen(device: &wgpu::Device, w: u32, h: u32) -> OffscreenTarget {
 /// (e.g. Readback path — `readback_rgba` runs immediately after). Set `false` when the
 /// caller does its own poll afterwards, e.g. the Shared blit path — `blit()` already calls
 /// `poll(Wait)`, so a second stall here would be redundant.
-// Unused until Task 6 (handle.rs) drives the per-frame render loop.
+// Unused until Task 7 wires the per-frame render loop.
 #[allow(dead_code)]
 #[allow(clippy::too_many_arguments)]
 pub fn render_frame(
@@ -147,7 +137,7 @@ pub fn render_frame(
 }
 
 /// Copy an RGBA8 texture back to CPU, returning tightly-packed rows (no padding).
-// Unused until Task 6 (handle.rs) wires the Readback present tier.
+// Unused until Task 7 wires the Readback present tier.
 #[allow(dead_code)]
 pub fn readback_rgba(gpu: &GpuCtx, tex: &wgpu::Texture, w: u32, h: u32) -> Vec<u8> {
     let bpp = 4u32;
@@ -206,19 +196,21 @@ pub fn readback_rgba(gpu: &GpuCtx, tex: &wgpu::Texture, w: u32, h: u32) -> Vec<u
 // declare them directly rather than via the `io-surface` crate, which transitively links the
 // macOS-only OpenGL framework (through `cgl`) and therefore fails to link for iOS. The framework
 // is linked explicitly so the symbols resolve regardless of which other crate requests it.
-// Unused until Task 6 (handle.rs) wires the Shared present tier.
-#[allow(dead_code)]
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub type IOSurfaceRef = *mut core::ffi::c_void;
 
-// The accessors below are unused until Task 6 (handle.rs) wires the Shared present tier.
-#[allow(dead_code)]
+// Lock/Unlock/GetBaseAddress/GetBytesPerRow are unused until Task 7 wires the CPU-copy paths
+// (upload_iosurface_to_texture / copy_into_iosurface); GetWidth/GetHeight are used now.
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 #[link(name = "IOSurface", kind = "framework")]
 unsafe extern "C" {
+    #[allow(dead_code)]
     fn IOSurfaceLock(buffer: IOSurfaceRef, options: u32, seed: *mut u32) -> i32;
+    #[allow(dead_code)]
     fn IOSurfaceUnlock(buffer: IOSurfaceRef, options: u32, seed: *mut u32) -> i32;
+    #[allow(dead_code)]
     fn IOSurfaceGetBaseAddress(buffer: IOSurfaceRef) -> *mut core::ffi::c_void;
+    #[allow(dead_code)]
     fn IOSurfaceGetBytesPerRow(buffer: IOSurfaceRef) -> usize;
     pub fn IOSurfaceGetWidth(buffer: IOSurfaceRef) -> usize;
     pub fn IOSurfaceGetHeight(buffer: IOSurfaceRef) -> usize;
@@ -234,8 +226,6 @@ unsafe extern "C" {
 ///
 /// # Safety
 /// `surface` must be a live IOSurface of at least `w`×`h` BGRA8 pixels that outlives the texture.
-// Unused until Task 6 (handle.rs) wires the Shared present tier.
-#[allow(dead_code)]
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 #[allow(deprecated)]
 pub unsafe fn try_shared(
@@ -332,8 +322,6 @@ pub unsafe fn try_shared(
 ///
 /// `COPY_DST` so `queue.write_texture` can upload into it; `TEXTURE_BINDING` so the engine can
 /// sample it into the cutout.
-// Unused until Task 6 (handle.rs) wires the `view{}` composite path.
-#[allow(dead_code)]
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub fn make_content_texture(
     device: &wgpu::Device,
@@ -374,7 +362,7 @@ pub fn make_content_texture(
 /// # Safety
 /// `surface` must be a live IOSurface of at least `w`×`h` BGRA8 pixels. `tex` must be a
 /// `Bgra8Unorm` texture of at least `w`×`h` with `COPY_DST` usage.
-// Unused until Task 6 (handle.rs) wires the `view{}` composite path.
+// Unused until Task 7 wires the `view{}` composite path.
 #[allow(dead_code)]
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 #[allow(deprecated)]
@@ -442,7 +430,7 @@ pub unsafe fn upload_iosurface_to_texture(
 /// CPU readback. This function calls `poll(Wait)` itself, making it the single GPU stall on
 /// the Shared path; callers should pass `wait = false` to `render_frame` to avoid a redundant
 /// stall before this blit.
-// Unused until Task 6 (handle.rs) wires the Shared present tier.
+// Unused until Task 7 wires the Shared present tier.
 #[allow(dead_code)]
 pub fn blit(
     gpu: &GpuCtx,
@@ -459,8 +447,6 @@ pub fn blit(
 }
 
 /// Tier identifies which present path the engine is using.
-// Unused until Task 6 (handle.rs) selects between present tiers.
-#[allow(dead_code)]
 #[repr(i32)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Tier {
@@ -474,7 +460,7 @@ pub enum Tier {
 /// # Safety
 /// `surface` must be a valid, live IOSurface of at least w×h pixels.
 /// `rgba` must contain exactly `w * h * 4` bytes of packed RGBA8 data.
-// Unused until Task 6 (handle.rs) wires the Readback present tier.
+// Unused until Task 7 wires the Readback present tier.
 #[allow(dead_code)]
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 #[allow(deprecated)]

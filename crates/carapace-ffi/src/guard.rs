@@ -36,8 +36,6 @@ pub fn set_last_error(msg: &str) {
 /// Install (once per process) a panic hook that captures the panic message + location into the
 /// thread-local BEFORE the unwind reaches `catch_unwind` (whose payload is opaque). Chains the
 /// previous hook. Call this at the top of `carapace_create`.
-// Not yet called: `carapace_create` lands with the handle module in a later task.
-#[allow(dead_code)]
 pub fn install_panic_hook() {
     static HOOK: Once = Once::new();
     HOOK.call_once(|| {
@@ -50,8 +48,6 @@ pub fn install_panic_hook() {
 }
 
 /// Wrap a handle-less export body. On panic: record `ErrPanic`, return it.
-// Consumed by handle-less exports added in later tasks; exercised directly by the test below.
-#[allow(unused_macros)]
 macro_rules! ffi_guard_no_handle {
     ($body:expr) => {
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| $body)) {
@@ -83,7 +79,6 @@ macro_rules! ffi_guard {
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 #[allow(unused_imports)]
 pub(crate) use ffi_guard;
-#[allow(unused_imports)]
 pub(crate) use ffi_guard_no_handle;
 
 /// Copy the current thread's last error into `buf` (NUL-terminated, truncated to `cap`). Returns

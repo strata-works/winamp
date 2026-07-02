@@ -9,10 +9,13 @@ pub use guard::{CARAPACE_ABI_MAJOR, CARAPACE_ABI_MINOR, CarapaceStatus, carapace
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 mod render;
 
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+mod handle;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+pub use handle::*;
+
 // Apple-gated modules are added in later tasks:
-// #[cfg(any(target_os = "macos", target_os = "ios"))] mod handle;   // Task 7
 // #[cfg(any(target_os = "macos", target_os = "ios"))] mod hit;      // Task 10
-// #[cfg(any(target_os = "macos", target_os = "ios"))] pub use handle::*;
 // #[cfg(any(target_os = "macos", target_os = "ios"))] pub use hit::*;
 
 /// The ABI version this library implements: `MAJOR << 16 | MINOR`. Additive changes bump MINOR;
