@@ -258,10 +258,72 @@ pub unsafe extern "C" fn carapace_release_surface(
     CarapaceStatus::Ok
 }
 
+/// Pointer event kind, mirrored 1:1 by the Rust `queue::PointerKind` the render thread consumes.
+#[repr(i32)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum CarapacePointerKind {
+    Press = 0,
+    Release = 1,
+    Move = 2,
+    Enter = 3,
+    Leave = 4,
+}
+
+/// Forward a pointer event, in DESIGN-CANVAS coordinates, to the render thread. Non-blocking: this
+/// enqueues `Command::Pointer` and returns immediately — the render thread applies it (and renders a
+/// frame) the next time it drains the queue. Thin enough it doesn't need a panic guard of its own;
+/// any panic it could cause happens later, on the render thread, inside `render_guarded`.
+///
+/// # Safety
+/// `ptr` must come from `carapace_create` and not have been passed to `carapace_destroy`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn carapace_pointer(
+    ptr: *mut CarapaceEngine,
+    x: f64,
+    y: f64,
+    kind: CarapacePointerKind,
+) -> CarapaceStatus {
+    let Some(e) = (unsafe { ptr.as_ref() }) else {
+        return CarapaceStatus::ErrNullArg;
+    };
+    if e.poisoned.load(std::sync::atomic::Ordering::Acquire) {
+        return CarapaceStatus::ErrPoisoned;
+    }
+    let k = match kind {
+        CarapacePointerKind::Press => crate::queue::PointerKind::Press,
+        CarapacePointerKind::Release => crate::queue::PointerKind::Release,
+        CarapacePointerKind::Move => crate::queue::PointerKind::Move,
+        CarapacePointerKind::Enter => crate::queue::PointerKind::Enter,
+        CarapacePointerKind::Leave => crate::queue::PointerKind::Leave,
+    };
+    let _ = e.tx.send(Command::Pointer { x, y, kind: k });
+    CarapaceStatus::Ok
+}
+
+/// Test-only: enqueue a forced panic on the render thread, to prove the panic→poison→`ErrPoisoned`
+/// contract end-to-end (see `render_thread::render_guarded` and `Command::ForcePanic`). Non-blocking,
+/// like `carapace_pointer`. Never compiled into a shipping build — `cbindgen.toml` also excludes it
+/// defensively, since cbindgen parses source statically and won't evaluate `#[cfg(test)]`.
+///
+/// # Safety
+/// `ptr` must come from `carapace_create` and not have been passed to `carapace_destroy`.
+#[cfg(all(test, target_os = "macos"))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn carapace_force_panic(ptr: *mut CarapaceEngine) -> CarapaceStatus {
+    let Some(e) = (unsafe { ptr.as_ref() }) else {
+        return CarapaceStatus::ErrNullArg;
+    };
+    if e.poisoned.load(std::sync::atomic::Ordering::Acquire) {
+        return CarapaceStatus::ErrPoisoned;
+    }
+    let _ = e.tx.send(Command::ForcePanic);
+    CarapaceStatus::Ok
+}
+
 /// Report the present tier the engine is currently using, read from the render thread's published
 /// snapshot (seeded at create time via `publish_tier_only`, so this is a valid answer immediately
 /// after `carapace_create` returns and after every subsequent frame). Panic-free (a lock read + a
-/// match), so it does not need `ffi_guard!`.
+/// match), so no panic guard is needed.
 ///
 /// # Safety
 /// `ptr` must come from `carapace_create` and not have been passed to `carapace_destroy`. `out`
@@ -550,5 +612,69 @@ mod active_tier_tests {
             CarapaceStatus::ErrNullArg
         );
         unsafe { carapace_destroy(handle) };
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod v2_pointer_poison_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    static TOGGLED: AtomicBool = AtomicBool::new(false);
+    extern "C" fn rec(_c: *mut std::ffi::c_void, action: *const std::ffi::c_char) {
+        if unsafe { std::ffi::CStr::from_ptr(action) }.to_string_lossy() == "toggle_play" {
+            TOGGLED.store(true, Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    fn press_over_button_fires_action_through_the_loop() {
+        TOGGLED.store(false, Ordering::SeqCst);
+        let vt = crate::host::CarapaceHostVTable {
+            ctx: std::ptr::null_mut(),
+            get_num: None,
+            get_str: None,
+            invoke: Some(rec),
+            frame_ready: None,
+        };
+        let (h, _s) = test_support::create_test_handle_pool_vt(300, 140, 2, vt);
+        assert_eq!(
+            unsafe { carapace_pointer(h, 55.0, 55.0, CarapacePointerKind::Press) },
+            CarapaceStatus::Ok
+        );
+        // Poll instead of a fixed sleep: the loop must drain the pointer command, render (paying the
+        // first-frame GPU pipeline-compile cost under parallel test load), and invoke through the
+        // host vtable before the assertion below can pass.
+        test_support::wait_for(std::time::Duration::from_secs(10), || {
+            TOGGLED.load(Ordering::SeqCst)
+        });
+        assert!(
+            TOGGLED.load(Ordering::SeqCst),
+            "press should fire host.toggle_play via the loop"
+        );
+        unsafe { carapace_destroy(h) };
+    }
+
+    #[test]
+    fn render_thread_panic_poisons_and_subsequent_calls_are_poisoned() {
+        let (h, _s) = test_support::create_test_handle_pool(300, 140, 2);
+        assert_eq!(
+            unsafe { carapace_force_panic(h) },
+            CarapaceStatus::Ok // enqueues; returns immediately
+        );
+        // Poll instead of a fixed sleep: wait for the loop to drain, panic inside
+        // `render_guarded`'s `catch_unwind`, and set `poisoned` before asserting on it.
+        test_support::wait_for(std::time::Duration::from_secs(10), || {
+            (unsafe { carapace_invalidate(h) }) == CarapaceStatus::ErrPoisoned
+        });
+        assert_eq!(
+            unsafe { carapace_invalidate(h) },
+            CarapaceStatus::ErrPoisoned
+        );
+        assert_eq!(
+            unsafe { carapace_pointer(h, 0.0, 0.0, CarapacePointerKind::Press) },
+            CarapaceStatus::ErrPoisoned
+        );
+        unsafe { carapace_destroy(h) }; // must still join a poisoned/exited thread
     }
 }

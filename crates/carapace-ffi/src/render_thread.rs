@@ -72,6 +72,10 @@ struct RenderThread {
     /// Host callbacks, copied in at `build` time so `render_one` can fire `frame_ready` from THIS
     /// thread without touching the front-end handle.
     vtable: CarapaceHostVTable,
+    /// Test-only: set by `Command::ForcePanic`; checked inside `render_guarded`'s `catch_unwind` so
+    /// a forced panic sets `poisoned` via the exact same path a genuine render panic would.
+    #[cfg(test)]
+    force_panic: bool,
 }
 
 const DEFAULT_FPS: u32 = 60;
@@ -138,6 +142,8 @@ fn build(
         frame_id: 0,
         last_render: Instant::now(),
         vtable,
+        #[cfg(test)]
+        force_panic: false,
     })
 }
 
@@ -251,6 +257,11 @@ impl RenderThread {
                     );
                 }
                 *invalidated = true; // input should show a frame even when paused
+            }
+            #[cfg(test)]
+            Command::ForcePanic => {
+                self.force_panic = true;
+                *invalidated = true; // drive the next render_guarded call, where it actually panics
             }
         }
         true
@@ -373,6 +384,12 @@ fn render_guarded(rt: &mut RenderThread, cell: &SnapshotCell, poisoned: &Arc<Ato
         Tier::Shared => SnapshotTier::Shared,
     };
     let result = catch_unwind(AssertUnwindSafe(|| {
+        // Test-only forced-panic path (see `Command::ForcePanic`): panics HERE, inside this same
+        // `catch_unwind`, so it poisons + exits via the exact contract a real render panic would.
+        #[cfg(test)]
+        if rt.force_panic {
+            panic!("forced render-thread panic");
+        }
         // Publish the exact laid-out scene `render_one` drew (single layout). `None` = backpressure
         // skipped this frame, so nothing is published.
         if let Some(scene) = rt.render_one(dt) {

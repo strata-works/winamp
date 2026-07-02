@@ -29,6 +29,11 @@ pub enum Command {
     ReleaseSurface(u32),
     /// Stop the loop and let the thread exit (sent by `carapace_destroy`).
     Shutdown,
+    /// Test-only: forces a panic inside `render_guarded`'s `catch_unwind` on the render thread, to
+    /// prove the panic→poison→`ErrPoisoned` contract end-to-end. Never compiled into a shipping
+    /// build (and excluded defensively in `cbindgen.toml`, which can't see `#[cfg(test)]`).
+    #[cfg(test)]
+    ForcePanic,
 }
 
 pub type CommandTx = std::sync::mpsc::Sender<Command>;

@@ -23,7 +23,7 @@ pub enum CarapaceHitKind {
 }
 
 /// Classify a point `(x, y)` in skin-local coordinates against the latest published scene.
-/// Panic-free (a lock read + a match), so it does not need `ffi_guard!`.
+/// Panic-free (a lock read + a match), so no panic guard is needed.
 ///
 /// # Safety
 /// `ptr` must come from `carapace_create` and not have been passed to `carapace_destroy`. `out`

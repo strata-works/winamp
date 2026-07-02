@@ -40,6 +40,40 @@ typedef int32_t CarapaceStatus;
 
 #if (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE))
 /**
+ * Pointer event kind, mirrored 1:1 by the Rust `queue::PointerKind` the render thread consumes.
+ */
+enum CarapacePointerKind
+#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+  : int32_t
+#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+ {
+#if (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE))
+  Press = 0,
+#endif
+#if (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE))
+  Release = 1,
+#endif
+#if (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE))
+  Move = 2,
+#endif
+#if (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE))
+  Enter = 3,
+#endif
+#if (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE))
+  Leave = 4,
+#endif
+};
+#ifndef __cplusplus
+#if __STDC_VERSION__ >= 202311L
+typedef enum CarapacePointerKind CarapacePointerKind;
+#else
+typedef int32_t CarapacePointerKind;
+#endif // __STDC_VERSION__ >= 202311L
+#endif // __cplusplus
+#endif
+
+#if (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE))
+/**
  * The present path the engine resolved to. Mirrors `render::Tier`.
  */
 enum CarapaceTier
@@ -239,10 +273,26 @@ CarapaceStatus carapace_release_surface(CarapaceEngine *ptr, uint32_t index);
 
 #if (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE))
 /**
+ * Forward a pointer event, in DESIGN-CANVAS coordinates, to the render thread. Non-blocking: this
+ * enqueues `Command::Pointer` and returns immediately — the render thread applies it (and renders a
+ * frame) the next time it drains the queue. Thin enough it doesn't need a panic guard of its own;
+ * any panic it could cause happens later, on the render thread, inside `render_guarded`.
+ *
+ * # Safety
+ * `ptr` must come from `carapace_create` and not have been passed to `carapace_destroy`.
+ */
+CarapaceStatus carapace_pointer(CarapaceEngine *ptr,
+                                double x,
+                                double y,
+                                CarapacePointerKind kind);
+#endif
+
+#if (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE))
+/**
  * Report the present tier the engine is currently using, read from the render thread's published
  * snapshot (seeded at create time via `publish_tier_only`, so this is a valid answer immediately
  * after `carapace_create` returns and after every subsequent frame). Panic-free (a lock read + a
- * match), so it does not need `ffi_guard!`.
+ * match), so no panic guard is needed.
  *
  * # Safety
  * `ptr` must come from `carapace_create` and not have been passed to `carapace_destroy`. `out`
@@ -254,7 +304,7 @@ CarapaceStatus carapace_active_tier(CarapaceEngine *ptr, CarapaceTier *out);
 #if (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE))
 /**
  * Classify a point `(x, y)` in skin-local coordinates against the latest published scene.
- * Panic-free (a lock read + a match), so it does not need `ffi_guard!`.
+ * Panic-free (a lock read + a match), so no panic guard is needed.
  *
  * # Safety
  * `ptr` must come from `carapace_create` and not have been passed to `carapace_destroy`. `out`

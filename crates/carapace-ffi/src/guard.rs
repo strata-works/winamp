@@ -1,9 +1,12 @@
 //! Panic-safety, status codes, and the thread-local error channel shared by every export.
 //!
-//! Boundary policy: every `#[unsafe(no_mangle)]` export wraps its body in `ffi_guard!`, which catches any
-//! panic (so nothing unwinds into the host's foreign frames) and turns it into `ErrPanic`. Handle-
-//! bearing calls additionally *poison* the handle. We NEVER `abort()`: carapace runs inside the
-//! host's process.
+//! Boundary policy: `carapace_create` wraps its synchronous init body in `ffi_guard_no_handle!`,
+//! catching any panic (so nothing unwinds into the host's foreign frames) and turning it into
+//! `ErrPanic`. Once a handle exists, panics are caught on the RENDER THREAD instead
+//! (`render_thread::render_guarded`'s `catch_unwind`), which sets the shared `poisoned` flag and
+//! lets the thread exit; every front-end export then short-circuits with `ErrPoisoned` by reading
+//! that atomic directly — no per-call guard needed for the thin, panic-free front-end functions. We
+//! NEVER `abort()`: carapace runs inside the host's process.
 
 use std::cell::RefCell;
 use std::ffi::c_char;
@@ -65,30 +68,6 @@ macro_rules! ffi_guard_no_handle {
     };
 }
 
-/// Wrap a handle-bearing export body. On panic: poison the handle, return `ErrPanic`.
-/// `$ptr` is the `*mut CarapaceEngine` passed to the export.
-// SDD v2: its consumers (`carapace_pointer`/`carapace_hit_test`/`carapace_force_panic`) were
-// removed in Task 4 and are re-added in Tasks 7/8; the macro (and its re-export below) stay so those
-// tasks don't have to reintroduce them. Allow them to sit unused in the interim.
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-#[allow(unused_macros)]
-macro_rules! ffi_guard {
-    ($ptr:expr, $body:expr) => {
-        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| $body)) {
-            Ok(status) => status,
-            Err(_) => {
-                if let Some(h) = unsafe { ($ptr).as_mut() } {
-                    h.poisoned = true;
-                }
-                $crate::guard::CarapaceStatus::ErrPanic
-            }
-        }
-    };
-}
-
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-#[allow(unused_imports)] // re-consumed in Tasks 7/8 (see the macro's note above).
-pub(crate) use ffi_guard;
 // Only imported via this path by `handle.rs` (Apple-gated); dead on non-Apple (the crate's own
 // tests below reach the macro directly, without going through this re-export).
 #[cfg_attr(
