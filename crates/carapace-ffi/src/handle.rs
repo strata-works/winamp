@@ -258,6 +258,36 @@ pub unsafe extern "C" fn carapace_release_surface(
     CarapaceStatus::Ok
 }
 
+/// Report the present tier the engine is currently using, read from the render thread's published
+/// snapshot (seeded at create time via `publish_tier_only`, so this is a valid answer immediately
+/// after `carapace_create` returns and after every subsequent frame). Panic-free (a lock read + a
+/// match), so it does not need `ffi_guard!`.
+///
+/// # Safety
+/// `ptr` must come from `carapace_create` and not have been passed to `carapace_destroy`. `out`
+/// must be a valid pointer to a `CarapaceTier`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn carapace_active_tier(
+    ptr: *mut CarapaceEngine,
+    out: *mut CarapaceTier,
+) -> CarapaceStatus {
+    let Some(e) = (unsafe { ptr.as_ref() }) else {
+        return CarapaceStatus::ErrNullArg;
+    };
+    if out.is_null() {
+        return CarapaceStatus::ErrNullArg;
+    }
+    if e.poisoned.load(std::sync::atomic::Ordering::Acquire) {
+        return CarapaceStatus::ErrPoisoned;
+    }
+    let tier = match snapshot::tier_of(&e.snapshot) {
+        snapshot::SnapshotTier::Readback => CarapaceTier::Readback,
+        snapshot::SnapshotTier::Shared => CarapaceTier::Shared,
+    };
+    unsafe { *out = tier };
+    CarapaceStatus::Ok
+}
+
 /// Test helpers shared by the lifecycle suite: a real skin fixture + a pool of IOSurfaces, so each
 /// suite doesn't hand-roll its own `carapace_create` call.
 #[cfg(all(test, target_os = "macos"))]
@@ -464,5 +494,61 @@ mod lifecycle_tests {
             CarapaceStatus::ErrNullArg
         );
         assert!(handle.is_null());
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod active_tier_tests {
+    use super::test_support::create_test_handle_pool;
+    use super::*;
+
+    #[test]
+    fn active_tier_is_valid_before_and_after_first_frame() {
+        let (handle, _s) = create_test_handle_pool(300, 140, 2);
+        let mut tier = CarapaceTier::Readback;
+        assert_eq!(
+            unsafe { carapace_active_tier(handle, &mut tier) },
+            CarapaceStatus::Ok
+        );
+        assert!(matches!(
+            tier,
+            CarapaceTier::Readback | CarapaceTier::Shared
+        ));
+
+        // Force a frame; the tier should still (trivially) agree.
+        unsafe {
+            let _ = carapace_set_frame_rate(handle, 0);
+        }
+        unsafe {
+            let _ = carapace_invalidate(handle);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        let mut tier2 = CarapaceTier::Readback;
+        assert_eq!(
+            unsafe { carapace_active_tier(handle, &mut tier2) },
+            CarapaceStatus::Ok
+        );
+        assert!(matches!(
+            tier2,
+            CarapaceTier::Readback | CarapaceTier::Shared
+        ));
+
+        unsafe { carapace_destroy(handle) };
+    }
+
+    #[test]
+    fn active_tier_rejects_null_handle_and_null_out() {
+        let mut tier = CarapaceTier::Readback;
+        assert_eq!(
+            unsafe { carapace_active_tier(std::ptr::null_mut(), &mut tier) },
+            CarapaceStatus::ErrNullArg
+        );
+
+        let (handle, _s) = create_test_handle_pool(300, 140, 2);
+        assert_eq!(
+            unsafe { carapace_active_tier(handle, std::ptr::null_mut()) },
+            CarapaceStatus::ErrNullArg
+        );
+        unsafe { carapace_destroy(handle) };
     }
 }

@@ -40,6 +40,68 @@ typedef int32_t CarapaceStatus;
 
 #if (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE))
 /**
+ * The present path the engine resolved to. Mirrors `render::Tier`.
+ */
+enum CarapaceTier
+#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+  : int32_t
+#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+ {
+#if (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE))
+  Readback = 1,
+#endif
+#if (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE))
+  Shared = 2,
+#endif
+};
+#ifndef __cplusplus
+#if __STDC_VERSION__ >= 202311L
+typedef enum CarapaceTier CarapaceTier;
+#else
+typedef int32_t CarapaceTier;
+#endif // __STDC_VERSION__ >= 202311L
+#endif // __cplusplus
+#endif
+
+#if (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE))
+/**
+ * Classification of a point for a host embedder. Additive enum.
+ */
+enum CarapaceHitKind
+#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+  : int32_t
+#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+ {
+#if (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE))
+  /**
+   * Event should fall through the skin (transparent / passthrough region).
+   */
+  Passthrough = 0,
+#endif
+#if (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE))
+  /**
+   * Skin consumes the event (a control, or opaque non-interactive skin).
+   */
+  Control = 1,
+#endif
+#if (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE))
+  /**
+   * Host should move the window (a drag region).
+   */
+  Drag = 2,
+#endif
+};
+#ifndef __cplusplus
+#if __STDC_VERSION__ >= 202311L
+typedef enum CarapaceHitKind CarapaceHitKind;
+#else
+typedef int32_t CarapaceHitKind;
+#endif // __STDC_VERSION__ >= 202311L
+#endif // __cplusplus
+#endif
+
+#if (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE))
+/**
  * Opaque handle handed across the C ABI — a thread-safe front-end for the render thread.
  *
  * `poisoned` is set (with `Release`) by the render thread / guard after a caught panic; front-end
@@ -173,6 +235,32 @@ CarapaceStatus carapace_set_frame_rate(CarapaceEngine *ptr, uint32_t fps);
  * `ptr` must come from `carapace_create` and not have been passed to `carapace_destroy`.
  */
 CarapaceStatus carapace_release_surface(CarapaceEngine *ptr, uint32_t index);
+#endif
+
+#if (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE))
+/**
+ * Report the present tier the engine is currently using, read from the render thread's published
+ * snapshot (seeded at create time via `publish_tier_only`, so this is a valid answer immediately
+ * after `carapace_create` returns and after every subsequent frame). Panic-free (a lock read + a
+ * match), so it does not need `ffi_guard!`.
+ *
+ * # Safety
+ * `ptr` must come from `carapace_create` and not have been passed to `carapace_destroy`. `out`
+ * must be a valid pointer to a `CarapaceTier`.
+ */
+CarapaceStatus carapace_active_tier(CarapaceEngine *ptr, CarapaceTier *out);
+#endif
+
+#if (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE))
+/**
+ * Classify a point `(x, y)` in skin-local coordinates against the latest published scene.
+ * Panic-free (a lock read + a match), so it does not need `ffi_guard!`.
+ *
+ * # Safety
+ * `ptr` must come from `carapace_create` and not have been passed to `carapace_destroy`. `out`
+ * must be a valid pointer to a `CarapaceHitKind`.
+ */
+CarapaceStatus carapace_hit_test(CarapaceEngine *ptr, double x, double y, CarapaceHitKind *out);
 #endif
 
 #ifdef __cplusplus
