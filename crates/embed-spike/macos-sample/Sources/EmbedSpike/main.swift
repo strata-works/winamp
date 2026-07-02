@@ -400,6 +400,19 @@ final class SkinView: NSView {
         NSBezierPath(roundedRect: NSRect(x: 0, y: 0, width: wF, height: hF),
                      xRadius: 12, yRadius: 12).fill()
 
+        // Window controls: macOS traffic lights at the card's top-left (the skin's invisible
+        // hotspots align to these). Drawn by the host because the engine composites view{} over
+        // the vello layer, so carapace vector can't paint over the full-bleed paper shader.
+        let controls: [(CGFloat, NSColor)] = [
+            (20, NSColor(red: 1.00, green: 0.37, blue: 0.34, alpha: 1)),  // close (red)
+            (40, NSColor(red: 1.00, green: 0.74, blue: 0.18, alpha: 1)),  // minimize (yellow)
+            (60, NSColor(red: 0.16, green: 0.79, blue: 0.25, alpha: 1)),  // zoom (green, cosmetic)
+        ]
+        for (dx, color) in controls {
+            color.setFill()
+            NSBezierPath(ovalIn: NSRect(x: dx - 6, y: 12, width: 12, height: 12)).fill()
+        }
+
         // Album art (rounded square, left).
         let art = NSRect(x: 22, y: hF*0.5 - 62, width: 124, height: 124)
         let grad = NSGradient(colors: [NSColor(red:0.93,green:0.35,blue:0.57,alpha:1),

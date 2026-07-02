@@ -9,9 +9,13 @@ region{ path = rect{x=0, y=0, w=480, h=300}, on_press = function() host.begin_dr
 -- The paper shader fills the whole window, behind everything.
 view{ id = "paper", x = 0, y = 0, w = 480, h = 300 }
 
--- Window controls — invisible hotspots in the top gradient border.
-region{ path = rect{x=444, y=6, w=14, h=14}, on_press = function() host.minimize() end }
-region{ path = rect{x=462, y=6, w=14, h=14}, on_press = function() host.close() end }
+-- Window controls: macOS traffic lights. The engine composites view{} textures OVER the vello
+-- vector layer, so carapace vector can't paint over the full-bleed paper shader (same limitation
+-- as the card corners; deferred). Instead the HOST draws the dots into the content card's
+-- top-left (that view{} IS composited over paper, so it shows). These invisible hotspots align
+-- to the drawn dots: content-local centers (20,40 @ y18) → canvas (44,64 @ y42).
+region{ path = rect{x=36, y=34, w=16, h=16}, on_press = function() host.close() end }
+region{ path = rect{x=56, y=34, w=16, h=16}, on_press = function() host.minimize() end }
 
 -- The real macOS player content, framed by the gradient.
 view{ id = "content", x = 24, y = 24, w = 432, h = 252 }
