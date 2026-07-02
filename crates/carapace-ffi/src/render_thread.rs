@@ -23,9 +23,11 @@ use crate::queue::{Command, CommandRx};
 use crate::render::{GpuCtx, IOSurfaceRef, Present, Tier, build_content, build_present, init_gpu};
 use crate::snapshot::SnapshotCell;
 
-/// The raw host-owned pointers that must cross onto the spawned render thread at construction:
-/// the IOSurface pool, the optional content surface, and the host vtable (fn pointers + its opaque
-/// `ctx`). Bundling them keeps a SINGLE `Send` assertion in the crate.
+/// The raw host-owned state that must cross onto the spawned render thread at construction: the
+/// IOSurface pool, the optional content surface, and the host vtable (fn pointers + its opaque
+/// `ctx`). Bundling them here — rather than passing the vtable as a separate `spawn` param — means
+/// every piece of host-owned raw state crossing the thread boundary is covered by ONE audited
+/// `unsafe impl Send`, instead of scattering the justification across multiple impls.
 ///
 /// # Safety contract
 /// These pointers are caller-owned and guaranteed (by the C ABI contract, see `carapace.h`) to

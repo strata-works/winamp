@@ -21,15 +21,6 @@ pub struct CarapaceHostVTable {
     pub frame_ready: Option<extern "C" fn(*mut c_void, u32, u64)>,
 }
 
-// The vtable now legitimately crosses onto the dedicated render thread at construction (it is
-// moved into the `RenderThread` state along with the `SendSurfaces` wrapper). Its raw `ctx`
-// pointer, and every function pointer here, are host-guaranteed thread-safe to invoke from
-// whichever thread calls them (§ callback contract in the spec) — the host promises `ctx` may be
-// touched off the calling thread. Send/Sync are asserted to satisfy the engine's `Box<dyn Host>`
-// and the render thread's `'static + Send` bound.
-unsafe impl Send for CarapaceHostVTable {}
-unsafe impl Sync for CarapaceHostVTable {}
-
 const ACTIONS: &[ActionSpec] = &[
     ActionSpec { name: "toggle" },
     ActionSpec {
