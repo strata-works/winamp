@@ -17,9 +17,10 @@ region{ path = rect{x=462, y=6, w=14, h=14}, on_press = function() host.close() 
 view{ id = "content", x = 24, y = 24, w = 432, h = 252 }
 
 -- Transport hotspots over the content (the Swift host draws the glyphs + owns AVAudioPlayer).
--- Centered transport row near the content's lower third: prev / play-pause / next.
-region{ path = rect{x=212, y=210, w=24, h=24}, on_press = function() host.prev() end }
-region{ path = rect{x=240, y=206, w=32, h=32}, on_press = function() host.toggle_play() end }
-region{ path = rect{x=276, y=210, w=24, h=24}, on_press = function() host.next() end }
--- Scrub strip over the progress bar.
-region{ path = rect{x=180, y=180, w=228, h=14}, on_press = function() host.scrub() end }
+-- Rects aligned to the glyphs' ACTUAL canvas positions (Swift draws them at content-local
+-- y≈206 + the 24px content offset → canvas y≈230..254; prev/play/next centered at x≈249/281/313).
+region{ path = rect{x=234, y=228, w=32, h=32}, on_press = function() host.prev() end }
+region{ path = rect{x=266, y=226, w=34, h=36}, on_press = function() host.toggle_play() end }
+region{ path = rect{x=300, y=228, w=32, h=32}, on_press = function() host.next() end }
+-- Scrub strip over the progress bar (Swift draws the track at content-local y=180 → canvas y≈204).
+region{ path = rect{x=188, y=198, w=248, h=22}, on_press = function() host.scrub() end }
