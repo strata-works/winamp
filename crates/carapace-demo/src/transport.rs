@@ -36,6 +36,7 @@ impl Primitive for TransportPrim {
             Node::Hotspot {
                 region: region_of(&play),
                 on_press: play_id,
+                role: carapace::scene::HotspotRole::Control,
             },
             Node::Fill {
                 path: stop.clone(),
@@ -44,6 +45,7 @@ impl Primitive for TransportPrim {
             Node::Hotspot {
                 region: region_of(&stop),
                 on_press: stop_id,
+                role: carapace::scene::HotspotRole::Control,
             },
             Node::ValueFill {
                 path: seek,

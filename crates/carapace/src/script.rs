@@ -435,6 +435,7 @@ mod tests {
                 Ok(vec![Node::Hotspot {
                     region: region_of(&path),
                     on_press: id,
+                    role: crate::scene::HotspotRole::Control,
                 }])
             }
         }

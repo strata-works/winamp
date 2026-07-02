@@ -1,0 +1,28 @@
+[package]
+name = "carapace-ffi"
+version = "0.1.0"
+edition = "2024"   # repo standard (rustfmt.toml + all non-spike crates); see edition-2024 FFI note below
+
+[lib]
+crate-type = ["cdylib", "staticlib", "rlib"]   # cdylib+staticlib: host apps link one or the other
+
+[dependencies]
+carapace = { path = "../carapace" }
+libc = "0.2.186"
+
+# GPU/Metal/IOSurface deps are Apple-only; on other targets the crate is a near-empty shell.
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+pollster = "0.4.0"
+wgpu = "29.0.3"
+wgpu-hal = "=29.0.3"
+core-foundation = "0.10.1"
+objc2 = "0.6"
+objc2-io-surface = "0.3.2"
+objc2-metal = { version = "0.3.2", features = ["objc2-io-surface"] }
+
+# Only tests create an IOSurface in Rust (macOS-only; transitively links OpenGL via cgl).
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+io-surface = "0.16.1"
+
+[dev-dependencies]
+cbindgen = "0.29"
