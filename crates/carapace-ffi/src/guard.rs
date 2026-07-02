@@ -24,8 +24,8 @@ pub enum CarapaceStatus {
     ErrPanic = 5,
 }
 
-pub const CARAPACE_ABI_MAJOR: u32 = 0;
-pub const CARAPACE_ABI_MINOR: u32 = 1;
+pub const CARAPACE_ABI_MAJOR: u32 = 2;
+pub const CARAPACE_ABI_MINOR: u32 = 0;
 
 thread_local! {
     static LAST_ERROR: RefCell<String> = const { RefCell::new(String::new()) };
@@ -38,6 +38,16 @@ thread_local! {
 #[cfg_attr(not(any(target_os = "macos", target_os = "ios")), allow(dead_code))]
 pub fn set_last_error(msg: &str) {
     LAST_ERROR.with(|e| *e.borrow_mut() = msg.to_string());
+}
+
+/// Read the current thread's last error as an owned `String` (a clone; the TLS is left intact).
+/// The render thread uses this to lift the panic message the process-wide panic hook just wrote
+/// into ITS thread-local — captured on the render thread — up into the shared poison slot, so a
+/// host calling `carapace_last_error` on its OWN thread can retrieve it via the poison path.
+// Only non-test caller is `render_guarded` (Apple-gated); dead on non-Apple.
+#[cfg_attr(not(any(target_os = "macos", target_os = "ios")), allow(dead_code))]
+pub fn last_error_string() -> String {
+    LAST_ERROR.with(|e| e.borrow().clone())
 }
 
 /// Install (once per process) a panic hook that captures the panic message + location into the

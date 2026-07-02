@@ -3,10 +3,10 @@
 
 use std::ffi::c_void;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::mpsc::RecvTimeoutError;
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -14,7 +14,7 @@ use carapace::engine::{Engine, PointerEvent};
 use carapace::render::Renderer;
 use carapace::scene::{Pt, Scene};
 
-use crate::guard::{CarapaceStatus, set_last_error};
+use crate::guard::{CarapaceStatus, last_error_string, set_last_error};
 use crate::handle::ContentTex;
 use crate::host::{CarapaceHostVTable, FfiHost};
 use crate::queue::{Command, CommandRx, PointerKind, drain_coalescing};
@@ -278,6 +278,7 @@ pub(crate) fn spawn(
     rx: CommandRx,
     cell: SnapshotCell,
     poisoned: Arc<AtomicBool>,
+    poison_msg: Arc<Mutex<String>>,
     init_tx: mpsc::Sender<InitResult>,
 ) -> JoinHandle<()> {
     std::thread::Builder::new()
@@ -305,7 +306,7 @@ pub(crate) fn spawn(
                     return;
                 }
             };
-            run_loop(&mut rt, &rx, &cell, &poisoned);
+            run_loop(&mut rt, &rx, &cell, &poisoned, &poison_msg);
         })
         .expect("spawn carapace render thread")
 }
@@ -326,6 +327,7 @@ fn run_loop(
     rx: &CommandRx,
     cell: &SnapshotCell,
     poisoned: &Arc<AtomicBool>,
+    poison_msg: &Arc<Mutex<String>>,
 ) {
     // Start the pacing clock when the loop actually begins (GPU build already elapsed). This also
     // gives the host's initial configuration (e.g. `set_frame_rate(0)` right after create) a full
@@ -351,13 +353,13 @@ fn run_loop(
                     }
                 }
                 if invalidated {
-                    render_guarded(rt, cell, poisoned);
+                    render_guarded(rt, cell, poisoned, poison_msg);
                 }
             }
             // Frame deadline reached while running: render one paced frame.
             Err(RecvTimeoutError::Timeout) => {
                 if rt.fps > 0 {
-                    render_guarded(rt, cell, poisoned);
+                    render_guarded(rt, cell, poisoned, poison_msg);
                 }
             }
             // The command sender (handle front-end) was dropped: nothing more can arrive.
@@ -371,8 +373,16 @@ fn run_loop(
 
 /// Render one frame with a panic guard, then publish the laid-out scene for hit-testing. On a panic
 /// in the render body the handle is poisoned and the thread exits (via `run_loop`'s poison check);
-/// we NEVER abort. `last_error` is already set by the process-wide panic hook from `carapace_create`.
-fn render_guarded(rt: &mut RenderThread, cell: &SnapshotCell, poisoned: &Arc<AtomicBool>) {
+/// we NEVER abort. The process-wide panic hook (installed by `carapace_create`) runs first and
+/// writes the message into THIS render thread's `last_error` TLS; we then lift that message into the
+/// shared `poison_msg` slot so the poison path in each front-end export can surface it to the host
+/// on the caller's own thread (the render thread's TLS is otherwise unreachable from there).
+fn render_guarded(
+    rt: &mut RenderThread,
+    cell: &SnapshotCell,
+    poisoned: &Arc<AtomicBool>,
+    poison_msg: &Arc<Mutex<String>>,
+) {
     use std::panic::{AssertUnwindSafe, catch_unwind};
     let now = Instant::now();
     // Clamp a huge idle/after-park gap so a paused-then-resumed engine doesn't see a giant dt.
@@ -398,6 +408,11 @@ fn render_guarded(rt: &mut RenderThread, cell: &SnapshotCell, poisoned: &Arc<Ato
     }));
     rt.last_render = now;
     if result.is_err() {
+        // The panic hook already captured the message into this render thread's `last_error` TLS;
+        // copy it into the shared slot BEFORE flipping `poisoned` so any export that observes the
+        // poison flag can already read the message. Poison-recovering lock so a poisoned `Mutex`
+        // can't wedge the exit path.
+        *poison_msg.lock().unwrap_or_else(|e| e.into_inner()) = last_error_string();
         poisoned.store(true, Ordering::Release);
     }
 }

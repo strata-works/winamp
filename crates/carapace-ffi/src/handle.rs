@@ -6,8 +6,8 @@
 //! handle. `carapace_destroy` signals shutdown and joins.
 
 use std::ffi::{CStr, c_char, c_void};
-use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
 use crate::guard::{CarapaceStatus, ffi_guard_no_handle, install_panic_hook, set_last_error};
@@ -46,10 +46,27 @@ pub struct CarapaceEngine {
     pub snapshot: SnapshotCell,
     /// Set after a caught panic; every subsequent handle call short-circuits with `ErrPoisoned`.
     pub poisoned: Arc<AtomicBool>,
+    /// The panic message captured on the RENDER thread when it poisoned (shared with that thread).
+    /// On the poison path each export copies this into the CALLER thread's TLS so the host's
+    /// subsequent `carapace_last_error` returns it (the message otherwise lives only in the render
+    /// thread's TLS, unreachable from the host's thread). Rides the existing ABI — no new export.
+    pub poison_msg: Arc<Mutex<String>>,
     /// Joined by `carapace_destroy`. `Option` so destroy can `take` + join exactly once.
     pub join: Option<JoinHandle<()>>,
     /// The present tier resolved at create time, for an immediate `active_tier` answer.
     pub tier: CarapaceTier,
+}
+
+impl CarapaceEngine {
+    /// Poison-path shared by every thin export: copy the render thread's captured panic message
+    /// into THIS (caller) thread's TLS so a subsequent `carapace_last_error` on this thread returns
+    /// it, then report `ErrPoisoned`. Poison-recovering lock so a poisoned `Mutex` can't wedge the
+    /// path. Callers gate this behind their `poisoned` atomic check.
+    pub(crate) fn enter_poisoned(&self) -> CarapaceStatus {
+        let msg = self.poison_msg.lock().unwrap_or_else(|e| e.into_inner());
+        set_last_error(&msg);
+        CarapaceStatus::ErrPoisoned
+    }
 }
 
 /// Parameters for `carapace_create`. Grouped in a struct so create can grow additively.
@@ -135,6 +152,9 @@ pub unsafe extern "C" fn carapace_create(
 
         let (tx, rx) = std::sync::mpsc::channel::<Command>();
         let poisoned = Arc::new(AtomicBool::new(false));
+        // Shared with the render thread: it writes the captured panic message here when it poisons;
+        // the front-end exports read it on the poison path (see `enter_poisoned`).
+        let poison_msg = Arc::new(Mutex::new(String::new()));
         // Provisional tier; refined below once the render thread reports what it resolved to.
         let cell = snapshot::new_cell(snapshot::SnapshotTier::Shared);
         let (init_tx, init_rx) = std::sync::mpsc::channel::<render_thread::InitResult>();
@@ -146,6 +166,7 @@ pub unsafe extern "C" fn carapace_create(
             rx,
             cell.clone(),
             poisoned.clone(),
+            poison_msg.clone(),
             init_tx,
         );
 
@@ -162,6 +183,7 @@ pub unsafe extern "C" fn carapace_create(
                     tx,
                     snapshot: cell,
                     poisoned,
+                    poison_msg,
                     join: Some(join),
                     tier: ctier,
                 }));
@@ -211,7 +233,7 @@ pub unsafe extern "C" fn carapace_invalidate(ptr: *mut CarapaceEngine) -> Carapa
         return CarapaceStatus::ErrNullArg;
     };
     if e.poisoned.load(std::sync::atomic::Ordering::Acquire) {
-        return CarapaceStatus::ErrPoisoned;
+        return e.enter_poisoned();
     }
     let _ = e.tx.send(Command::Invalidate);
     CarapaceStatus::Ok
@@ -232,7 +254,7 @@ pub unsafe extern "C" fn carapace_set_frame_rate(
         return CarapaceStatus::ErrNullArg;
     };
     if e.poisoned.load(std::sync::atomic::Ordering::Acquire) {
-        return CarapaceStatus::ErrPoisoned;
+        return e.enter_poisoned();
     }
     let _ = e.tx.send(Command::SetFrameRate(fps));
     CarapaceStatus::Ok
@@ -252,7 +274,7 @@ pub unsafe extern "C" fn carapace_release_surface(
         return CarapaceStatus::ErrNullArg;
     };
     if e.poisoned.load(std::sync::atomic::Ordering::Acquire) {
-        return CarapaceStatus::ErrPoisoned;
+        return e.enter_poisoned();
     }
     let _ = e.tx.send(Command::ReleaseSurface(index));
     CarapaceStatus::Ok
@@ -287,7 +309,7 @@ pub unsafe extern "C" fn carapace_pointer(
         return CarapaceStatus::ErrNullArg;
     };
     if e.poisoned.load(std::sync::atomic::Ordering::Acquire) {
-        return CarapaceStatus::ErrPoisoned;
+        return e.enter_poisoned();
     }
     let k = match kind {
         CarapacePointerKind::Press => crate::queue::PointerKind::Press,
@@ -340,7 +362,7 @@ pub unsafe extern "C" fn carapace_active_tier(
         return CarapaceStatus::ErrNullArg;
     }
     if e.poisoned.load(std::sync::atomic::Ordering::Acquire) {
-        return CarapaceStatus::ErrPoisoned;
+        return e.enter_poisoned();
     }
     let tier = match snapshot::tier_of(&e.snapshot) {
         snapshot::SnapshotTier::Readback => CarapaceTier::Readback,
@@ -676,5 +698,37 @@ mod v2_pointer_poison_tests {
             CarapaceStatus::ErrPoisoned
         );
         unsafe { carapace_destroy(h) }; // must still join a poisoned/exited thread
+    }
+
+    /// The panic message captured on the RENDER thread must be retrievable by a host calling
+    /// `carapace_last_error` on ITS OWN thread (spec §6). Task 8's poison test deliberately omitted
+    /// this assertion because the message was unreachable across threads; the shared `poison_msg`
+    /// slot + per-export poison path (`enter_poisoned`) now make it reachable.
+    #[test]
+    fn poison_message_is_reachable_on_the_caller_thread() {
+        let (h, _s) = test_support::create_test_handle_pool(300, 140, 2);
+        assert_eq!(unsafe { carapace_force_panic(h) }, CarapaceStatus::Ok);
+        // Wait until the render thread has panicked, poisoned, and a thin export sees ErrPoisoned.
+        test_support::wait_for(std::time::Duration::from_secs(10), || {
+            (unsafe { carapace_invalidate(h) }) == CarapaceStatus::ErrPoisoned
+        });
+        // This call runs on the TEST/caller thread. The poison path must have copied the render
+        // thread's captured message into this thread's TLS.
+        assert_eq!(
+            unsafe { carapace_invalidate(h) },
+            CarapaceStatus::ErrPoisoned
+        );
+        let mut buf = [0i8; 256];
+        let n = unsafe { crate::guard::carapace_last_error(buf.as_mut_ptr(), buf.len()) };
+        assert!(
+            n > 0,
+            "poison message must be non-empty on the caller thread, got len {n}"
+        );
+        let msg = unsafe { std::ffi::CStr::from_ptr(buf.as_ptr()) }.to_string_lossy();
+        assert!(
+            msg.contains("forced render-thread panic"),
+            "expected the captured panic message, got {msg:?}"
+        );
+        unsafe { carapace_destroy(h) };
     }
 }

@@ -11,9 +11,9 @@
 #include <stdlib.h>
 #include <IOSurface/IOSurfaceRef.h>
 
-#define CARAPACE_ABI_MAJOR 0
+#define CARAPACE_ABI_MAJOR 2
 
-#define CARAPACE_ABI_MINOR 1
+#define CARAPACE_ABI_MINOR 0
 
 /**
  * Result of every fallible export. Additive: append new variants, never reorder.

@@ -42,7 +42,7 @@ pub unsafe extern "C" fn carapace_hit_test(
         return CarapaceStatus::ErrNullArg;
     }
     if e.poisoned.load(std::sync::atomic::Ordering::Acquire) {
-        return CarapaceStatus::ErrPoisoned;
+        return e.enter_poisoned();
     }
     let kind = match crate::snapshot::hit_kind_of(
         &e.snapshot,
