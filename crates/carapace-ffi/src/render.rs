@@ -1,9 +1,17 @@
 #![allow(unsafe_op_in_unsafe_fn)]
+// SDD v2: the render primitives (`render_frame`, `blit`, `readback_rgba`,
+// `upload_iosurface_to_texture`, `copy_into_iosurface`, the IOSurface lock accessors, plus
+// `GpuCtx`/`OffscreenTarget`/`Present` fields) lost their sole consumer when `carapace_tick` was
+// removed in Task 4. The render thread's present path (Tasks 5/6) re-consumes them; allow the
+// interim dead code, matching `queue.rs`/`snapshot.rs`/`render_thread.rs`'s staged-ahead precedent.
+#![allow(dead_code)]
 use std::time::Duration;
 
 use carapace::engine::Engine;
 use carapace::render::{RenderTarget, Renderer};
 use carapace::scene::Color;
+
+use crate::handle::ContentTex;
 
 pub struct GpuCtx {
     pub device: wgpu::Device,
@@ -473,6 +481,104 @@ pub unsafe fn copy_into_iosurface(surface: IOSurfaceRef, rgba: &[u8], w: u32, h:
         }
     }
     IOSurfaceUnlock(surface, 0, &mut seed);
+}
+
+/// How a rendered frame reaches the caller's IOSurface.
+// SDD v2: the fields are consumed by the render thread's present path (Tasks 5/6); until then only
+// `build_present` constructs them, so allow the interim "constructed but not read".
+#[allow(dead_code)]
+pub enum Present {
+    /// Tier 2 (zero CPU copy): vello renders into an `Rgba8` storage offscreen, then a GPU
+    /// blit copies+reorders it into the `Bgra8` texture that aliases the IOSurface. Nothing
+    /// touches the CPU. (Blit variant — chosen for robustness; see task-6-report.md.)
+    Shared {
+        off: OffscreenTarget,
+        // Held only to keep the imported wgpu texture (and the MTLTexture aliasing the
+        // IOSurface) alive for the engine's lifetime; we render through `iosurface_view`.
+        #[allow(dead_code)]
+        iosurface_tex: wgpu::Texture,
+        iosurface_view: wgpu::TextureView,
+        blitter: wgpu::util::TextureBlitter,
+    },
+    /// Tier 1 (fallback): render into the offscreen, read it back to CPU, swizzle-copy into
+    /// the IOSurface.
+    Readback { off: OffscreenTarget },
+}
+
+/// Try Tier 2 (zero-copy IOSurface import) first; fall back to Tier 1 readback on any failure.
+/// The IOSurface texture only needs RENDER_ATTACHMENT — the blitter renders into it, so no BGRA
+/// storage feature is required. Lifted verbatim from the spike's `carapace_create`.
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+pub(crate) fn build_present(
+    gpu: &GpuCtx,
+    surface: IOSurfaceRef,
+    w: u32,
+    h: u32,
+) -> (Present, Tier) {
+    match unsafe {
+        try_shared(
+            &gpu.device,
+            surface,
+            w,
+            h,
+            wgpu::TextureUsages::RENDER_ATTACHMENT,
+        )
+    } {
+        Some(iosurface_tex) => {
+            let iosurface_view = iosurface_tex.create_view(&wgpu::TextureViewDescriptor::default());
+            let blitter =
+                wgpu::util::TextureBlitter::new(&gpu.device, wgpu::TextureFormat::Bgra8Unorm);
+            let off = new_offscreen(&gpu.device, w, h);
+            (
+                Present::Shared {
+                    off,
+                    iosurface_tex,
+                    iosurface_view,
+                    blitter,
+                },
+                Tier::Shared,
+            )
+        }
+        None => (
+            Present::Readback {
+                off: new_offscreen(&gpu.device, w, h),
+            },
+            Tier::Readback,
+        ),
+    }
+}
+
+/// Optionally import the host's content IOSurface as a sampled texture for the skin's
+/// `view{ id = "host" }` cutout. Null surface, a failed import, or zero dimensions all yield
+/// None (the cutout simply shows nothing). NEVER panic. Lifted verbatim from the spike's
+/// `carapace_create`.
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+pub(crate) fn build_content(gpu: &GpuCtx, content_surface: IOSurfaceRef) -> Option<ContentTex> {
+    if content_surface.is_null() {
+        None
+    } else {
+        let (cw, ch) = unsafe {
+            (
+                IOSurfaceGetWidth(content_surface) as u32,
+                IOSurfaceGetHeight(content_surface) as u32,
+            )
+        };
+        if cw == 0 || ch == 0 {
+            None
+        } else {
+            // A NORMAL wgpu texture we re-upload the content surface into every tick
+            // (CPU→GPU coherency). No IOSurface aliasing here — that's what froze the
+            // content before.
+            let (tex, view) = make_content_texture(&gpu.device, cw, ch);
+            Some(ContentTex {
+                surface: content_surface,
+                tex,
+                view,
+                w: cw,
+                h: ch,
+            })
+        }
+    }
 }
 
 #[cfg(all(test, target_os = "macos"))]

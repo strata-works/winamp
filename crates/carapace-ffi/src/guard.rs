@@ -67,7 +67,11 @@ macro_rules! ffi_guard_no_handle {
 
 /// Wrap a handle-bearing export body. On panic: poison the handle, return `ErrPanic`.
 /// `$ptr` is the `*mut CarapaceEngine` passed to the export.
+// SDD v2: its consumers (`carapace_pointer`/`carapace_hit_test`/`carapace_force_panic`) were
+// removed in Task 4 and are re-added in Tasks 7/8; the macro (and its re-export below) stay so those
+// tasks don't have to reintroduce them. Allow them to sit unused in the interim.
 #[cfg(any(target_os = "macos", target_os = "ios"))]
+#[allow(unused_macros)]
 macro_rules! ffi_guard {
     ($ptr:expr, $body:expr) => {
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| $body)) {
@@ -83,6 +87,7 @@ macro_rules! ffi_guard {
 }
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
+#[allow(unused_imports)] // re-consumed in Tasks 7/8 (see the macro's note above).
 pub(crate) use ffi_guard;
 // Only imported via this path by `handle.rs` (Apple-gated); dead on non-Apple (the crate's own
 // tests below reach the macro directly, without going through this re-export).

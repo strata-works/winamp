@@ -40,105 +40,10 @@ typedef int32_t CarapaceStatus;
 
 #if (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE))
 /**
- * The present path the engine resolved to. Mirrors `render::Tier`.
- */
-enum CarapaceTier
-#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
-  : int32_t
-#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
- {
-#if (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE))
-  Readback = 1,
-#endif
-#if (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE))
-  Shared = 2,
-#endif
-};
-#ifndef __cplusplus
-#if __STDC_VERSION__ >= 202311L
-typedef enum CarapaceTier CarapaceTier;
-#else
-typedef int32_t CarapaceTier;
-#endif // __STDC_VERSION__ >= 202311L
-#endif // __cplusplus
-#endif
-
-#if (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE))
-/**
- * Pointer event kinds. v1 forwards all; the engine currently acts on `Press`, the rest are
- * plumbed for hover/drag semantics and forward-compat (additive).
- */
-enum CarapacePointerKind
-#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
-  : int32_t
-#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
- {
-#if (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE))
-  Press = 0,
-#endif
-#if (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE))
-  Release = 1,
-#endif
-#if (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE))
-  Move = 2,
-#endif
-#if (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE))
-  Enter = 3,
-#endif
-#if (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE))
-  Leave = 4,
-#endif
-};
-#ifndef __cplusplus
-#if __STDC_VERSION__ >= 202311L
-typedef enum CarapacePointerKind CarapacePointerKind;
-#else
-typedef int32_t CarapacePointerKind;
-#endif // __STDC_VERSION__ >= 202311L
-#endif // __cplusplus
-#endif
-
-#if (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE))
-/**
- * Classification of a point for a host embedder. Additive enum.
- */
-enum CarapaceHitKind
-#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
-  : int32_t
-#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
- {
-#if (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE))
-  /**
-   * Event should fall through the skin (transparent / passthrough region).
-   */
-  Passthrough = 0,
-#endif
-#if (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE))
-  /**
-   * Skin consumes the event (a control, or opaque non-interactive skin).
-   */
-  Control = 1,
-#endif
-#if (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE))
-  /**
-   * Host should move the window (a drag region).
-   */
-  Drag = 2,
-#endif
-};
-#ifndef __cplusplus
-#if __STDC_VERSION__ >= 202311L
-typedef enum CarapaceHitKind CarapaceHitKind;
-#else
-typedef int32_t CarapaceHitKind;
-#endif // __STDC_VERSION__ >= 202311L
-#endif // __cplusplus
-#endif
-
-#if (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE))
-/**
- * Opaque handle handed across the C ABI. `poisoned` is set by `ffi_guard!` after a caught panic;
- * every subsequent call short-circuits with `ErrPoisoned`.
+ * Opaque handle handed across the C ABI — a thread-safe front-end for the render thread.
+ *
+ * `poisoned` is set (with `Release`) by the render thread / guard after a caught panic; front-end
+ * query exports read it with `Acquire` and short-circuit with `ErrPoisoned`.
  */
 typedef struct CarapaceEngine CarapaceEngine;
 #endif
@@ -173,9 +78,14 @@ typedef struct {
    */
   CarapaceHostVTable vtable;
   /**
-   * Caller-owned BGRA IOSurface of size `w`x`h` that outlives the engine.
+   * Pointer to a caller-owned array of `surface_count` BGRA IOSurfaces, each of size `w`x`h`,
+   * that outlive the engine. The render thread rotates through this pool.
    */
-  IOSurfaceRef surface;
+  const IOSurfaceRef *surfaces;
+  /**
+   * Number of surfaces in `surfaces`; must be >= 1.
+   */
+  uint32_t surface_count;
   /**
    * Optional live host content for a `view{ id = "host" }` cutout; null = none.
    */
@@ -209,62 +119,26 @@ uintptr_t carapace_last_error(char *buf, uintptr_t cap);
 /**
  * Create an engine. Returns a status; on `Ok`, `*out` receives the handle (else stays null).
  *
+ * Spawns a dedicated render thread that constructs and owns the engine + GPU, then BLOCKS on the
+ * thread's init handshake so this call still reports `ErrBadSkin`/`ErrGpuInit`/`Ok` synchronously.
+ *
  * # Safety
- * `desc` must be a valid pointer; its `skin_dir` a valid NUL-terminated UTF-8 path; `surface` a
- * live `w`x`h` BGRA IOSurface outliving the engine; `vtable` fn pointers outliving the engine.
- * `out` must be a valid pointer to a `*mut CarapaceEngine`.
+ * `desc` must be a valid pointer; its `skin_dir` a valid NUL-terminated UTF-8 path; `surfaces` a
+ * valid array of `surface_count` live `w`x`h` BGRA IOSurfaces outliving the engine; `vtable` fn
+ * pointers outliving the engine. `out` must be a valid pointer to a `*mut CarapaceEngine`.
  */
 CarapaceStatus carapace_create(const CarapaceCreateDesc *desc, CarapaceEngine **out);
 #endif
 
 #if (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE))
 /**
- * Destroy an engine created by `carapace_create`. Null-safe; valid on a poisoned handle.
+ * Destroy an engine created by `carapace_create`. Null-safe; valid on a poisoned/exited handle.
+ * Signals the render thread to shut down and joins it.
  *
  * # Safety
  * `ptr` must come from `carapace_create` and not be used afterward.
  */
 void carapace_destroy(CarapaceEngine *ptr);
-#endif
-
-#if (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE))
-/**
- * Tick + render one frame into the engine's surface. `dt_seconds` is host wall-clock time.
- *
- * # Safety
- * `ptr` must come from `carapace_create` and not be destroyed.
- */
-CarapaceStatus carapace_tick(CarapaceEngine *ptr, double dt_seconds);
-#endif
-
-#if (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE))
-/**
- * Report the active present tier.
- *
- * # Safety
- * `ptr` must come from `carapace_create`; `out` must be a valid pointer to a `CarapaceTier`.
- */
-CarapaceStatus carapace_active_tier(CarapaceEngine *ptr, CarapaceTier *out);
-#endif
-
-#if (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE))
-/**
- * Forward a pointer event in DESIGN-CANVAS coordinates.
- *
- * # Safety
- * `ptr` must come from `carapace_create`.
- */
-CarapaceStatus carapace_pointer(CarapaceEngine *ptr, double x, double y, CarapacePointerKind kind);
-#endif
-
-#if (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE))
-/**
- * Classify the point `(x, y)` (DESIGN-CANVAS coords) without side effects. Writes `*out`.
- *
- * # Safety
- * `ptr` must come from `carapace_create`; `out` must be non-null.
- */
-CarapaceStatus carapace_hit_test(CarapaceEngine *ptr, double x, double y, CarapaceHitKind *out);
 #endif
 
 #ifdef __cplusplus

@@ -45,6 +45,14 @@ pub fn publish(cell: &SnapshotCell, scene: Scene, tier: SnapshotTier) {
     *guard = next;
 }
 
+/// Swap only the tier, leaving `scene` as `None`. Used by `carapace_create` right after init to
+/// seed the tier the render thread resolved to, before frame 1 has been published.
+pub fn publish_tier_only(cell: &SnapshotCell, tier: SnapshotTier) {
+    let next = Arc::new(SceneSnapshot { scene: None, tier });
+    let mut guard = cell.write().unwrap_or_else(|e| e.into_inner());
+    *guard = next;
+}
+
 fn load(cell: &SnapshotCell) -> Arc<SceneSnapshot> {
     cell.read().unwrap_or_else(|e| e.into_inner()).clone()
 }
@@ -85,6 +93,17 @@ mod tests {
         assert!(matches!(tier_of(&cell), SnapshotTier::Shared));
         // reading does not panic and returns a defined classification
         let _ = hit_kind_of(&cell, Pt { x: 5.0, y: 5.0 });
+    }
+
+    #[test]
+    fn publish_tier_only_swaps_tier_and_keeps_scene_none() {
+        let cell = new_cell(SnapshotTier::Shared);
+        publish_tier_only(&cell, SnapshotTier::Readback);
+        assert!(matches!(tier_of(&cell), SnapshotTier::Readback));
+        assert!(matches!(
+            hit_kind_of(&cell, Pt { x: 0.0, y: 0.0 }),
+            HitKind::Passthrough
+        ));
     }
 
     #[test]
