@@ -245,53 +245,112 @@ git -c user.name='Daniel Agbemava' -c user.email='danagbemava@gmail.com' \
 
 ---
 
-## Task 3: Optional SPIR-V fallback rung (`transpile.rs`)
+## Task 3: SPIR-V rung via glslang — the PRIMARY path for paper's ES shaders (`transpile.rs`)
+
+**Why this is now critical, not optional:** Task 2 confirmed (against naga 29.0.3 source)
+that naga's `glsl-in` rejects `#version 300 es` (accepts only 440/450/460) and rejects bare
+uniforms lacking `layout(binding=X)`. Paper's real shaders are `#version 300 es` with
+freestanding uniforms, so **rung 1 cannot transpile them**. `glslang` is a real GLSL-ES
+compiler that eats `#version 300 es` and can auto-assign bindings, so **rung 3 is the
+expected path that actually carries the paper shaders**. This task must therefore also PROVE
+that the real vendored `mesh_gradient.frag` + `vertex.vert` transpile end-to-end.
 
 **Files:**
 - Modify: `crates/carapace-demo/examples/paper_mesh_spike/transpile.rs`
 
 **Interfaces:**
-- Produces: `transpile` attempts rung 3 after rung 2; `pub fn glslang_available() -> bool`. If glslang is absent, rung 3 reports unavailable rather than hard-failing.
+- Produces: `transpile` attempts rung 3 after rung 2; `pub fn glslang_available() -> bool`.
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 0: Install glslang (via sfw)**
 
-Add to `transpile.rs` tests:
+Run: `sfw brew install glslang`
+Then confirm the binary name (modern glslang ships `glslang`; older ships `glslangValidator` — Homebrew may provide either/both):
+```bash
+command -v glslang glslangValidator; glslang --version 2>&1 | head -1 || glslangValidator --version 2>&1 | head -1
+```
+Record which binary name exists — the code below probes both.
+
+- [ ] **Step 1: Write the failing tests**
+
+Add to `transpile.rs` tests (the availability test asserts determinism per an explicit project decision — do NOT leave it as a bare `let _ = ...`):
 ```rust
 #[test]
-fn spirv_rung_reports_availability() { let _ = glslang_available(); }
+fn spirv_rung_reports_availability() {
+    // Value is environment-dependent; assert the call is total + deterministic.
+    assert_eq!(glslang_available(), glslang_available());
+}
+
+#[test]
+fn real_paper_es_shaders_transpile() {
+    // The core feasibility check: the ACTUAL vendored #version 300 es shaders must
+    // reach a valid WGSL string via SOME rung (expected Rung::SpirV via glslang).
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("examples/paper_mesh_spike/shaders");
+    let frag = std::fs::read_to_string(dir.join("mesh_gradient.frag")).unwrap();
+    let vert = std::fs::read_to_string(dir.join("vertex.vert")).unwrap();
+    if !glslang_available() {
+        eprintln!("SKIP real_paper_es_shaders_transpile: glslang not installed");
+        return;
+    }
+    let f = transpile(&frag, naga::ShaderStage::Fragment)
+        .expect("fragment must transpile via the ladder");
+    let v = transpile(&vert, naga::ShaderStage::Vertex)
+        .expect("vertex must transpile via the ladder");
+    assert!(f.wgsl.contains("@fragment"), "frag wgsl:\n{}", &f.wgsl[..f.wgsl.len().min(400)]);
+    assert!(v.wgsl.contains("@vertex"), "vert wgsl:\n{}", &v.wgsl[..v.wgsl.len().min(400)]);
+    assert!(matches!(f.rung, Rung::SpirV | Rung::Preprocessed | Rung::Direct));
+}
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cargo test -p carapace-demo --example paper_mesh_spike spirv_rung -- --nocapture`
+Run: `cargo test -p carapace-demo --example paper_mesh_spike -- --nocapture spirv_rung real_paper_es`
 Expected: FAIL to compile (`glslang_available` not found).
 
 - [ ] **Step 3: Implement rung 3**
 
-Add to `transpile.rs`:
+Add to `transpile.rs`. **Starting flags target Vulkan SPIR-V with auto-mapped bindings**,
+which is the combination most likely to satisfy both glslang (for ES + freestanding uniforms)
+and naga's `spv-in`. **You are expected to iterate these flags against real glslang/naga
+errors** — if `spv-in` rejects the module or glslang errors on the ES source, try the
+documented alternatives in the comments. Record the winning invocation in your report.
 ```rust
 use std::process::Command;
 
-pub fn glslang_available() -> bool {
-    Command::new("glslangValidator").arg("--version").output().is_ok()
+/// Modern glslang ships `glslang`; older ships `glslangValidator`. Prefer whichever exists.
+fn glslang_bin() -> Option<&'static str> {
+    for bin in ["glslang", "glslangValidator"] {
+        if Command::new(bin).arg("--version").output().is_ok() { return Some(bin); }
+    }
+    None
 }
 
-/// GLSL -> SPIR-V (glslangValidator) -> naga spv-in -> WGSL.
+pub fn glslang_available() -> bool { glslang_bin().is_some() }
+
+/// GLSL (incl. #version 300 es) -> SPIR-V (glslang) -> naga spv-in -> WGSL.
 fn via_spirv(glsl: &str, stage: naga::ShaderStage) -> Result<Transpiled, String> {
-    if !glslang_available() { return Err("glslangValidator not on PATH".into()); }
+    let bin = glslang_bin().ok_or("glslang not on PATH")?;
     let dir = std::env::temp_dir();
-    let ext = match stage {
-        naga::ShaderStage::Fragment => "frag",
-        naga::ShaderStage::Vertex => "vert",
-        _ => "comp",
+    let (ext, stg) = match stage {
+        naga::ShaderStage::Fragment => ("frag", "frag"),
+        naga::ShaderStage::Vertex => ("vert", "vert"),
+        _ => ("comp", "comp"),
     };
     let src = dir.join(format!("paper_mesh_in.{ext}"));
-    let spv = dir.join("paper_mesh_out.spv");
+    let spv = dir.join(format!("paper_mesh_out_{ext}.spv"));
     std::fs::write(&src, glsl).map_err(|e| e.to_string())?;
-    let out = Command::new("glslangValidator")
-        .args(["-G", "-o"]).arg(&spv).arg(&src).output().map_err(|e| e.to_string())?;
+    // Vulkan SPIR-V + auto-map bindings/locations so freestanding ES uniforms get bindings.
+    // Alternatives to try if this path fails:
+    //   * drop `--target-env vulkan1.0`, use `-G` (OpenGL SPIR-V)
+    //   * add `-S <stg>` explicitly (shown) if stage inference misfires
+    //   * `--aml`/`--amb` are the location/binding auto-map flags
+    let out = Command::new(bin)
+        .args(["-V", "--target-env", "vulkan1.0", "--amb", "--aml", "-S", stg, "-o"])
+        .arg(&spv).arg(&src)
+        .output().map_err(|e| e.to_string())?;
     if !out.status.success() {
-        return Err(format!("glslang: {}", String::from_utf8_lossy(&out.stderr)));
+        return Err(format!("glslang: {}{}",
+            String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)));
     }
     let bytes = std::fs::read(&spv).map_err(|e| e.to_string())?;
     let module = naga::front::spv::parse_u8_slice(&bytes, &naga::front::spv::Options::default())
@@ -312,17 +371,20 @@ Extend `transpile()`'s final `Err` arm to try `via_spirv` before giving up:
                 },
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cargo test -p carapace-demo --example paper_mesh_spike spirv_rung -- --nocapture`
-Expected: PASS (regardless of glslang install state).
+Run: `cargo test -p carapace-demo --example paper_mesh_spike -- --nocapture spirv_rung real_paper_es`
+Expected: BOTH pass. `real_paper_es_shaders_transpile` passing is the **G1 go signal** — the
+actual paper ES shaders reach valid WGSL. If it fails, iterate the glslang flags (Step 3
+comments) and/or naga `spv::Options`; capture the exact failing error in your report — a
+genuine hard failure here is itself a critical finding (report it, do not fake a pass).
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add crates/carapace-demo/examples/paper_mesh_spike/transpile.rs
 git -c user.name='Daniel Agbemava' -c user.email='danagbemava@gmail.com' \
-  commit -m 'spike(mesh): optional glslang->SPIR-V->naga fallback rung'
+  commit -m 'spike(mesh): glslang->SPIR-V->naga rung; real ES shaders transpile'
 ```
 
 ---
