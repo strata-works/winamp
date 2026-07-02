@@ -383,9 +383,18 @@ final class SkinView: NSView {
         let pos = CGFloat((player?.currentTime ?? 0) / max(dur, 0.001))
         let playing = player?.isPlaying ?? false
 
-        // Clear to transparent first so the rounded-card corners let the gradient surround
-        // show through (the engine composites this content OVER the paper layer).
-        NSGraphicsContext.current?.cgContext.clear(CGRect(x: 0, y: 0, width: wF, height: hF))
+        // Fill the content rect with a STATIC gradient in paper's palette, then draw the
+        // rounded card on top — so the card's rounded corners read as gradient, not black.
+        // (The engine's view-compositor overwrites host content with blend:None, so true
+        // see-through corners onto the LIVE paper layer need an engine alpha-blend change —
+        // deferred as a post-spike follow-up; see findings.)
+        let cornerGrad = NSGradient(colors: [
+            NSColor(red: 0.94, green: 0.28, blue: 0.44, alpha: 1),
+            NSColor(red: 0.99, green: 0.76, blue: 0.18, alpha: 1),
+            NSColor(red: 0.11, green: 0.78, blue: 0.55, alpha: 1),
+            NSColor(red: 0.15, green: 0.39, blue: 0.92, alpha: 1),
+        ])
+        cornerGrad?.draw(in: NSRect(x: 0, y: 0, width: wF, height: hF), angle: -35)
         // Card background (near-white, real macOS look) — rounded to match the window corners.
         NSColor(white: 0.98, alpha: 1.0).setFill()
         NSBezierPath(roundedRect: NSRect(x: 0, y: 0, width: wF, height: hF),
