@@ -14,9 +14,10 @@ mod handle;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use handle::*;
 
-// Apple-gated modules are added in later tasks:
-// #[cfg(any(target_os = "macos", target_os = "ios"))] mod hit;      // Task 10
-// #[cfg(any(target_os = "macos", target_os = "ios"))] pub use hit::*;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+mod hit;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+pub use hit::*;
 
 /// The ABI version this library implements: `MAJOR << 16 | MINOR`. Additive changes bump MINOR;
 /// breaking changes bump MAJOR. A host compares this against the header's constants at load time.
