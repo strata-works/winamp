@@ -7,6 +7,9 @@ pub mod render;
 pub mod oneshot;
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
+pub mod paper_view;
+
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 mod ffi_impl {
     use std::ffi::{c_char, CStr};
     use std::time::Duration;
