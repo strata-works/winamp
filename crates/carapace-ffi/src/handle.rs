@@ -200,10 +200,68 @@ pub unsafe extern "C" fn carapace_destroy(ptr: *mut CarapaceEngine) {
     }
 }
 
+/// Enqueue a render of exactly one frame now (wakes a paused engine — see `carapace_set_frame_rate`).
+/// Real pacing (free-run at `fps`, coalescing) lands in Task 6; for now this is a thin `tx.send`.
+///
+/// # Safety
+/// `ptr` must come from `carapace_create` and not have been passed to `carapace_destroy`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn carapace_invalidate(ptr: *mut CarapaceEngine) -> CarapaceStatus {
+    let Some(e) = (unsafe { ptr.as_ref() }) else {
+        return CarapaceStatus::ErrNullArg;
+    };
+    if e.poisoned.load(std::sync::atomic::Ordering::Acquire) {
+        return CarapaceStatus::ErrPoisoned;
+    }
+    let _ = e.tx.send(Command::Invalidate);
+    CarapaceStatus::Ok
+}
+
+/// Set the free-run target frame rate; `0` pauses the render thread (it then only renders on
+/// `carapace_invalidate`/pointer events). Real pacing behavior lands in Task 6; for now this is a
+/// thin `tx.send`.
+///
+/// # Safety
+/// `ptr` must come from `carapace_create` and not have been passed to `carapace_destroy`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn carapace_set_frame_rate(
+    ptr: *mut CarapaceEngine,
+    fps: u32,
+) -> CarapaceStatus {
+    let Some(e) = (unsafe { ptr.as_ref() }) else {
+        return CarapaceStatus::ErrNullArg;
+    };
+    if e.poisoned.load(std::sync::atomic::Ordering::Acquire) {
+        return CarapaceStatus::ErrPoisoned;
+    }
+    let _ = e.tx.send(Command::SetFrameRate(fps));
+    CarapaceStatus::Ok
+}
+
+/// Tell the render thread the host is done displaying `surfaces[index]`; it may be rendered into
+/// again.
+///
+/// # Safety
+/// `ptr` must come from `carapace_create` and not have been passed to `carapace_destroy`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn carapace_release_surface(
+    ptr: *mut CarapaceEngine,
+    index: u32,
+) -> CarapaceStatus {
+    let Some(e) = (unsafe { ptr.as_ref() }) else {
+        return CarapaceStatus::ErrNullArg;
+    };
+    if e.poisoned.load(std::sync::atomic::Ordering::Acquire) {
+        return CarapaceStatus::ErrPoisoned;
+    }
+    let _ = e.tx.send(Command::ReleaseSurface(index));
+    CarapaceStatus::Ok
+}
+
 /// Test helpers shared by the lifecycle suite: a real skin fixture + a pool of IOSurfaces, so each
 /// suite doesn't hand-roll its own `carapace_create` call.
 #[cfg(all(test, target_os = "macos"))]
-mod test_support {
+pub(crate) mod test_support {
     use super::*;
     use crate::host::CarapaceHostVTable;
     use crate::render::IOSurfaceRef;
@@ -268,13 +326,24 @@ mod test_support {
         h: u32,
         count: usize,
     ) -> (*mut CarapaceEngine, Vec<IOSurfaceRef>) {
+        create_test_handle_pool_vt(w, h, count, empty_vtable())
+    }
+
+    /// Like `create_test_handle_pool`, but with a caller-supplied vtable (e.g. to observe
+    /// `frame_ready`). Returns the handle plus the surfaces (kept alive by the caller).
+    pub(crate) fn create_test_handle_pool_vt(
+        w: u32,
+        h: u32,
+        count: usize,
+        vtable: CarapaceHostVTable,
+    ) -> (*mut CarapaceEngine, Vec<IOSurfaceRef>) {
         let surfaces: Vec<IOSurfaceRef> = (0..count)
             .map(|_| make_bgra_iosurface(w as usize, h as usize))
             .collect();
         let path = std::ffi::CString::new(SKIN_DIR).unwrap();
         let desc = CarapaceCreateDesc {
             skin_dir: path.as_ptr(),
-            vtable: empty_vtable(),
+            vtable,
             surfaces: surfaces.as_ptr(),
             surface_count: count as u32,
             content_surface: std::ptr::null_mut(),
@@ -288,6 +357,38 @@ mod test_support {
         );
         assert!(!handle.is_null());
         (handle, surfaces)
+    }
+
+    /// Lock a caller-owned BGRA8 IOSurface and check whether ANY byte in its `w`x`h` extent is
+    /// non-zero — a cheap "did something actually render" probe for the render-thread tests.
+    ///
+    /// # Safety
+    /// `surface` must be a valid, live IOSurface of at least `w`x`h` BGRA8 pixels.
+    pub(crate) unsafe fn iosurface_has_nonzero_pixels(
+        surface: IOSurfaceRef,
+        w: u32,
+        h: u32,
+    ) -> bool {
+        use crate::render::{
+            IOSurfaceGetBaseAddress, IOSurfaceGetBytesPerRow, IOSurfaceLock, IOSurfaceUnlock,
+        };
+        let mut seed: u32 = 0;
+        unsafe {
+            IOSurfaceLock(surface, 0x1 /* kIOSurfaceLockReadOnly */, &mut seed)
+        };
+        let base = unsafe { IOSurfaceGetBaseAddress(surface) } as *const u8;
+        let stride = unsafe { IOSurfaceGetBytesPerRow(surface) };
+        let row_bytes = (w * 4) as usize;
+        let mut nonzero = false;
+        for y in 0..h as usize {
+            let row = unsafe { std::slice::from_raw_parts(base.add(y * stride), row_bytes) };
+            if row.iter().any(|&b| b != 0) {
+                nonzero = true;
+                break;
+            }
+        }
+        unsafe { IOSurfaceUnlock(surface, 0x1, &mut seed) };
+        nonzero
     }
 }
 

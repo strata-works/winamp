@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc;
 use std::thread::JoinHandle;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use carapace::engine::Engine;
 use carapace::render::Renderer;
@@ -71,6 +71,9 @@ struct RenderThread {
     next_surface: usize,
     frame_id: u64,
     last_render: Instant,
+    /// Host callbacks, copied in at `build` time so `render_one` can fire `frame_ready` from THIS
+    /// thread without touching the front-end handle.
+    vtable: CarapaceHostVTable,
 }
 
 const DEFAULT_FPS: u32 = 60;
@@ -136,7 +139,85 @@ fn build(
         next_surface: 0,
         frame_id: 0,
         last_render: Instant::now(),
+        vtable,
     })
+}
+
+impl RenderThread {
+    /// Round-robin from `next_surface`, skipping surfaces the host still holds. `None` means the
+    /// host holds every pooled surface — the caller must skip the frame (never block, never tear).
+    fn pick_free_surface(&self) -> Option<usize> {
+        let n = self.surfaces.len();
+        (0..n)
+            .map(|i| (self.next_surface + i) % n)
+            .find(|&i| !self.held[i])
+    }
+
+    /// Render exactly one frame into the next free pooled surface and announce it via
+    /// `frame_ready`. Backpressure (every surface held by the host) silently skips the frame.
+    fn render_one(&mut self, dt: Duration) {
+        let Some(idx) = self.pick_free_surface() else {
+            // Backpressure: host holds every surface. Skip this frame (never block, never tear).
+            return;
+        };
+        // Upload this frame's host content (CPU->GPU coherency) before the destructure below,
+        // which needs `self.gpu`/`self.content` split from `self.engine`/`self.renderer`.
+        if let Some(c) = self.content.as_ref() {
+            unsafe {
+                crate::render::upload_iosurface_to_texture(
+                    &self.gpu.queue,
+                    c.surface,
+                    &c.tex,
+                    c.w,
+                    c.h,
+                )
+            };
+        }
+        // Destructure into locals (mirrors the old v1 `tick_inner` pattern) so `render_frame` can
+        // borrow `engine`/`renderer` mutably while `gpu`/`presents`/`surfaces`/`content` are read
+        // immutably in the same expression — the borrow checker can't see that split through
+        // `self.field` access alone.
+        let RenderThread {
+            engine,
+            renderer,
+            gpu,
+            presents,
+            surfaces,
+            content,
+            w,
+            h,
+            ..
+        } = self;
+        let (w, h) = (*w, *h);
+        let host_view = content.as_ref().map(|c| ("host", &c.view));
+        match &presents[idx] {
+            Present::Shared {
+                off,
+                iosurface_view,
+                blitter,
+                ..
+            } => {
+                crate::render::render_frame(
+                    engine, renderer, gpu, &off.view, w, h, dt, false, host_view,
+                );
+                crate::render::blit(gpu, blitter, &off.view, iosurface_view);
+            }
+            Present::Readback { off } => {
+                crate::render::render_frame(
+                    engine, renderer, gpu, &off.view, w, h, dt, true, host_view,
+                );
+                let rgba = crate::render::readback_rgba(gpu, &off.tex, w, h);
+                unsafe { crate::render::copy_into_iosurface(surfaces[idx], &rgba, w, h) };
+            }
+        }
+        self.held[idx] = true;
+        self.next_surface = (idx + 1) % self.surfaces.len();
+        self.frame_id += 1;
+        // Announce readiness to the host (on THIS render thread).
+        if let Some(cb) = self.vtable.frame_ready {
+            cb(self.vtable.ctx, idx as u32, self.frame_id);
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)] // the render thread needs all of these at construction; a
@@ -185,17 +266,33 @@ pub(crate) fn spawn(
         .expect("spawn carapace render thread")
 }
 
-/// Skeleton loop: block for a command, handle Shutdown, ignore the rest for now (pacing/present land
-/// in Task 6/5). Task 6 replaces this with `recv_timeout`-based free-run pacing.
+/// Skeleton loop: block for a command and handle each one directly (no pacing yet — Task 6 replaces
+/// the `rx.recv()` blocking wait with `recv_timeout`-based free-run pacing and snapshot publish).
 fn run_loop(
-    _rt: &mut RenderThread,
+    rt: &mut RenderThread,
     rx: &CommandRx,
     _cell: &SnapshotCell,
     _poisoned: &Arc<AtomicBool>,
 ) {
     while let Ok(cmd) = rx.recv() {
-        if matches!(cmd, Command::Shutdown) {
-            break;
+        match cmd {
+            Command::Invalidate => {
+                let now = Instant::now();
+                let dt = now.duration_since(rt.last_render);
+                rt.last_render = now;
+                rt.render_one(dt);
+            }
+            Command::SetFrameRate(fps) => {
+                rt.fps = fps;
+            }
+            Command::ReleaseSurface(i) => {
+                if let Some(slot) = rt.held.get_mut(i as usize) {
+                    *slot = false;
+                }
+            }
+            Command::Shutdown => break,
+            // Task 7 wires pointer routing into the snapshot/hit-test path; ignored here.
+            Command::Pointer { .. } => {}
         }
     }
 }
@@ -208,5 +305,61 @@ mod tests {
     fn send_surfaces_is_send() {
         fn assert_send<T: Send>() {}
         assert_send::<SendSurfaces>();
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod render_tests {
+    use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+
+    static FRAME_READY_COUNT: AtomicU32 = AtomicU32::new(0);
+    static LAST_FRAME_ID: AtomicU64 = AtomicU64::new(0);
+
+    extern "C" fn on_frame_ready(_ctx: *mut std::ffi::c_void, _idx: u32, frame_id: u64) {
+        FRAME_READY_COUNT.fetch_add(1, Ordering::SeqCst);
+        LAST_FRAME_ID.store(frame_id, Ordering::SeqCst);
+    }
+
+    #[test]
+    fn one_invalidate_renders_nonblank_and_fires_frame_ready_once() {
+        FRAME_READY_COUNT.store(0, Ordering::SeqCst);
+        // Build via carapace_create with fps set to 0 (paused) so only our invalidate renders.
+        let (w, h) = (300u32, 140u32);
+        let vt = crate::host::CarapaceHostVTable {
+            ctx: std::ptr::null_mut(),
+            get_num: None,
+            get_str: None,
+            invoke: None,
+            frame_ready: Some(on_frame_ready),
+        };
+        let (handle, surfaces) =
+            crate::handle::test_support::create_test_handle_pool_vt(w, h, 2, vt);
+        assert_eq!(
+            unsafe { crate::handle::carapace_set_frame_rate(handle, 0) },
+            crate::guard::CarapaceStatus::Ok
+        );
+        assert_eq!(
+            unsafe { crate::handle::carapace_invalidate(handle) },
+            crate::guard::CarapaceStatus::Ok
+        );
+        // Give the render thread a moment to process the single frame.
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert_eq!(
+            FRAME_READY_COUNT.load(Ordering::SeqCst),
+            1,
+            "exactly one frame"
+        );
+        assert_eq!(
+            LAST_FRAME_ID.load(Ordering::SeqCst),
+            1,
+            "frame_id starts at 1"
+        );
+        // The surface handed to frame_ready must be non-blank. `pick_free_surface` round-robins
+        // from index 0 on a freshly-built thread, so the first invalidate lands in surfaces[0].
+        assert!(
+            unsafe { crate::handle::test_support::iosurface_has_nonzero_pixels(surfaces[0], w, h) },
+            "rendered surface must be non-blank"
+        );
+        unsafe { crate::handle::carapace_destroy(handle) };
     }
 }

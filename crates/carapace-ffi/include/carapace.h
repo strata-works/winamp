@@ -141,6 +141,40 @@ CarapaceStatus carapace_create(const CarapaceCreateDesc *desc, CarapaceEngine **
 void carapace_destroy(CarapaceEngine *ptr);
 #endif
 
+#if (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE))
+/**
+ * Enqueue a render of exactly one frame now (wakes a paused engine — see `carapace_set_frame_rate`).
+ * Real pacing (free-run at `fps`, coalescing) lands in Task 6; for now this is a thin `tx.send`.
+ *
+ * # Safety
+ * `ptr` must come from `carapace_create` and not have been passed to `carapace_destroy`.
+ */
+CarapaceStatus carapace_invalidate(CarapaceEngine *ptr);
+#endif
+
+#if (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE))
+/**
+ * Set the free-run target frame rate; `0` pauses the render thread (it then only renders on
+ * `carapace_invalidate`/pointer events). Real pacing behavior lands in Task 6; for now this is a
+ * thin `tx.send`.
+ *
+ * # Safety
+ * `ptr` must come from `carapace_create` and not have been passed to `carapace_destroy`.
+ */
+CarapaceStatus carapace_set_frame_rate(CarapaceEngine *ptr, uint32_t fps);
+#endif
+
+#if (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE))
+/**
+ * Tell the render thread the host is done displaying `surfaces[index]`; it may be rendered into
+ * again.
+ *
+ * # Safety
+ * `ptr` must come from `carapace_create` and not have been passed to `carapace_destroy`.
+ */
+CarapaceStatus carapace_release_surface(CarapaceEngine *ptr, uint32_t index);
+#endif
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif  // __cplusplus
