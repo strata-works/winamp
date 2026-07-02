@@ -2,6 +2,7 @@
 //! Apple (macOS/iOS) only in this version; see docs/superpowers/specs/2026-07-01-carapace-ffi-design.md.
 
 mod guard;
+mod queue;
 pub mod host;
 
 pub use guard::{CARAPACE_ABI_MAJOR, CARAPACE_ABI_MINOR, CarapaceStatus, carapace_last_error};
