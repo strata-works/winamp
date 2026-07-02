@@ -90,7 +90,7 @@ What exists today:
 | [`crates/hittest`](crates/hittest) | Dependency-free even-odd point-in-region kernel for concave + holed shapes. The decoupled hit-testing module; **no** rendering/GPU dependency. |
 | [`crates/carapace`](crates/carapace) | The engine: scene graph + hit-testing, host command queue, external state + value bindings, transactional skin swap, Lua scripting in a capability sandbox, the base vocabulary, sandboxed asset loading + image decode, and a vello/`wgpu` direct-to-surface renderer. |
 | [`crates/carapace-demo`](crates/carapace-demo) | A borderless dual-domain embedder (`winit` + `wgpu`): a media-player host and a real `sysinfo` system-monitor host share one engine; **H** live-switches between them. Three bundled skins, including the real Headspace bitmap. |
-| [`crates/carapace-ffi`](crates/carapace-ffi) | The production C ABI (Apple/macOS+iOS) for embedding the engine as host UI: an opaque handle behind create/destroy/tick/pointer/hit-test, a panic-safe boundary (every export is guarded — a caught panic poisons the handle rather than unwinding into the host), and a generated cbindgen header at [`crates/carapace-ffi/include/carapace.h`](crates/carapace-ffi/include/carapace.h) for engine→host hit-test-driven window behavior. Windows/Linux/Android are future work. |
+| [`crates/carapace-ffi`](crates/carapace-ffi) | The production C ABI (Apple/macOS+iOS) for embedding the engine as host UI, ABI v2: carapace owns a dedicated render thread and free-runs it at 60fps by default, presenting into a host-supplied pool of IOSurfaces and firing `frame_ready` per frame; the opaque handle is thread-safe (create/destroy/pointer/hit-test/active-tier callable from any host thread), and a caught render-thread panic poisons the handle (`ErrPoisoned`) rather than unwinding into the host. Generated cbindgen header at [`crates/carapace-ffi/include/carapace.h`](crates/carapace-ffi/include/carapace.h). Windows/Linux/Android are future work. |
 
 **Phase 5a — asset loading + the `image` primitive: complete.** A type-agnostic,
 sandboxed `AssetResolver` scans a skin's `assets/` directory (Flutter-style: resolved =
@@ -277,6 +277,77 @@ gadget path is unchanged and pixel-identical.
 
 `scrub{}` supports click-to-seek only; drag-scrub is out of scope.
 
+## Embedding the engine: `carapace-ffi` (v2, render-thread model)
+
+[`crates/carapace-ffi`](crates/carapace-ffi) is the production C ABI (Apple/macOS+iOS only;
+Windows/Linux/Android are future work) that lets a native host — currently a Swift app —
+embed carapace as its UI without depending on Rust. ABI v2 changes the ownership model from
+v1's host-driven `tick`: **carapace now owns its own render thread.**
+
+- **carapace owns the render thread.** `carapace_create` spawns a dedicated thread that
+  constructs and owns the (`!Send`) engine + GPU context, then blocks the calling thread on
+  an init handshake so `carapace_create` still returns a synchronous
+  `Ok`/`ErrBadSkin`/`ErrGpuInit`. The returned `CarapaceEngine` handle is a thread-safe
+  front-end (a command sender, a lock-free-ish published snapshot, and an atomic poison
+  flag) — every export (`create`/`destroy`/`pointer`/`hit_test`/`active_tier`/
+  `invalidate`/`set_frame_rate`/`release_surface`) is callable from any host thread.
+  `carapace_tick` is **removed** — the loop paces itself against the wall clock.
+- **Host-supplied surface pool.** `CarapaceCreateDesc` carries `surfaces` (a pointer to a
+  caller-owned array of 2–3 `IOSurfaceRef`, all the same `w`×`h`) and `surface_count`. The
+  render thread round-robins render targets across the pool, skipping any surface the host
+  still holds (backpressure skips a frame rather than blocking or tearing). The
+  `CarapaceHostVTable` gains a `frame_ready(ctx, surface_index, frame_id)` callback (`
+  frame_id` is a monotonic counter starting at 1): when it fires, the host swaps its
+  displayed surface to `surface_index` and, once it's done showing the *previous* surface,
+  calls `carapace_release_surface(handle, prev_index)` so the render thread can reuse it.
+- **Free-runs at 60fps by default.** A host that does nothing beyond mutating its bound
+  state gets continuous animation for free. `carapace_set_frame_rate(handle, fps)` (`0`
+  pauses the thread — it then only renders on `carapace_invalidate` or a pointer event) and
+  `carapace_invalidate(handle)` (render exactly one frame now) are **optional**
+  battery/on-demand controls, never required on the happy path.
+- **Lock-free-ish snapshot reads.** `carapace_pointer` enqueues a `Command::Pointer` and
+  returns immediately (non-blocking); `carapace_hit_test` and `carapace_active_tier` read a
+  published snapshot of the last laid-out scene, at most one frame stale — no engine access,
+  no queue round-trip, sub-millisecond.
+- **Callback contract.** `frame_ready`, `get_num`, `get_str`, and `invoke` all fire **on
+  carapace's render thread**. They must be thread-safe and non-blocking, and **must not**
+  call back into any `carapace_*` function — that would reenter the command queue/loop and
+  can deadlock.
+- **Panic policy.** A panic inside the render body is caught, poisoning the handle: every
+  subsequent call short-circuits with `CarapaceStatus::ErrPoisoned` instead of unwinding
+  into the host. The panic message is captured on the render thread and copied into the
+  poison path so a host calling `carapace_last_error` on its *own* calling thread, after
+  seeing `ErrPoisoned`, gets it back. carapace never aborts the host process.
+- **ABI version.** `carapace_abi_version()` returns `2 << 16` (major 2, minor 0).
+
+A minimal host usage sketch:
+
+```c
+CarapaceCreateDesc desc = {
+    .skin_dir = "/path/to/skin",
+    .vtable = { .ctx = my_ctx, .get_num = get_num, .get_str = get_str,
+                .invoke = invoke, .frame_ready = on_frame_ready },
+    .surfaces = my_surface_pool,   // 2-3 IOSurfaceRefs, all w x h
+    .surface_count = 3,
+    .w = 300, .h = 140,
+};
+CarapaceEngine *engine = NULL;
+carapace_create(&desc, &engine);   // spawns + owns the render thread; free-runs at 60fps
+
+// on_frame_ready(ctx, surface_index, frame_id) — fired on carapace's render thread:
+//   1. swap the displayed layer/texture to my_surface_pool[surface_index]
+//   2. once the PREVIOUS surface is no longer being displayed:
+//        carapace_release_surface(engine, prev_index);
+
+carapace_pointer(engine, x, y, CarapacePointerKind_Press);   // non-blocking
+
+// Optional, battery/on-demand only:
+carapace_set_frame_rate(engine, 0);   // pause
+carapace_invalidate(engine);          // render exactly one frame while paused
+
+carapace_destroy(engine);   // signals shutdown, joins the render thread
+```
+
 ## Building & running
 
 Requires a recent Rust toolchain (edition 2024; built against Rust 1.96). Dependency
@@ -372,6 +443,7 @@ engine. Phase 5 was decomposed into sub-projects (5a–5e).
 crates/hittest/          # decoupled hit-testing kernel (no render deps)
 crates/carapace/          # the engine (scene, state, swap, scripting, vocab, assets, render)
 crates/carapace-demo/     # live winit/wgpu host app + bundled skins
+crates/carapace-ffi/      # C ABI for embedding the engine (Apple-only, v2 render-thread model)
 docs/superpowers/specs/   # design docs, per-phase specs, decisions
 docs/superpowers/plans/   # per-phase implementation plans
 ```
