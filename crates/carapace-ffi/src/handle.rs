@@ -1,15 +1,19 @@
-//! The opaque engine handle handed across the C ABI, plus create/destroy.
+//! The opaque engine handle handed across the C ABI, plus create/destroy/tick.
 
 use std::ffi::{CStr, c_char};
+use std::time::Duration;
 
 use carapace::engine::Engine;
 use carapace::render::Renderer;
 
-use crate::guard::{CarapaceStatus, ffi_guard_no_handle, install_panic_hook, set_last_error};
+use crate::guard::{
+    CarapaceStatus, ffi_guard, ffi_guard_no_handle, install_panic_hook, set_last_error,
+};
 use crate::host::{CarapaceHostVTable, FfiHost};
 use crate::render::{
-    GpuCtx, IOSurfaceGetHeight, IOSurfaceGetWidth, IOSurfaceRef, OffscreenTarget, Tier, init_gpu,
-    make_content_texture, new_offscreen, try_shared,
+    GpuCtx, IOSurfaceGetHeight, IOSurfaceGetWidth, IOSurfaceRef, OffscreenTarget, Tier, blit,
+    copy_into_iosurface, init_gpu, make_content_texture, new_offscreen, readback_rgba,
+    render_frame, try_shared, upload_iosurface_to_texture,
 };
 
 /// How a rendered frame reaches the caller's IOSurface.
@@ -250,6 +254,110 @@ pub unsafe extern "C" fn carapace_destroy(ptr: *mut CarapaceEngine) {
     }
 }
 
+/// The present path the engine resolved to. Mirrors `render::Tier`.
+#[repr(i32)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum CarapaceTier {
+    Readback = 1,
+    Shared = 2,
+}
+
+/// Tick + render one frame, lifted verbatim from the spike's `carapace_tick` body: split the
+/// borrows so `render_frame` can hold `&mut engine`/`&mut renderer` while the present path holds
+/// `&present`, upload this frame's host content (CPU→GPU coherency fix), then present via the
+/// Shared blit path or the Readback CPU-copy path.
+fn tick_inner(e: &mut CarapaceEngine, dt: Duration) {
+    let CarapaceEngine {
+        gpu,
+        renderer,
+        engine,
+        present,
+        surface,
+        content,
+        w,
+        h,
+        ..
+    } = e;
+    let (w, h) = (*w, *h);
+    // Upload THIS frame's host content into the content texture before rendering, so the
+    // engine samples fresh bytes (the CPU→GPU coherency fix). Then supply that texture for
+    // the skin's `view{ id = "host" }` cutout.
+    if let Some(c) = content.as_ref() {
+        unsafe { upload_iosurface_to_texture(&gpu.queue, c.surface, &c.tex, c.w, c.h) };
+    }
+    let host_view = content.as_ref().map(|c| ("host", &c.view));
+    match present {
+        // Tier 2: render into the Rgba8 offscreen, then GPU-blit it into the IOSurface
+        // texture. No CPU readback, no swizzle copy — the blitter reorders RGBA→BGRA on
+        // the GPU. wait=false: blit() is the single poll on this path; skipping the
+        // render_frame stall removes a redundant GPU wait and reduces Tier-2 latency.
+        Present::Shared {
+            off,
+            iosurface_view,
+            blitter,
+            ..
+        } => {
+            render_frame(engine, renderer, gpu, &off.view, w, h, dt, false, host_view);
+            blit(gpu, blitter, &off.view, iosurface_view);
+        }
+        // Tier 1: render, read back, swizzle-copy into the IOSurface.
+        // wait=true: readback_rgba must see completed GPU work before it maps the buffer.
+        Present::Readback { off } => {
+            render_frame(engine, renderer, gpu, &off.view, w, h, dt, true, host_view);
+            let rgba = readback_rgba(gpu, &off.tex, w, h);
+            unsafe { copy_into_iosurface(*surface, &rgba, w, h) };
+        }
+    }
+}
+
+/// Tick + render one frame into the engine's surface. `dt_seconds` is host wall-clock time.
+///
+/// # Safety
+/// `ptr` must come from `carapace_create` and not be destroyed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn carapace_tick(
+    ptr: *mut CarapaceEngine,
+    dt_seconds: f64,
+) -> CarapaceStatus {
+    let Some(e) = (unsafe { ptr.as_mut() }) else {
+        return CarapaceStatus::ErrNullArg;
+    };
+    if e.poisoned {
+        return CarapaceStatus::ErrPoisoned;
+    }
+    ffi_guard!(ptr, {
+        let dt = Duration::from_secs_f64(dt_seconds.max(0.0));
+        tick_inner(e, dt);
+        CarapaceStatus::Ok
+    })
+}
+
+/// Report the active present tier.
+///
+/// # Safety
+/// `ptr` must come from `carapace_create`; `out` must be a valid pointer to a `CarapaceTier`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn carapace_active_tier(
+    ptr: *mut CarapaceEngine,
+    out: *mut CarapaceTier,
+) -> CarapaceStatus {
+    let Some(e) = (unsafe { ptr.as_ref() }) else {
+        return CarapaceStatus::ErrNullArg;
+    };
+    if out.is_null() {
+        return CarapaceStatus::ErrNullArg;
+    }
+    if e.poisoned {
+        return CarapaceStatus::ErrPoisoned;
+    }
+    let tier = match e.tier {
+        Tier::Readback => CarapaceTier::Readback,
+        Tier::Shared => CarapaceTier::Shared,
+    };
+    unsafe { *out = tier };
+    CarapaceStatus::Ok
+}
+
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
@@ -299,5 +407,128 @@ mod tests {
         let status = unsafe { carapace_create(&desc, &mut handle) };
         assert_eq!(status, CarapaceStatus::ErrBadSkin);
         assert!(handle.is_null());
+    }
+}
+
+/// End-to-end: create an engine against a real skin fixture, tick it once, and confirm the
+/// engine actually painted non-zero pixels into the caller's IOSurface.
+#[cfg(all(test, target_os = "macos"))]
+mod tick_tests {
+    use super::*;
+    use crate::host::CarapaceHostVTable;
+    use crate::render::{
+        IOSurfaceGetBaseAddress, IOSurfaceGetBytesPerRow, IOSurfaceLock, IOSurfaceUnlock,
+    };
+
+    // A workspace-sibling demo skin (300x140 canvas, visible content) — kept independent of the
+    // frozen embed-spike crate.
+    const SKIN_DIR: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../carapace-demo/skins/classic"
+    );
+
+    /// Build a caller-owned BGRA8 IOSurface of size `w`x`h` via the `io-surface` crate.
+    ///
+    /// `io_surface::new` returns an owning `IOSurface` wrapper (drop => `CFRelease`); we must NOT
+    /// let that wrapper drop before the test is done with the raw ref, so we `mem::forget` it and
+    /// intentionally leak the +1 Core Foundation reference for the lifetime of the test process.
+    #[allow(deprecated)] // `io_surface` (test-only dev-dep) is deprecated upstream in favor of
+    // `objc2-io-surface`; kept here only for its convenient IOSurface-creation + lock API.
+    fn make_bgra_iosurface(w: usize, h: usize) -> IOSurfaceRef {
+        use core_foundation::base::TCFType;
+        use core_foundation::dictionary::CFDictionary;
+        use core_foundation::number::CFNumber;
+        use core_foundation::string::CFString;
+        let props = CFDictionary::from_CFType_pairs(&[
+            (
+                CFString::new("IOSurfaceWidth"),
+                CFNumber::from(w as i64).as_CFType(),
+            ),
+            (
+                CFString::new("IOSurfaceHeight"),
+                CFNumber::from(h as i64).as_CFType(),
+            ),
+            (
+                CFString::new("IOSurfaceBytesPerElement"),
+                CFNumber::from(4i64).as_CFType(),
+            ),
+            (
+                CFString::new("IOSurfacePixelFormat"),
+                CFNumber::from(0x42475241i64 /* 'BGRA' */).as_CFType(),
+            ),
+        ]);
+        let owned = io_surface::new(&props);
+        let raw = owned.as_concrete_TypeRef();
+        std::mem::forget(owned); // keep the surface alive; the test owns it for its whole run
+        raw as IOSurfaceRef
+    }
+
+    /// Lock `surface` read-only and scan its `w`x`h` BGRA8 bytes for any non-zero byte.
+    ///
+    /// # Safety
+    /// `surface` must be a live, lockable IOSurface of at least `w`x`h` BGRA8 pixels.
+    unsafe fn iosurface_has_nonzero_pixels(surface: IOSurfaceRef, w: u32, h: u32) -> bool {
+        let mut seed: u32 = 0;
+        unsafe {
+            IOSurfaceLock(surface, 0x1 /* kIOSurfaceLockReadOnly */, &mut seed)
+        };
+        let base = unsafe { IOSurfaceGetBaseAddress(surface) } as *const u8;
+        let stride = unsafe { IOSurfaceGetBytesPerRow(surface) };
+        let row_bytes = (w * 4) as usize;
+        let mut nonzero = false;
+        for y in 0..h as usize {
+            let row = unsafe { std::slice::from_raw_parts(base.add(y * stride), row_bytes) };
+            if row.iter().any(|&b| b != 0) {
+                nonzero = true;
+                break;
+            }
+        }
+        unsafe { IOSurfaceUnlock(surface, 0x1, &mut seed) };
+        nonzero
+    }
+
+    #[test]
+    fn create_tick_destroy_renders_nonblank() {
+        let (w, h) = (300u32, 140u32);
+        let surface = make_bgra_iosurface(w as usize, h as usize);
+        let path = std::ffi::CString::new(SKIN_DIR).unwrap();
+        let vtable = CarapaceHostVTable {
+            ctx: std::ptr::null_mut(),
+            get_num: None,
+            get_str: None,
+            invoke: None,
+        };
+        let desc = CarapaceCreateDesc {
+            skin_dir: path.as_ptr(),
+            vtable,
+            surface,
+            content_surface: std::ptr::null_mut(),
+            w,
+            h,
+        };
+        let mut handle: *mut CarapaceEngine = std::ptr::null_mut();
+        assert_eq!(
+            unsafe { carapace_create(&desc, &mut handle) },
+            CarapaceStatus::Ok
+        );
+        assert!(!handle.is_null());
+
+        assert_eq!(unsafe { carapace_tick(handle, 0.016) }, CarapaceStatus::Ok);
+
+        let mut tier = CarapaceTier::Readback;
+        assert_eq!(
+            unsafe { carapace_active_tier(handle, &mut tier) },
+            CarapaceStatus::Ok
+        );
+        assert!(matches!(
+            tier,
+            CarapaceTier::Readback | CarapaceTier::Shared
+        ));
+
+        // The skin should have drawn something — the surface can't still be all zero bytes.
+        let nonzero = unsafe { iosurface_has_nonzero_pixels(surface, w, h) };
+        assert!(nonzero, "expected the skin to render visible pixels");
+
+        unsafe { carapace_destroy(handle) };
     }
 }

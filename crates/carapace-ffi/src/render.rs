@@ -87,8 +87,6 @@ pub fn new_offscreen(device: &wgpu::Device, w: u32, h: u32) -> OffscreenTarget {
 /// (e.g. Readback path — `readback_rgba` runs immediately after). Set `false` when the
 /// caller does its own poll afterwards, e.g. the Shared blit path — `blit()` already calls
 /// `poll(Wait)`, so a second stall here would be redundant.
-// Unused until Task 7 wires the per-frame render loop.
-#[allow(dead_code)]
 #[allow(clippy::too_many_arguments)]
 pub fn render_frame(
     engine: &mut Engine,
@@ -137,8 +135,6 @@ pub fn render_frame(
 }
 
 /// Copy an RGBA8 texture back to CPU, returning tightly-packed rows (no padding).
-// Unused until Task 7 wires the Readback present tier.
-#[allow(dead_code)]
 pub fn readback_rgba(gpu: &GpuCtx, tex: &wgpu::Texture, w: u32, h: u32) -> Vec<u8> {
     let bpp = 4u32;
     let unpadded = w * bpp;
@@ -199,19 +195,16 @@ pub fn readback_rgba(gpu: &GpuCtx, tex: &wgpu::Texture, w: u32, h: u32) -> Vec<u
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub type IOSurfaceRef = *mut core::ffi::c_void;
 
-// Lock/Unlock/GetBaseAddress/GetBytesPerRow are unused until Task 7 wires the CPU-copy paths
-// (upload_iosurface_to_texture / copy_into_iosurface); GetWidth/GetHeight are used now.
+// `pub(crate)` (rather than private) on the Lock/Unlock/GetBaseAddress/GetBytesPerRow accessors
+// so the Task 7 pixel test in `handle.rs` can lock the surface and inspect its bytes directly,
+// the same way `upload_iosurface_to_texture`/`copy_into_iosurface` do below.
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 #[link(name = "IOSurface", kind = "framework")]
 unsafe extern "C" {
-    #[allow(dead_code)]
-    fn IOSurfaceLock(buffer: IOSurfaceRef, options: u32, seed: *mut u32) -> i32;
-    #[allow(dead_code)]
-    fn IOSurfaceUnlock(buffer: IOSurfaceRef, options: u32, seed: *mut u32) -> i32;
-    #[allow(dead_code)]
-    fn IOSurfaceGetBaseAddress(buffer: IOSurfaceRef) -> *mut core::ffi::c_void;
-    #[allow(dead_code)]
-    fn IOSurfaceGetBytesPerRow(buffer: IOSurfaceRef) -> usize;
+    pub(crate) fn IOSurfaceLock(buffer: IOSurfaceRef, options: u32, seed: *mut u32) -> i32;
+    pub(crate) fn IOSurfaceUnlock(buffer: IOSurfaceRef, options: u32, seed: *mut u32) -> i32;
+    pub(crate) fn IOSurfaceGetBaseAddress(buffer: IOSurfaceRef) -> *mut core::ffi::c_void;
+    pub(crate) fn IOSurfaceGetBytesPerRow(buffer: IOSurfaceRef) -> usize;
     pub fn IOSurfaceGetWidth(buffer: IOSurfaceRef) -> usize;
     pub fn IOSurfaceGetHeight(buffer: IOSurfaceRef) -> usize;
 }
@@ -362,8 +355,6 @@ pub fn make_content_texture(
 /// # Safety
 /// `surface` must be a live IOSurface of at least `w`×`h` BGRA8 pixels. `tex` must be a
 /// `Bgra8Unorm` texture of at least `w`×`h` with `COPY_DST` usage.
-// Unused until Task 7 wires the `view{}` composite path.
-#[allow(dead_code)]
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 #[allow(deprecated)]
 pub unsafe fn upload_iosurface_to_texture(
@@ -430,8 +421,6 @@ pub unsafe fn upload_iosurface_to_texture(
 /// CPU readback. This function calls `poll(Wait)` itself, making it the single GPU stall on
 /// the Shared path; callers should pass `wait = false` to `render_frame` to avoid a redundant
 /// stall before this blit.
-// Unused until Task 7 wires the Shared present tier.
-#[allow(dead_code)]
 pub fn blit(
     gpu: &GpuCtx,
     blitter: &wgpu::util::TextureBlitter,
@@ -460,8 +449,6 @@ pub enum Tier {
 /// # Safety
 /// `surface` must be a valid, live IOSurface of at least w×h pixels.
 /// `rgba` must contain exactly `w * h * 4` bytes of packed RGBA8 data.
-// Unused until Task 7 wires the Readback present tier.
-#[allow(dead_code)]
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 #[allow(deprecated)]
 pub unsafe fn copy_into_iosurface(surface: IOSurfaceRef, rgba: &[u8], w: u32, h: u32) {

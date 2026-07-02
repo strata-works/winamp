@@ -59,9 +59,7 @@ macro_rules! ffi_guard_no_handle {
 
 /// Wrap a handle-bearing export body. On panic: poison the handle, return `ErrPanic`.
 /// `$ptr` is the `*mut CarapaceEngine` passed to the export.
-// Not yet used: the handle module (with `CarapaceEngine::poisoned`) lands in a later task.
 #[cfg(any(target_os = "macos", target_os = "ios"))]
-#[allow(unused_macros)]
 macro_rules! ffi_guard {
     ($ptr:expr, $body:expr) => {
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| $body)) {
@@ -77,7 +75,6 @@ macro_rules! ffi_guard {
 }
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
-#[allow(unused_imports)]
 pub(crate) use ffi_guard;
 pub(crate) use ffi_guard_no_handle;
 
