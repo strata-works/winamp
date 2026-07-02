@@ -324,21 +324,6 @@ final class SkinView: NSView {
         let pinch = NSMagnificationGestureRecognizer(target: self, action: #selector(handlePinch(_:)))
         addGestureRecognizer(pinch)
 
-        // Visible +/− resize buttons (the input device reports 0 scroll delta, and a
-        // borderless window has no OS resize handles — so give explicit on-screen controls).
-        let minus = NSButton(title: "−", target: self, action: #selector(zoomOut))
-        let plus  = NSButton(title: "+", target: self, action: #selector(zoomIn))
-        let bw: CGFloat = 26, gap: CGFloat = 8
-        let startX = (CGFloat(W) - (bw * 2 + gap)) / 2   // horizontally centered on the chin
-        for (i, b) in [minus, plus].enumerated() {
-            b.bezelStyle = .circular
-            b.font = NSFont.boldSystemFont(ofSize: 15)
-            b.frame = NSRect(x: startX + CGFloat(i) * (bw + gap), y: 12, width: bw, height: bw)
-            // Stay centered horizontally and fixed above the bottom edge as the window zooms.
-            b.autoresizingMask = [.minXMargin, .maxXMargin, .maxYMargin]
-            addSubview(b)
-        }
-
         setupAudio()
     }
 
@@ -398,9 +383,13 @@ final class SkinView: NSView {
         let pos = CGFloat((player?.currentTime ?? 0) / max(dur, 0.001))
         let playing = player?.isPlaying ?? false
 
-        // Card background (near-white, real macOS look).
+        // Clear to transparent first so the rounded-card corners let the gradient surround
+        // show through (the engine composites this content OVER the paper layer).
+        NSGraphicsContext.current?.cgContext.clear(CGRect(x: 0, y: 0, width: wF, height: hF))
+        // Card background (near-white, real macOS look) — rounded to match the window corners.
         NSColor(white: 0.98, alpha: 1.0).setFill()
-        NSRect(x: 0, y: 0, width: wF, height: hF).fill()
+        NSBezierPath(roundedRect: NSRect(x: 0, y: 0, width: wF, height: hF),
+                     xRadius: 12, yRadius: 12).fill()
 
         // Album art (rounded square, left).
         let art = NSRect(x: 22, y: hF*0.5 - 62, width: 124, height: 124)
@@ -455,10 +444,10 @@ final class SkinView: NSView {
             l.backgroundColor = NSColor.clear.cgColor
             l.contents = surface
             l.contentsGravity = .resizeAspect
-            // Round the borderless window's corners to match a standard macOS window
-            // (~10pt on Big Sur+), so the gradient surround reads as a real shaped window
-            // rather than a hard rectangle (the drop shadow follows the rounded mask).
-            l.cornerRadius = 10
+            // Round the borderless window's corners to the SAME radius as the inner content
+            // card (12pt) so the two read as concentric, and the gradient surround looks like
+            // a real shaped window rather than a hard rectangle (drop shadow follows the mask).
+            l.cornerRadius = 12
             l.masksToBounds = true
             let sel = Selector(("setContentsChanged"))
             if l.responds(to: sel) { l.perform(sel) }
