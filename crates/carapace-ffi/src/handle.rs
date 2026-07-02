@@ -3,8 +3,9 @@
 use std::ffi::{CStr, c_char};
 use std::time::Duration;
 
-use carapace::engine::Engine;
+use carapace::engine::{Engine, PointerEvent};
 use carapace::render::Renderer;
+use carapace::scene::Pt;
 
 use crate::guard::{
     CarapaceStatus, ffi_guard, ffi_guard_no_handle, install_panic_hook, set_last_error,
@@ -358,6 +359,59 @@ pub unsafe extern "C" fn carapace_active_tier(
     CarapaceStatus::Ok
 }
 
+/// Pointer event kinds. v1 forwards all; the engine currently acts on `Press`, the rest are
+/// plumbed for hover/drag semantics and forward-compat (additive).
+#[repr(i32)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum CarapacePointerKind {
+    Press = 0,
+    Release = 1,
+    Move = 2,
+    Enter = 3,
+    Leave = 4,
+}
+
+/// Forward a pointer event in DESIGN-CANVAS coordinates.
+///
+/// # Safety
+/// `ptr` must come from `carapace_create`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn carapace_pointer(
+    ptr: *mut CarapaceEngine,
+    x: f64,
+    y: f64,
+    kind: CarapacePointerKind,
+) -> CarapaceStatus {
+    let Some(e) = (unsafe { ptr.as_mut() }) else {
+        return CarapaceStatus::ErrNullArg;
+    };
+    if e.poisoned {
+        return CarapaceStatus::ErrPoisoned;
+    }
+    ffi_guard!(ptr, {
+        let event = match kind {
+            CarapacePointerKind::Press => Some(PointerEvent::Press),
+            // The engine models Press today; map the rest to the nearest existing event it accepts.
+            // Until the engine grows release/move/enter/leave, forward only Press and treat the
+            // others as no-ops (still validated + guarded). This stays additive: when the engine
+            // gains those events, extend this match — no ABI change.
+            _ => None,
+        };
+        if let Some(ev) = event {
+            e.engine.handle_pointer_resolved(
+                e.cw as f32,
+                e.ch as f32,
+                Pt {
+                    x: x as f32,
+                    y: y as f32,
+                },
+                ev,
+            );
+        }
+        CarapaceStatus::Ok
+    })
+}
+
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
@@ -528,6 +582,74 @@ mod tick_tests {
         // The skin should have drawn something — the surface can't still be all zero bytes.
         let nonzero = unsafe { iosurface_has_nonzero_pixels(surface, w, h) };
         assert!(nonzero, "expected the skin to render visible pixels");
+
+        unsafe { carapace_destroy(handle) };
+    }
+
+    #[test]
+    fn pointer_press_returns_ok_and_null_is_rejected() {
+        // null handle
+        assert_eq!(
+            unsafe { carapace_pointer(std::ptr::null_mut(), 1.0, 1.0, CarapacePointerKind::Press) },
+            CarapaceStatus::ErrNullArg
+        );
+    }
+
+    // Records whether `host.toggle_play()` (the classic skin's play-button handler) fired.
+    // A plain static bool is fine here: it's touched only by this single test.
+    static PRESSED_TOGGLE_PLAY: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+
+    extern "C" fn record_invoke(_ctx: *mut std::ffi::c_void, action: *const std::ffi::c_char) {
+        let name = unsafe { std::ffi::CStr::from_ptr(action) }.to_string_lossy();
+        if name == "toggle_play" {
+            PRESSED_TOGGLE_PLAY.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    fn pointer_press_over_hotspot_dispatches_through_tick() {
+        PRESSED_TOGGLE_PLAY.store(false, std::sync::atomic::Ordering::SeqCst);
+
+        let (w, h) = (300u32, 140u32);
+        let surface = make_bgra_iosurface(w as usize, h as usize);
+        let path = std::ffi::CString::new(SKIN_DIR).unwrap();
+        let vtable = CarapaceHostVTable {
+            ctx: std::ptr::null_mut(),
+            get_num: None,
+            get_str: None,
+            invoke: Some(record_invoke),
+        };
+        let desc = CarapaceCreateDesc {
+            skin_dir: path.as_ptr(),
+            vtable,
+            surface,
+            content_surface: std::ptr::null_mut(),
+            w,
+            h,
+        };
+        let mut handle: *mut CarapaceEngine = std::ptr::null_mut();
+        assert_eq!(
+            unsafe { carapace_create(&desc, &mut handle) },
+            CarapaceStatus::Ok
+        );
+        assert!(!handle.is_null());
+
+        // The play button hotspot is `fill{ path = rect{x=20,y=20,w=70,h=70}, ... on_press =
+        // function() host.toggle_play() end }` in skin.lua, in DESIGN-CANVAS (300x140) coords.
+        // (55, 55) sits well inside it.
+        assert_eq!(
+            unsafe { carapace_pointer(handle, 55.0, 55.0, CarapacePointerKind::Press) },
+            CarapaceStatus::Ok
+        );
+        // The press only enqueues the handler; `carapace_tick` drains the queue and invokes it
+        // through the host vtable.
+        assert_eq!(unsafe { carapace_tick(handle, 0.016) }, CarapaceStatus::Ok);
+
+        assert!(
+            PRESSED_TOGGLE_PLAY.load(std::sync::atomic::Ordering::SeqCst),
+            "expected a press over the play button to fire host.toggle_play()"
+        );
 
         unsafe { carapace_destroy(handle) };
     }
