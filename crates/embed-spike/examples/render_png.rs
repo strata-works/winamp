@@ -53,7 +53,7 @@ fn main() {
         h,
         Duration::from_millis(16),
         true,
-        None,
+        &[],
     );
     let rgba = readback_rgba(&gpu, &target.tex, w, h);
 
