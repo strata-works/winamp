@@ -151,6 +151,12 @@ typedef struct {
   bool (*get_num)(void*, const char*, double*);
   bool (*get_str)(void*, const char*, char*, uintptr_t);
   void (*invoke)(void*, const char*);
+  /**
+   * v2: fired on the render thread when a frame lands in `surfaces[index]`. `frame_id` is a
+   * monotonic counter starting at 1. Must be thread-safe, non-blocking, and MUST NOT call any
+   * `carapace_*` function (that reenters the queue/loop and can deadlock).
+   */
+  void (*frame_ready)(void*, uint32_t, uint64_t);
 } CarapaceHostVTable;
 
 #if (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE))

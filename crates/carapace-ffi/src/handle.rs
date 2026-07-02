@@ -454,6 +454,7 @@ mod test_support {
             get_num: None,
             get_str: None,
             invoke: None,
+            frame_ready: None,
         }
     }
 
@@ -537,6 +538,7 @@ mod tests {
             get_num: None,
             get_str: None,
             invoke: None,
+            frame_ready: None,
         }
     }
 
@@ -668,6 +670,7 @@ mod tick_tests {
             get_num: None,
             get_str: None,
             invoke: Some(record_invoke),
+            frame_ready: None,
         };
         let (handle, _surface) = create_test_handle_with_vtable(w, h, vtable);
 

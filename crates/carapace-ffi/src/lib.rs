@@ -21,6 +21,9 @@ mod hit;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use hit::*;
 
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+mod render_thread;
+
 /// The ABI version this library implements: `MAJOR << 16 | MINOR`. Additive changes bump MINOR;
 /// breaking changes bump MAJOR. A host compares this against the header's constants at load time.
 #[unsafe(no_mangle)]

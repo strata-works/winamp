@@ -114,6 +114,7 @@ mod hit_tests {
             get_num: None,
             get_str: None,
             invoke: None,
+            frame_ready: None,
         };
         let desc = CarapaceCreateDesc {
             skin_dir: path.as_ptr(),
