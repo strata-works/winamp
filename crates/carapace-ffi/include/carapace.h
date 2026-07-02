@@ -9,6 +9,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <IOSurface/IOSurfaceRef.h>
 
 #define CARAPACE_ABI_MAJOR 0
 
@@ -142,10 +143,6 @@ typedef int32_t CarapaceHitKind;
 typedef struct CarapaceEngine CarapaceEngine;
 #endif
 
-#if ((defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE)) && (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE)))
-typedef void *IOSurfaceRef;
-#endif
-
 /**
  * C function table the Swift app registers. Swift IS the host.
  */
@@ -201,34 +198,6 @@ uint32_t carapace_abi_version(void);
  * `buf` must be null or point to at least `cap` writable bytes.
  */
 uintptr_t carapace_last_error(char *buf, uintptr_t cap);
-
-#if ((defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE)) && (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE)))
-extern int32_t IOSurfaceLock(IOSurfaceRef buffer,
-                             uint32_t options,
-                             uint32_t *seed);
-#endif
-
-#if ((defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE)) && (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE)))
-extern int32_t IOSurfaceUnlock(IOSurfaceRef buffer,
-                               uint32_t options,
-                               uint32_t *seed);
-#endif
-
-#if ((defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE)) && (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE)))
-extern void *IOSurfaceGetBaseAddress(IOSurfaceRef buffer);
-#endif
-
-#if ((defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE)) && (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE)))
-extern uintptr_t IOSurfaceGetBytesPerRow(IOSurfaceRef buffer);
-#endif
-
-#if ((defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE)) && (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE)))
-extern uintptr_t IOSurfaceGetWidth(IOSurfaceRef buffer);
-#endif
-
-#if ((defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE)) && (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE)))
-extern uintptr_t IOSurfaceGetHeight(IOSurfaceRef buffer);
-#endif
 
 #if (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE))
 /**
