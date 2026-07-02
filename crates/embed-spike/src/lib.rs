@@ -264,8 +264,10 @@ mod ffi_impl {
             *paper_time += dt.as_secs_f32();
             pv.render(&gpu.device, &gpu.queue, *paper_time);
         }
-        // Build the host-views slice fresh each frame. Scene order = z-order: "paper" first
-        // (behind), "host" content in front.
+        // Build the host-views slice fresh each frame. This is just an id→texture lookup
+        // for the compositor; push order is cosmetic. True z-order comes from the ORDER the
+        // skin declares its `view{}` nodes (the skin puts `id="paper"` before `id="content"`
+        // so the gradient composites behind the content).
         let mut host_views: Vec<(&str, &wgpu::TextureView)> = Vec::new();
         if let Some(pv) = paper.as_ref() {
             host_views.push(("paper", pv.texture_view()));
