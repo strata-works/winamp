@@ -151,7 +151,7 @@ pub unsafe extern "C" fn carapace_create(
 
         // Block on the init handshake so create returns a synchronous status.
         match init_rx.recv() {
-            Ok(render_thread::InitResult::Ok { tier, .. }) => {
+            Ok(render_thread::InitResult::Ok { tier }) => {
                 let (ctier, stier) = match tier {
                     Tier::Readback => (CarapaceTier::Readback, snapshot::SnapshotTier::Readback),
                     Tier::Shared => (CarapaceTier::Shared, snapshot::SnapshotTier::Shared),
@@ -272,6 +272,21 @@ pub(crate) mod test_support {
         env!("CARGO_MANIFEST_DIR"),
         "/../carapace-demo/skins/classic"
     );
+
+    /// Poll `cond` every 5ms until it returns `true` or `timeout` elapses; returns whether the
+    /// condition was met. Used by the render-thread tests to wait on the asynchronously-produced
+    /// first frame instead of a fixed sleep — the first GPU frame's one-time pipeline-compile cost
+    /// is highly variable under parallel GPU-test load, so a fixed sleep is inherently flaky.
+    pub(crate) fn wait_for(timeout: std::time::Duration, mut cond: impl FnMut() -> bool) -> bool {
+        let start = std::time::Instant::now();
+        while start.elapsed() < timeout {
+            if cond() {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        cond()
+    }
 
     pub(crate) fn empty_vtable() -> CarapaceHostVTable {
         CarapaceHostVTable {

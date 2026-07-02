@@ -1,27 +1,25 @@
 //! The dedicated render thread: owns the `!Send` Engine + GPU, runs the pacing loop. Apple-only.
 #![cfg(any(target_os = "macos", target_os = "ios"))]
-// Much of `RenderThread`'s state (surface pool bookkeeping, pacing fields) isn't read by the
-// skeleton loop yet — pacing/present land in Tasks 5/6. Allow it to sit unused in the meantime,
-// matching `queue.rs`/`snapshot.rs`'s precedent for staged-ahead modules.
-#![allow(dead_code)]
 
 use std::ffi::c_void;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
+use std::sync::mpsc::RecvTimeoutError;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use carapace::engine::Engine;
+use carapace::engine::{Engine, PointerEvent};
 use carapace::render::Renderer;
+use carapace::scene::{Pt, Scene};
 
 use crate::guard::{CarapaceStatus, set_last_error};
 use crate::handle::ContentTex;
 use crate::host::{CarapaceHostVTable, FfiHost};
-use crate::queue::{Command, CommandRx};
+use crate::queue::{Command, CommandRx, PointerKind, drain_coalescing};
 use crate::render::{GpuCtx, IOSurfaceRef, Present, Tier, build_content, build_present, init_gpu};
-use crate::snapshot::SnapshotCell;
+use crate::snapshot::{SnapshotCell, SnapshotTier};
 
 /// The raw host-owned state that must cross onto the spawned render thread at construction: the
 /// IOSurface pool, the optional content surface, and the host vtable (fn pointers + its opaque
@@ -48,7 +46,7 @@ unsafe impl Send for SendSurfaces {}
 /// Reported back from the render thread to `carapace_create` so it can return the create-time
 /// status synchronously (the engine + GPU are built ON the render thread).
 pub(crate) enum InitResult {
-    Ok { cw: u32, ch: u32, tier: Tier },
+    Ok { tier: Tier },
     Err(CarapaceStatus, String),
 }
 
@@ -154,11 +152,13 @@ impl RenderThread {
     }
 
     /// Render exactly one frame into the next free pooled surface and announce it via
-    /// `frame_ready`. Backpressure (every surface held by the host) silently skips the frame.
-    fn render_one(&mut self, dt: Duration) {
+    /// `frame_ready`. Lays out ONCE (inside `render_frame`) and returns that laid-out `Scene` so the
+    /// caller can publish it for hit-testing without recomputing layout. Backpressure (every surface
+    /// held by the host) silently skips the frame and returns `None` — nothing is published.
+    fn render_one(&mut self, dt: Duration) -> Option<Scene> {
         let Some(idx) = self.pick_free_surface() else {
             // Backpressure: host holds every surface. Skip this frame (never block, never tear).
-            return;
+            return None;
         };
         // Upload this frame's host content (CPU->GPU coherency) before the destructure below,
         // which needs `self.gpu`/`self.content` split from `self.engine`/`self.renderer`.
@@ -190,26 +190,30 @@ impl RenderThread {
         } = self;
         let (w, h) = (*w, *h);
         let host_view = content.as_ref().map(|c| ("host", &c.view));
-        match &presents[idx] {
+        // `render_frame` lays out once and returns that scene; capture it so we publish the exact
+        // scene we drew (no second layout pass).
+        let scene = match &presents[idx] {
             Present::Shared {
                 off,
                 iosurface_view,
                 blitter,
                 ..
             } => {
-                crate::render::render_frame(
+                let scene = crate::render::render_frame(
                     engine, renderer, gpu, &off.view, w, h, dt, false, host_view,
                 );
                 crate::render::blit(gpu, blitter, &off.view, iosurface_view);
+                scene
             }
             Present::Readback { off } => {
-                crate::render::render_frame(
+                let scene = crate::render::render_frame(
                     engine, renderer, gpu, &off.view, w, h, dt, true, host_view,
                 );
                 let rgba = crate::render::readback_rgba(gpu, &off.tex, w, h);
                 unsafe { crate::render::copy_into_iosurface(surfaces[idx], &rgba, w, h) };
+                scene
             }
-        }
+        };
         self.held[idx] = true;
         self.next_surface = (idx + 1) % self.surfaces.len();
         self.frame_id += 1;
@@ -217,6 +221,39 @@ impl RenderThread {
         if let Some(cb) = self.vtable.frame_ready {
             cb(self.vtable.ctx, idx as u32, self.frame_id);
         }
+        Some(scene)
+    }
+
+    /// Apply one drained command to render-thread state. Returns `false` on `Shutdown` (the loop
+    /// then exits); otherwise `true`. Sets `*invalidated` when the command should trigger a frame
+    /// this iteration — either an explicit `Invalidate` or an input event (so input shows a frame
+    /// even while paused).
+    fn apply(&mut self, cmd: Command, invalidated: &mut bool) -> bool {
+        match cmd {
+            Command::Shutdown => return false,
+            Command::SetFrameRate(f) => self.fps = f,
+            Command::ReleaseSurface(i) => {
+                if let Some(slot) = self.held.get_mut(i as usize) {
+                    *slot = false;
+                }
+            }
+            Command::Invalidate => *invalidated = true,
+            Command::Pointer { x, y, kind } => {
+                if let Some(ev) = map_pointer(kind) {
+                    self.engine.handle_pointer_resolved(
+                        self.cw as f32,
+                        self.ch as f32,
+                        Pt {
+                            x: x as f32,
+                            y: y as f32,
+                        },
+                        ev,
+                    );
+                }
+                *invalidated = true; // input should show a frame even when paused
+            }
+        }
+        true
     }
 }
 
@@ -248,11 +285,7 @@ pub(crate) fn spawn(
                 surfaces.into_iter().map(|p| p as IOSurfaceRef).collect();
             let mut rt = match build(&dir, vtable, surfaces, content as IOSurfaceRef, w, h) {
                 Ok(rt) => {
-                    let _ = init_tx.send(InitResult::Ok {
-                        cw: rt.cw,
-                        ch: rt.ch,
-                        tier: rt.tier,
-                    });
+                    let _ = init_tx.send(InitResult::Ok { tier: rt.tier });
                     rt
                 }
                 Err((status, msg)) => {
@@ -266,34 +299,98 @@ pub(crate) fn spawn(
         .expect("spawn carapace render thread")
 }
 
-/// Skeleton loop: block for a command and handle each one directly (no pacing yet — Task 6 replaces
-/// the `rx.recv()` blocking wait with `recv_timeout`-based free-run pacing and snapshot publish).
+/// The interval between paced frames at the current fps. Used both to size the wait before the next
+/// deadline and to clamp `dt`.
+fn frame_interval(fps: u32) -> Duration {
+    // Paused (fps == 0) has no paced deadline; use a nominal 60fps interval only for the dt clamp.
+    let effective = if fps > 0 { fps } else { 60 };
+    Duration::from_secs_f64(1.0 / effective as f64)
+}
+
+/// Free-run pacing loop. Running (`fps > 0`): wake at the next frame deadline OR on a command;
+/// paused (`fps == 0`): effectively block on commands and render only on Invalidate/Pointer.
+/// A panic in the render body poisons the handle and exits the thread (never abort).
 fn run_loop(
     rt: &mut RenderThread,
     rx: &CommandRx,
-    _cell: &SnapshotCell,
-    _poisoned: &Arc<AtomicBool>,
+    cell: &SnapshotCell,
+    poisoned: &Arc<AtomicBool>,
 ) {
-    while let Ok(cmd) = rx.recv() {
-        match cmd {
-            Command::Invalidate => {
-                let now = Instant::now();
-                let dt = now.duration_since(rt.last_render);
-                rt.last_render = now;
-                rt.render_one(dt);
-            }
-            Command::SetFrameRate(fps) => {
-                rt.fps = fps;
-            }
-            Command::ReleaseSurface(i) => {
-                if let Some(slot) = rt.held.get_mut(i as usize) {
-                    *slot = false;
+    // Start the pacing clock when the loop actually begins (GPU build already elapsed). This also
+    // gives the host's initial configuration (e.g. `set_frame_rate(0)` right after create) a full
+    // frame interval to arrive before the first paced timeout could fire.
+    rt.last_render = Instant::now();
+    let mut pending: Vec<Command> = Vec::new();
+    loop {
+        // Decide how long to wait: running → until the frame deadline OR a command; paused → block.
+        let wait = if rt.fps > 0 {
+            frame_interval(rt.fps).saturating_sub(rt.last_render.elapsed())
+        } else {
+            Duration::from_secs(3600) // effectively "block until a command"
+        };
+
+        match rx.recv_timeout(wait) {
+            Ok(first) => {
+                // Drain + coalesce every command queued right now, then act on the batch.
+                drain_coalescing(rx, first, &mut pending);
+                let mut invalidated = false;
+                for cmd in pending.drain(..) {
+                    if !rt.apply(cmd, &mut invalidated) {
+                        return; // Shutdown
+                    }
+                }
+                if invalidated {
+                    render_guarded(rt, cell, poisoned);
                 }
             }
-            Command::Shutdown => break,
-            // Task 7 wires pointer routing into the snapshot/hit-test path; ignored here.
-            Command::Pointer { .. } => {}
+            // Frame deadline reached while running: render one paced frame.
+            Err(RecvTimeoutError::Timeout) => {
+                if rt.fps > 0 {
+                    render_guarded(rt, cell, poisoned);
+                }
+            }
+            // The command sender (handle front-end) was dropped: nothing more can arrive.
+            Err(RecvTimeoutError::Disconnected) => return,
         }
+        if poisoned.load(Ordering::Acquire) {
+            return;
+        }
+    }
+}
+
+/// Render one frame with a panic guard, then publish the laid-out scene for hit-testing. On a panic
+/// in the render body the handle is poisoned and the thread exits (via `run_loop`'s poison check);
+/// we NEVER abort. `last_error` is already set by the process-wide panic hook from `carapace_create`.
+fn render_guarded(rt: &mut RenderThread, cell: &SnapshotCell, poisoned: &Arc<AtomicBool>) {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    let now = Instant::now();
+    // Clamp a huge idle/after-park gap so a paused-then-resumed engine doesn't see a giant dt.
+    let dt = now
+        .saturating_duration_since(rt.last_render)
+        .min(frame_interval(rt.fps) * 4);
+    let tier = match rt.tier {
+        Tier::Readback => SnapshotTier::Readback,
+        Tier::Shared => SnapshotTier::Shared,
+    };
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        // Publish the exact laid-out scene `render_one` drew (single layout). `None` = backpressure
+        // skipped this frame, so nothing is published.
+        if let Some(scene) = rt.render_one(dt) {
+            crate::snapshot::publish(cell, scene, tier);
+        }
+    }));
+    rt.last_render = now;
+    if result.is_err() {
+        poisoned.store(true, Ordering::Release);
+    }
+}
+
+/// Map a queued pointer kind to an engine pointer event. The engine models `Press` today; the other
+/// kinds are plumbed through the ABI but are no-ops for now (additive — future engine work fills in).
+fn map_pointer(kind: PointerKind) -> Option<PointerEvent> {
+    match kind {
+        PointerKind::Press => Some(PointerEvent::Press),
+        _ => None,
     }
 }
 
@@ -342,8 +439,16 @@ mod render_tests {
             unsafe { crate::handle::carapace_invalidate(handle) },
             crate::guard::CarapaceStatus::Ok
         );
-        // Give the render thread a moment to process the single frame.
-        std::thread::sleep(std::time::Duration::from_millis(200));
+        // Wait for the single paused-render to land. The FIRST GPU frame pays a one-time vello
+        // pipeline/shader-compile cost that, under parallel GPU-test contention, can exceed several
+        // hundred ms — a fixed short sleep is flaky (the frame is produced, just late). Poll up to a
+        // generous ceiling for the frame to arrive; the paused engine cannot produce a second frame,
+        // so the exact-count assertions below still hold.
+        crate::handle::test_support::wait_for(std::time::Duration::from_secs(10), || {
+            FRAME_READY_COUNT.load(Ordering::SeqCst) >= 1
+        });
+        // A short settle so a stray extra frame (there should be none while paused) would show up.
+        std::thread::sleep(std::time::Duration::from_millis(50));
         assert_eq!(
             FRAME_READY_COUNT.load(Ordering::SeqCst),
             1,
@@ -361,5 +466,89 @@ mod render_tests {
             "rendered surface must be non-blank"
         );
         unsafe { crate::handle::carapace_destroy(handle) };
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod pacing_tests {
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    // Each test owns its OWN frame counter, handed to the render thread through the vtable `ctx`
+    // pointer. A single shared `static` would be corrupted by cross-test interference: cargo runs
+    // these tests in parallel, so `free_run`'s stream of frames would otherwise pollute `paused`'s
+    // count. The counter is leaked to `'static` because the render thread holds `ctx` for the whole
+    // handle lifetime.
+    extern "C" fn count_ready(ctx: *mut std::ffi::c_void, _i: u32, _f: u64) {
+        // SAFETY: `ctx` is the `&'static AtomicU32` each test passes in `make`.
+        unsafe { (*(ctx as *const AtomicU32)).fetch_add(1, Ordering::SeqCst) };
+    }
+
+    fn make(counter: &'static AtomicU32) -> *mut crate::handle::CarapaceEngine {
+        let vt = crate::host::CarapaceHostVTable {
+            ctx: counter as *const AtomicU32 as *mut std::ffi::c_void,
+            get_num: None,
+            get_str: None,
+            invoke: None,
+            frame_ready: Some(count_ready),
+        };
+        let (h, _s) = crate::handle::test_support::create_test_handle_pool_vt(300, 140, 3, vt);
+        h
+    }
+
+    #[test]
+    fn free_run_at_60_produces_many_frames_in_300ms() {
+        let count: &'static AtomicU32 = Box::leak(Box::new(AtomicU32::new(0)));
+        let h = make(count); // default fps = 60, running immediately
+        // Poll-release all indices periodically so the loop never backpressures for long, and keep
+        // going until we've observed enough paced frames OR a generous ceiling elapses. The first
+        // frame pays a one-time vello pipeline-compile cost (can be hundreds of ms under parallel
+        // GPU-test load), so a fixed 300ms window is flaky; a deadline that stops early once the
+        // target is met keeps the fast path fast while tolerating a slow cold start.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while count.load(Ordering::SeqCst) < 5 && std::time::Instant::now() < deadline {
+            for i in 0..3 {
+                unsafe {
+                    let _ = crate::handle::carapace_release_surface(h, i);
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let n = count.load(Ordering::SeqCst);
+        assert!(
+            n >= 5,
+            "expected several frames while free-running at 60fps, got {n}"
+        );
+        unsafe { crate::handle::carapace_destroy(h) };
+    }
+
+    #[test]
+    fn paused_engine_renders_only_on_invalidate() {
+        let count: &'static AtomicU32 = Box::leak(Box::new(AtomicU32::new(0)));
+        let h = make(count);
+        // Pause immediately. This is sent within microseconds of `create` returning, well inside
+        // the loop's first ~16ms frame interval, so it takes effect before any paced frame renders
+        // (the pool's surfaces stay free for the single invalidate below).
+        unsafe {
+            let _ = crate::handle::carapace_set_frame_rate(h, 0);
+        }
+        // Paused: no frames should appear on their own.
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        assert_eq!(
+            count.load(Ordering::SeqCst),
+            0,
+            "paused: no frames without invalidate"
+        );
+        unsafe {
+            let _ = crate::handle::carapace_invalidate(h);
+        }
+        // Wait for the single invalidate-driven frame. Like the first frame anywhere, it can pay a
+        // one-time GPU pipeline-compile cost, so poll up to a generous ceiling rather than a fixed
+        // short sleep. A paused engine cannot emit a second frame, so the exact-count check holds.
+        crate::handle::test_support::wait_for(std::time::Duration::from_secs(10), || {
+            count.load(Ordering::SeqCst) >= 1
+        });
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+        unsafe { crate::handle::carapace_destroy(h) };
     }
 }

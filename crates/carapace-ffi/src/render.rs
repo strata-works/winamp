@@ -1,15 +1,9 @@
 #![allow(unsafe_op_in_unsafe_fn)]
-// SDD v2: the render primitives (`render_frame`, `blit`, `readback_rgba`,
-// `upload_iosurface_to_texture`, `copy_into_iosurface`, the IOSurface lock accessors, plus
-// `GpuCtx`/`OffscreenTarget`/`Present` fields) lost their sole consumer when `carapace_tick` was
-// removed in Task 4. The render thread's present path (Tasks 5/6) re-consumes them; allow the
-// interim dead code, matching `queue.rs`/`snapshot.rs`/`render_thread.rs`'s staged-ahead precedent.
-#![allow(dead_code)]
 use std::time::Duration;
 
 use carapace::engine::Engine;
 use carapace::render::{RenderTarget, Renderer};
-use carapace::scene::Color;
+use carapace::scene::{Color, Scene};
 
 use crate::handle::ContentTex;
 
@@ -55,8 +49,6 @@ pub fn init_gpu() -> Result<GpuCtx, String> {
 pub struct OffscreenTarget {
     pub tex: wgpu::Texture,
     pub view: wgpu::TextureView,
-    pub w: u32,
-    pub h: u32,
 }
 
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -82,10 +74,12 @@ pub fn new_offscreen(device: &wgpu::Device, w: u32, h: u32) -> OffscreenTarget {
         view_formats: &[],
     });
     let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
-    OffscreenTarget { tex, view, w, h }
+    OffscreenTarget { tex, view }
 }
 
-/// The one draw path every tier shares: drain+tick, reflow, draw into `view`.
+/// The one draw path every tier shares: drain+tick, reflow, draw into `view`. Lays the scene out
+/// exactly ONCE and RETURNS it, so the caller can publish that same laid-out `Scene` for
+/// hit-testing without recomputing layout (see `render_thread::render_guarded`).
 ///
 /// `host_view`: optional `(view_id, texture_view)` for a skin `view{}` cutout. When present, a
 /// skin node `view{ id = view_id, ... }` is composited with the supplied texture (the host's own
@@ -106,7 +100,7 @@ pub fn render_frame(
     dt: Duration,
     wait: bool,
     host_view: Option<(&str, &wgpu::TextureView)>,
-) {
+) -> Scene {
     engine.update(dt); // drains queued host actions, ticks host
     // Lay out at the DESIGN CANVAS, not the surface (`w,h`) size. The renderer computes
     // sx = target.width / scene.canvas.0, so laying out at the canvas and rendering into a 2×
@@ -140,6 +134,7 @@ pub fn render_frame(
     if wait {
         let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
     }
+    scene
 }
 
 /// Copy an RGBA8 texture back to CPU, returning tightly-packed rows (no padding).
@@ -484,9 +479,6 @@ pub unsafe fn copy_into_iosurface(surface: IOSurfaceRef, rgba: &[u8], w: u32, h:
 }
 
 /// How a rendered frame reaches the caller's IOSurface.
-// SDD v2: the fields are consumed by the render thread's present path (Tasks 5/6); until then only
-// `build_present` constructs them, so allow the interim "constructed but not read".
-#[allow(dead_code)]
 pub enum Present {
     /// Tier 2 (zero CPU copy): vello renders into an `Rgba8` storage offscreen, then a GPU
     /// blit copies+reorders it into the `Bgra8` texture that aliases the IOSurface. Nothing
@@ -589,6 +581,6 @@ mod tests {
     fn init_gpu_succeeds_and_offscreen_allocates() {
         let gpu = init_gpu().expect("Metal device on a macOS test host");
         let off = new_offscreen(&gpu.device, 8, 8);
-        assert_eq!((off.w, off.h), (8, 8));
+        assert_eq!((off.tex.width(), off.tex.height()), (8, 8));
     }
 }
