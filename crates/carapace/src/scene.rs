@@ -462,14 +462,8 @@ impl Scene {
                     on_select: Some(action),
                     count,
                     ..
-                } if *row_height > 0.0
-                    && *count > 0
-                    && p.x >= region.x
-                    && p.x <= region.x + region.w
-                    && p.y >= region.y =>
-                {
-                    let idx = ((p.y - region.y) / row_height).floor() as usize;
-                    if idx < *count {
+                } => {
+                    if let Some(idx) = list_row_index_at(region, *row_height, *count, p) {
                         return Some(Hit::Row {
                             action: action.clone(),
                             index: idx,
@@ -478,11 +472,7 @@ impl Scene {
                 }
                 Node::Scrub {
                     region, on_seek, ..
-                } if p.x >= region.x
-                    && p.x <= region.x + region.w
-                    && p.y >= region.y
-                    && p.y <= region.y + region.h =>
-                {
+                } if scrub_contains(region, p) => {
                     let fraction = if region.w > 0.0 {
                         ((p.x - region.x) / region.w).clamp(0.0, 1.0)
                     } else {
@@ -541,21 +531,10 @@ impl Scene {
                     on_select: Some(_),
                     count,
                     ..
-                } if *row_height > 0.0
-                    && *count > 0
-                    && p.x >= region.x
-                    && p.x <= region.x + region.w
-                    && p.y >= region.y
-                    && ((p.y - region.y) / row_height).floor() < *count as f32 =>
-                {
+                } if list_row_index_at(region, *row_height, *count, p).is_some() => {
                     return HitKind::Control;
                 }
-                Node::Scrub { region, .. }
-                    if p.x >= region.x
-                        && p.x <= region.x + region.w
-                        && p.y >= region.y
-                        && p.y <= region.y + region.h =>
-                {
+                Node::Scrub { region, .. } if scrub_contains(region, p) => {
                     return HitKind::Control;
                 }
                 _ => {}
@@ -567,6 +546,30 @@ impl Scene {
             HitKind::Passthrough
         }
     }
+}
+
+/// Row index of a `list{}` hit at `p`, or `None` if `p` misses the list's bounds or lands past
+/// `count` rows. Shared by `hit_any` (which needs the index) and `hit_kind` (which only needs to
+/// know whether a row was hit) — see both call sites for the exact bounds this must preserve.
+fn list_row_index_at(region: &ImageDest, row_height: f32, count: usize, p: Pt) -> Option<usize> {
+    if row_height > 0.0
+        && count > 0
+        && p.x >= region.x
+        && p.x <= region.x + region.w
+        && p.y >= region.y
+    {
+        let idx = ((p.y - region.y) / row_height).floor() as usize;
+        if idx < count {
+            return Some(idx);
+        }
+    }
+    None
+}
+
+/// True if `p` falls within a `scrub{}` node's rectangular bounds. Shared by `hit_any` and
+/// `hit_kind`.
+fn scrub_contains(region: &ImageDest, p: Pt) -> bool {
+    p.x >= region.x && p.x <= region.x + region.w && p.y >= region.y && p.y <= region.y + region.h
 }
 
 /// The topmost interactive node under a point — see [`Scene::hit_any`].
@@ -1089,5 +1092,40 @@ mod tests {
         ); // outside all nodes
         assert!(scene.covers(Pt { x: 75.0, y: 50.0 }));
         assert!(!scene.covers(Pt { x: 200.0, y: 200.0 }));
+    }
+
+    #[test]
+    fn hit_kind_classifies_passthrough_role_hotspot() {
+        // A `role="passthrough"` hotspot must classify as `Passthrough` even though the point is
+        // inside its region — the whole point of the role is to let the event fall through.
+        let scene = Scene {
+            canvas: (100, 100),
+            nodes: vec![Node::Hotspot {
+                region: region_of(&[
+                    Pt { x: 0.0, y: 0.0 },
+                    Pt { x: 100.0, y: 0.0 },
+                    Pt { x: 100.0, y: 100.0 },
+                    Pt { x: 0.0, y: 100.0 },
+                ]),
+                on_press: 0,
+                role: HotspotRole::Passthrough,
+            }],
+        };
+        assert_eq!(
+            scene.hit_kind(Pt { x: 50.0, y: 50.0 }),
+            HitKind::Passthrough
+        );
+    }
+
+    #[test]
+    fn hit_kind_classifies_list_row_as_control() {
+        let s = list_scene(3, Some("open"));
+        assert_eq!(s.hit_kind(Pt { x: 50.0, y: 10.0 }), HitKind::Control);
+    }
+
+    #[test]
+    fn hit_kind_classifies_scrub_as_control() {
+        let s = scrub_scene();
+        assert_eq!(s.hit_kind(Pt { x: 50.0, y: 10.0 }), HitKind::Control);
     }
 }

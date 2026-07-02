@@ -70,9 +70,6 @@ pub struct CarapaceEngine {
     pub poisoned: bool,
 }
 
-// SAFETY: single-threaded handle; the IOSurfaceRef is only touched on the calling thread.
-unsafe impl Send for CarapaceEngine {}
-
 /// Parameters for `carapace_create`. Grouped in a struct so create can grow additively.
 #[repr(C)]
 pub struct CarapaceCreateDesc {

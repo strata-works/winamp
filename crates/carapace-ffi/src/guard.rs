@@ -29,6 +29,10 @@ thread_local! {
 }
 
 /// Record a human-readable error for the current thread; retrievable via `carapace_last_error`.
+// On non-Apple targets `carapace-ffi` compiles as a shell (handle/hit/render are cfg'd out), and
+// this fn's only non-test caller is `install_panic_hook`/`carapace_create`, both Apple-gated —
+// dead on that target. Genuinely used on Apple, so the allow is cfg'd to non-Apple only.
+#[cfg_attr(not(any(target_os = "macos", target_os = "ios")), allow(dead_code))]
 pub fn set_last_error(msg: &str) {
     LAST_ERROR.with(|e| *e.borrow_mut() = msg.to_string());
 }
@@ -36,6 +40,8 @@ pub fn set_last_error(msg: &str) {
 /// Install (once per process) a panic hook that captures the panic message + location into the
 /// thread-local BEFORE the unwind reaches `catch_unwind` (whose payload is opaque). Chains the
 /// previous hook. Call this at the top of `carapace_create`.
+// Only caller is `carapace_create`, which is Apple-gated — dead on non-Apple.
+#[cfg_attr(not(any(target_os = "macos", target_os = "ios")), allow(dead_code))]
 pub fn install_panic_hook() {
     static HOOK: Once = Once::new();
     HOOK.call_once(|| {
@@ -48,6 +54,8 @@ pub fn install_panic_hook() {
 }
 
 /// Wrap a handle-less export body. On panic: record `ErrPanic`, return it.
+// Its only non-test call site is `carapace_create` (Apple-gated); dead on non-Apple.
+#[cfg_attr(not(any(target_os = "macos", target_os = "ios")), allow(unused_macros))]
 macro_rules! ffi_guard_no_handle {
     ($body:expr) => {
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| $body)) {
@@ -76,6 +84,12 @@ macro_rules! ffi_guard {
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub(crate) use ffi_guard;
+// Only imported via this path by `handle.rs` (Apple-gated); dead on non-Apple (the crate's own
+// tests below reach the macro directly, without going through this re-export).
+#[cfg_attr(
+    not(any(target_os = "macos", target_os = "ios")),
+    allow(unused_imports)
+)]
 pub(crate) use ffi_guard_no_handle;
 
 /// Copy the current thread's last error into `buf` (NUL-terminated, truncated to `cap`). Returns
