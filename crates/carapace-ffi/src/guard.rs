@@ -5,8 +5,11 @@
 //! `ErrPanic`. Once a handle exists, panics are caught on the RENDER THREAD instead
 //! (`render_thread::render_guarded`'s `catch_unwind`), which sets the shared `poisoned` flag and
 //! lets the thread exit; every front-end export then short-circuits with `ErrPoisoned` by reading
-//! that atomic directly — no per-call guard needed for the thin, panic-free front-end functions. We
-//! NEVER `abort()`: carapace runs inside the host's process.
+//! that atomic directly — no per-call guard needed for the thin, genuinely panic-free front-end
+//! functions. `carapace_hit_test` is the one exception: it runs engine geometry code on the
+//! CALLER's thread (not the render thread), so it carries its own `catch_unwind` and reports a
+//! caught panic there as `ErrPanic` without poisoning the handle. We NEVER `abort()`: carapace runs
+//! inside the host's process.
 
 use std::cell::RefCell;
 use std::ffi::c_char;

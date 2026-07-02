@@ -157,11 +157,14 @@ impl RenderThread {
             .find(|&i| !self.held[i])
     }
 
-    /// Render exactly one frame into the next free pooled surface and announce it via
-    /// `frame_ready`. Lays out ONCE (inside `render_frame`) and returns that laid-out `Scene` so the
-    /// caller can publish it for hit-testing without recomputing layout. Backpressure (every surface
-    /// held by the host) silently skips the frame and returns `None` — nothing is published.
-    fn render_one(&mut self, dt: Duration) -> Option<Scene> {
+    /// Render exactly one frame into the next free pooled surface. Lays out ONCE (inside
+    /// `render_frame`) and returns that laid-out `Scene` plus the surface index and frame id, so the
+    /// caller can publish the snapshot and only THEN fire `frame_ready` — the spec's data-flow order
+    /// is present -> publish snapshot -> frame_ready, so a host reacting to the callback never reads
+    /// a stale (previous-frame) snapshot. This method itself never calls `frame_ready`. Backpressure
+    /// (every surface held by the host) silently skips the frame and returns `None` — nothing is
+    /// published and no callback fires.
+    fn render_one(&mut self, dt: Duration) -> Option<(Scene, u32, u64)> {
         let Some(idx) = self.pick_free_surface() else {
             // Backpressure: host holds every surface. Skip this frame (never block, never tear).
             return None;
@@ -223,11 +226,9 @@ impl RenderThread {
         self.held[idx] = true;
         self.next_surface = (idx + 1) % self.surfaces.len();
         self.frame_id += 1;
-        // Announce readiness to the host (on THIS render thread).
-        if let Some(cb) = self.vtable.frame_ready {
-            cb(self.vtable.ctx, idx as u32, self.frame_id);
-        }
-        Some(scene)
+        // Do NOT fire `frame_ready` here — the caller (`render_guarded`) must publish the snapshot
+        // first, then fire the callback, so a host reacting to it always sees this frame's snapshot.
+        Some((scene, idx as u32, self.frame_id))
     }
 
     /// Apply one drained command to render-thread state. Returns `false` on `Shutdown` (the loop
@@ -400,12 +401,21 @@ fn render_guarded(
         if rt.force_panic {
             panic!("forced render-thread panic");
         }
-        // Publish the exact laid-out scene `render_one` drew (single layout). `None` = backpressure
-        // skipped this frame, so nothing is published.
-        if let Some(scene) = rt.render_one(dt) {
+        // Publish the exact laid-out scene `render_one` drew (single layout) BEFORE announcing
+        // `frame_ready`, matching the spec's data-flow order (present -> publish snapshot ->
+        // frame_ready) so a host reacting to the callback never observes a stale (previous-frame)
+        // snapshot. `None` = backpressure skipped this frame, so nothing is published and the
+        // callback does not fire.
+        if let Some((scene, idx, frame_id)) = rt.render_one(dt) {
             crate::snapshot::publish(cell, scene, tier);
+            if let Some(cb) = rt.vtable.frame_ready {
+                cb(rt.vtable.ctx, idx, frame_id);
+            }
         }
     }));
+    // Reset the pacing clock even on a backpressure skip (no free surface) — intentional: the next
+    // iteration's dt is still bounded by the `frame_interval(rt.fps) * 4` clamp above, so a run of
+    // skipped frames can't accumulate an unbounded dt once a surface frees up.
     rt.last_render = now;
     if result.is_err() {
         // The panic hook already captured the message into this render thread's `last_error` TLS;

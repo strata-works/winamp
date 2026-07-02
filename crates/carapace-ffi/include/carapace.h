@@ -239,8 +239,11 @@ void carapace_destroy(CarapaceEngine *ptr);
 
 #if (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE))
 /**
- * Enqueue a render of exactly one frame now (wakes a paused engine — see `carapace_set_frame_rate`).
- * Real pacing (free-run at `fps`, coalescing) lands in Task 6; for now this is a thin `tx.send`.
+ * Request a single frame be rendered now (wakes a paused engine; on a running engine it simply
+ * renders ahead of the next free-run interval). Non-blocking — enqueues the request and returns
+ * immediately; the render thread renders it the next time it drains the queue. Under full surface
+ * backpressure (the host is holding every pooled surface) the requested frame may be skipped until
+ * the host releases one (best-effort; see `carapace_release_surface`).
  *
  * # Safety
  * `ptr` must come from `carapace_create` and not have been passed to `carapace_destroy`.
@@ -251,8 +254,8 @@ CarapaceStatus carapace_invalidate(CarapaceEngine *ptr);
 #if (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE))
 /**
  * Set the free-run target frame rate; `0` pauses the render thread (it then only renders on
- * `carapace_invalidate`/pointer events). Real pacing behavior lands in Task 6; for now this is a
- * thin `tx.send`.
+ * `carapace_invalidate`/pointer events). Default is 60. Non-blocking — enqueues the request and
+ * returns immediately; the render thread picks up the new rate the next time it drains the queue.
  *
  * # Safety
  * `ptr` must come from `carapace_create` and not have been passed to `carapace_destroy`.
@@ -303,8 +306,12 @@ CarapaceStatus carapace_active_tier(CarapaceEngine *ptr, CarapaceTier *out);
 
 #if (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE))
 /**
- * Classify a point `(x, y)` in skin-local coordinates against the latest published scene.
- * Panic-free (a lock read + a match), so no panic guard is needed.
+ * Classify a point `(x, y)` in skin-local coordinates against the latest published scene. Runs on
+ * the CALLER's thread (not the render thread), so it is guarded by its own `catch_unwind` at this
+ * boundary rather than relying on the render thread's poison contract: on a caught panic this
+ * returns `ErrPanic` (with a message retrievable via `carapace_last_error` on the caller's thread)
+ * and leaves the handle usable — the render thread and its published snapshot are untouched, so
+ * there is nothing to poison.
  *
  * # Safety
  * `ptr` must come from `carapace_create` and not have been passed to `carapace_destroy`. `out`

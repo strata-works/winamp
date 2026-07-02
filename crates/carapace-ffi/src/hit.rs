@@ -22,8 +22,12 @@ pub enum CarapaceHitKind {
     Drag = 2,
 }
 
-/// Classify a point `(x, y)` in skin-local coordinates against the latest published scene.
-/// Panic-free (a lock read + a match), so no panic guard is needed.
+/// Classify a point `(x, y)` in skin-local coordinates against the latest published scene. Runs on
+/// the CALLER's thread (not the render thread), so it is guarded by its own `catch_unwind` at this
+/// boundary rather than relying on the render thread's poison contract: on a caught panic this
+/// returns `ErrPanic` (with a message retrievable via `carapace_last_error` on the caller's thread)
+/// and leaves the handle usable — the render thread and its published snapshot are untouched, so
+/// there is nothing to poison.
 ///
 /// # Safety
 /// `ptr` must come from `carapace_create` and not have been passed to `carapace_destroy`. `out`
@@ -44,13 +48,23 @@ pub unsafe extern "C" fn carapace_hit_test(
     if e.poisoned.load(std::sync::atomic::Ordering::Acquire) {
         return e.enter_poisoned();
     }
-    let kind = match crate::snapshot::hit_kind_of(
-        &e.snapshot,
-        Pt {
-            x: x as f32,
-            y: y as f32,
-        },
-    ) {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        crate::snapshot::hit_kind_of(
+            &e.snapshot,
+            Pt {
+                x: x as f32,
+                y: y as f32,
+            },
+        )
+    }));
+    let hit_kind = match result {
+        Ok(k) => k,
+        Err(_) => {
+            crate::guard::set_last_error("carapace_hit_test: panic during hit classification");
+            return CarapaceStatus::ErrPanic;
+        }
+    };
+    let kind = match hit_kind {
         HitKind::Passthrough => CarapaceHitKind::Passthrough,
         HitKind::Control => CarapaceHitKind::Control,
         HitKind::Drag => CarapaceHitKind::Drag,
