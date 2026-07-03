@@ -403,6 +403,16 @@ final class SkinView: NSView {
 
     required init?(coder: NSCoder) { fatalError() }
 
+    /// Draw an SF Symbol (the macOS iconography) centered at (cx, cy) in the current flipped
+    /// content context. Template symbols render black — reads correctly on the near-white card.
+    private func drawSymbol(_ name: String, cx: CGFloat, cy: CGFloat, size: CGFloat) {
+        let cfg = NSImage.SymbolConfiguration(pointSize: size, weight: .semibold)
+        guard let img = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
+            .withSymbolConfiguration(cfg) else { return }
+        let s = img.size
+        img.draw(in: NSRect(x: cx - s.width / 2, y: cy - s.height / 2, width: s.width, height: s.height))
+    }
+
     /// Draw the host app's OWN live content into the content IOSurface via a flipped
     /// NSGraphicsContext so text and layout use top-left origin (y grows DOWN) — no manual
     /// CTM flip needed, and NSString/NSAttributedString render upright and correctly-handed.
@@ -475,20 +485,25 @@ final class SkinView: NSView {
         ("paper.design — Mesh Sessions" as NSString)
             .draw(at: NSPoint(x: 168, y: hF*0.5 - 18), withAttributes: subAttrs)
 
-        // Scrubber track + fill.
+        // Scrubber track + fill + macOS slider thumb.
         let trackY = hF - 72
         NSColor(white: 0.88, alpha: 1).setFill()
         NSBezierPath(roundedRect: NSRect(x: 168, y: trackY, width: 240, height: 5), xRadius: 2.5, yRadius: 2.5).fill()
         NSColor(red:0.93,green:0.35,blue:0.57,alpha:1).setFill()
         NSBezierPath(roundedRect: NSRect(x: 168, y: trackY, width: 240*pos, height: 5), xRadius: 2.5, yRadius: 2.5).fill()
+        let thumbX = 168 + 240 * pos
+        NSColor.white.setFill()
+        let thumb = NSBezierPath(ovalIn: NSRect(x: thumbX - 7, y: trackY + 2.5 - 7, width: 14, height: 14))
+        thumb.fill()
+        NSColor(white: 0, alpha: 0.14).setStroke()
+        thumb.lineWidth = 0.5
+        thumb.stroke()
 
-        // Transport glyphs (drawn; hotspots live in the skin).
-        let glyphAttrs: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 22, weight: .medium),
-            .foregroundColor: NSColor(white: 0.15, alpha: 1)]
-        ("\u{23EE}" as NSString).draw(at: NSPoint(x: 214, y: hF - 44), withAttributes: glyphAttrs)
-        ((playing ? "\u{23F8}" : "\u{25B6}") as NSString).draw(at: NSPoint(x: 246, y: hF - 46), withAttributes: glyphAttrs)
-        ("\u{23ED}" as NSString).draw(at: NSPoint(x: 278, y: hF - 44), withAttributes: glyphAttrs)
+        // Transport controls as SF Symbols (the macOS iconography). Centers align to the skin's
+        // transport hotspots; SF Symbols render black (template) on the near-white card.
+        drawSymbol("backward.fill",                        cx: 225, cy: hF - 33, size: 15)
+        drawSymbol(playing ? "pause.fill" : "play.fill",   cx: 257, cy: hF - 33, size: 19)
+        drawSymbol("forward.fill",                         cx: 289, cy: hF - 33, size: 15)
 
         NSGraphicsContext.restoreGraphicsState()
     }
@@ -569,6 +584,11 @@ final class SkinView: NSView {
                 p.currentTime = (localX / 228) * p.duration
                 scrubPending = false
             }
+            // Tapping the album art cycles the paper surround shader (also bound to the 's' key).
+            // Handled here (not via a skin action) because it drives the engine's paper renderer.
+            if cx >= 46, cx <= 170, cy >= 96, cy <= 220 {
+                carapace_cycle_shader(engine)
+            }
         }
         // If didDrag: window already moved; nothing more to do.
         dragStartMouse  = nil
@@ -605,6 +625,7 @@ final class SkinView: NSView {
         switch e.charactersIgnoringModifiers ?? "" {
         case "+", "=": applyZoomDelta(1.1)
         case "-", "_": applyZoomDelta(1.0 / 1.1)
+        case "s", "S": carapace_cycle_shader(engine)   // cycle the paper surround shader
         default:       super.keyDown(with: e)
         }
     }
