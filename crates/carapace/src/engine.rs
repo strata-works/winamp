@@ -179,6 +179,12 @@ impl Engine {
 fn expand_lists(scene: &mut Scene, host: &dyn Host, origins: &mut Vec<crate::scene::Origin>) {
     use crate::scene::{Node, Origin, Paint, Pt};
 
+    debug_assert_eq!(
+        scene.nodes.len(),
+        origins.len(),
+        "expand_lists: origins must be parallel to scene.nodes"
+    );
+
     let old_nodes = std::mem::take(&mut scene.nodes);
     let old_origins = std::mem::take(origins);
     let mut out = Vec::with_capacity(old_nodes.len());

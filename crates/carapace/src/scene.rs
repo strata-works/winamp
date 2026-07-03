@@ -705,6 +705,13 @@ mod tests {
             "only the big fill"
         );
         assert_eq!(scene.pick(Pt { x: 200.0, y: 200.0 }), None, "empty space");
+        // pick uses inclusive <=/>= bounds, so a point exactly on the big fill's bbox edge
+        // (100,100) is still contained.
+        assert_eq!(
+            scene.pick(Pt { x: 100.0, y: 100.0 }),
+            Some(0),
+            "point on bbox edge is inclusive"
+        );
     }
 
     #[test]

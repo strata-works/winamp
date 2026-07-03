@@ -625,6 +625,7 @@ mod tests {
             new_queue(),
         )
         .unwrap();
+        assert_eq!(skin.origins.len(), skin.scene.nodes.len());
         assert_eq!(skin.scene.nodes.len(), 2, "fill + hotspot");
         assert_eq!(skin.origins.len(), 2);
         assert_eq!(skin.origins[0].call, Some(0));
@@ -645,6 +646,7 @@ mod tests {
             new_queue(),
         )
         .unwrap();
+        assert_eq!(skin.origins.len(), skin.scene.nodes.len());
         assert_eq!(skin.origins.len(), 3);
         assert!(
             skin.origins.iter().all(|o| o.line == Some(2)),
