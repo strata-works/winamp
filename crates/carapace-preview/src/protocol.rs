@@ -23,6 +23,24 @@ pub enum ClientMsg {
         w: u32,
         h: u32,
     },
+    #[allow(dead_code)]
+    Pick {
+        x: f32,
+        y: f32,
+    },
+    #[allow(dead_code)]
+    SetProp {
+        line: u32,
+        field: String,
+        value: serde_json::Value,
+    },
+    #[allow(dead_code)]
+    SetParam {
+        name: String,
+        #[serde(default)]
+        field: Option<String>,
+        value: serde_json::Value,
+    },
 }
 
 pub fn parse_client_msg(text: &str) -> Result<ClientMsg, serde_json::Error> {
@@ -33,9 +51,25 @@ pub fn parse_client_msg(text: &str) -> Result<ClientMsg, serde_json::Error> {
 #[derive(Debug, Clone)]
 pub enum OutMsg {
     Frame(Vec<u8>), // PNG-encoded RGBA
-    Meta { name: String, w: u32, h: u32 },
-    ActionLog { action: String },
-    Error { message: Option<String> },
+    Meta {
+        name: String,
+        w: u32,
+        h: u32,
+    },
+    ActionLog {
+        action: String,
+    },
+    Error {
+        message: Option<String>,
+    },
+    #[allow(dead_code)]
+    NodeInfo {
+        json: serde_json::Value,
+    },
+    #[allow(dead_code)]
+    Params {
+        json: serde_json::Value,
+    },
 }
 
 pub fn out_to_ws(msg: &OutMsg) -> tungstenite::Message {
@@ -49,6 +83,12 @@ pub fn out_to_ws(msg: &OutMsg) -> tungstenite::Message {
         }
         OutMsg::Error { message } => {
             tungstenite::Message::text(json!({"type":"error","message":message}).to_string())
+        }
+        OutMsg::NodeInfo { json } => {
+            tungstenite::Message::text(json!({"type":"nodeInfo","info":json}).to_string())
+        }
+        OutMsg::Params { json } => {
+            tungstenite::Message::text(json!({"type":"params","params":json}).to_string())
         }
     }
 }
@@ -102,5 +142,31 @@ mod tests {
         });
         assert!(meta.is_text());
         assert!(meta.into_text().unwrap().contains("\"type\":\"meta\""));
+    }
+
+    #[test]
+    fn parses_pick_and_setprop_and_setparam() {
+        let p = parse_client_msg(r#"{"type":"pick","x":5.0,"y":6.0}"#).unwrap();
+        assert!(matches!(p, ClientMsg::Pick { x, y } if x == 5.0 && y == 6.0));
+        let sp = parse_client_msg(r#"{"type":"setProp","line":3,"field":"x","value":12}"#).unwrap();
+        assert!(matches!(sp, ClientMsg::SetProp { line: 3, ref field, .. } if field == "x"));
+        let pr =
+            parse_client_msg(r#"{"type":"setParam","name":"RI","field":null,"value":90}"#).unwrap();
+        assert!(matches!(pr, ClientMsg::SetParam { ref name, field: None, .. } if name == "RI"));
+        let prc = parse_client_msg(r#"{"type":"setParam","name":"STONE","field":"r","value":10}"#)
+            .unwrap();
+        assert!(matches!(prc, ClientMsg::SetParam { field: Some(ref f), .. } if f == "r"));
+    }
+
+    #[test]
+    fn nodeinfo_and_params_map_to_typed_text() {
+        let ni = out_to_ws(&OutMsg::NodeInfo {
+            json: serde_json::json!({"prim":"fill"}),
+        });
+        assert!(ni.is_text() && ni.into_text().unwrap().contains("\"type\":\"nodeInfo\""));
+        let ps = out_to_ws(&OutMsg::Params {
+            json: serde_json::json!([]),
+        });
+        assert!(ps.is_text() && ps.into_text().unwrap().contains("\"type\":\"params\""));
     }
 }

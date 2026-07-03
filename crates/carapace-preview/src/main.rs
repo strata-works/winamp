@@ -170,6 +170,15 @@ fn run_engine_loop(
                         },
                     );
                 }
+                EngineMsg::Client(ClientMsg::Pick { .. }) => {
+                    // TODO: implement pick handling
+                }
+                EngineMsg::Client(ClientMsg::SetProp { .. }) => {
+                    // TODO: implement setprop handling
+                }
+                EngineMsg::Client(ClientMsg::SetParam { .. }) => {
+                    // TODO: implement setparam handling
+                }
                 EngineMsg::Reload => {
                     session.reload();
                     // If reload succeeded and the skin's canvas changed, resync
