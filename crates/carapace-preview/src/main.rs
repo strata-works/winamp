@@ -1,6 +1,7 @@
 //! carapace-preview — a live, interactive browser previewer for carapace skins.
 //! See docs/superpowers/specs/2026-07-01-carapace-preview-design.md.
 
+mod inspector;
 mod preview_host;
 mod protocol;
 mod provenance;
