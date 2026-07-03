@@ -1017,6 +1017,96 @@ fn view_without_texture_leaves_the_hole() {
 }
 
 #[test]
+fn view_alpha_blends_over_the_layer_behind() {
+    // Regression test for the view-compositor's `PREMULTIPLIED_ALPHA_BLENDING` (render.rs).
+    // Host `view{}` content is composited OVER whatever is already in the target (the vello
+    // scene + earlier view layers), so:
+    //   • OPAQUE content (alpha=255) fully replaces — identical to the old `blend: None`,
+    //     i.e. backward-compatible with existing opaque host content (e.g. the clock skin).
+    //   • TRANSPARENT content (alpha=0) lets the layer behind show through — the behavior that
+    //     lets a translucent/rounded host card reveal the paper-shader gradient behind it.
+    // With `blend: None` the transparent region would overwrite the base with (0,0,0,0) → black,
+    // so this test fails on the old code and passes on the new.
+    use carapace::scene::{Color, ImageDest, Node, Paint, Scene};
+    let o = offscreen(100, 100);
+    let mut r = Renderer::new(&o.device);
+    // The "layer behind": an opaque red fill over the whole canvas (stands in for the shader).
+    let base = Color {
+        r: 200,
+        g: 40,
+        b: 40,
+        a: 255,
+    };
+    let scene = Scene {
+        canvas: (100, 100),
+        nodes: vec![
+            Node::Fill {
+                path: rect(0.0, 0.0, 100.0, 100.0),
+                paint: Paint::Solid(base),
+            },
+            // Left half: opaque host content — must win over the base.
+            Node::View {
+                id: "opaque".to_string(),
+                dest: ImageDest {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 50.0,
+                    h: 100.0,
+                },
+            },
+            // Right half: fully transparent host content — the base must show through.
+            Node::View {
+                id: "clear".to_string(),
+                dest: ImageDest {
+                    x: 50.0,
+                    y: 0.0,
+                    w: 50.0,
+                    h: 100.0,
+                },
+            },
+        ],
+    };
+    // Premultiplied sources: opaque blue is trivially premultiplied; (0,0,0,0) is transparent.
+    let opaque = solid_source(&o, 50, 100, [0, 0, 200, 255]);
+    let clear = solid_source(&o, 50, 100, [0, 0, 0, 0]);
+    let opaque_view = opaque.create_view(&wgpu::TextureViewDescriptor::default());
+    let clear_view = clear.create_view(&wgpu::TextureViewDescriptor::default());
+    r.draw(
+        &scene,
+        |_| None,
+        |id| match id {
+            "opaque" => Some(&opaque_view),
+            "clear" => Some(&clear_view),
+            _ => None,
+        },
+        &RenderTarget {
+            device: &o.device,
+            queue: &o.queue,
+            view: &o.view,
+            width: o.w,
+            height: o.h,
+            base_color: Color {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 255,
+            },
+        },
+    );
+    let data = readback(&o);
+    assert_eq!(
+        px(&data, 100, 25, 50),
+        [0, 0, 200],
+        "opaque view content composites over the base (backward-compatible)"
+    );
+    assert_eq!(
+        px(&data, 100, 75, 50),
+        [200, 40, 40],
+        "transparent view content reveals the layer behind (not black)"
+    );
+}
+
+#[test]
 fn gadget_path_still_uniform_scales() {
     // Prove the gadget render path (canvas != surface size → uniform scale) is unchanged
     // by frame-skin work. Canvas 100×100 rendered into a 300×300 surface = 3× uniform scale.
