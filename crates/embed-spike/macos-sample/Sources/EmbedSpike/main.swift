@@ -12,10 +12,12 @@ setvbuf(stdout, nil, _IONBF, 0)
 let W: UInt32 = 480, H: UInt32 = 300
 let CW: Int = 480, CH: Int = 300
 // The host-content IOSurface for the skin's view{ id = "content" } cutout
-// (24,24..456,276 → 432×252, 1:1 with design coords — no 2× multiplier this time).
-// The engine samples it into the cutout rect; the "paper" cutout behind it is
-// rendered directly by the engine's transpiled mesh-gradient shader.
-let CONTENT_W: Int = 432, CONTENT_H: Int = 252
+// (24,40..456,276 → 432×236). The card is inset 40px at the top so the floating window
+// controls have a gradient "titlebar" strip; the bottom stays at canvas y=276.
+// The IOSurface is allocated at the backing scale (2× on Retina) so the player draws SHARP;
+// the engine samples it into the cutout rect. The "paper" cutout behind it is rendered
+// directly by the engine's transpiled mesh-gradient shader.
+let CONTENT_W: Int = 432, CONTENT_H: Int = 236
 
 // ---------------------------------------------------------------------------
 // Swift-owned host state
@@ -270,9 +272,12 @@ final class SkinView: NSView {
         ])!
 
         // Second IOSurface holding the host app's OWN live content for the view{} cutout.
+        // Allocated at the backing scale so the player renders SHARP on Retina (the engine
+        // upscales this surface into the cutout; a 1× surface looked blurry at 2×).
+        let cScale = Int(scale.rounded())
         content = IOSurface(properties: [
-            .width: CONTENT_W,
-            .height: CONTENT_H,
+            .width: CONTENT_W * cScale,
+            .height: CONTENT_H * cScale,
             .bytesPerElement: 4,
             .pixelFormat: 0x42475241 as UInt32   // 'BGRA'
         ])!
@@ -324,8 +329,63 @@ final class SkinView: NSView {
         let pinch = NSMagnificationGestureRecognizer(target: self, action: #selector(handlePinch(_:)))
         addGestureRecognizer(pinch)
 
+        installTitlebarControls()
         setupAudio()
     }
+
+    /// Floating window controls (AppKit overlays) over the gradient "titlebar" strip: a
+    /// dot + "paper_mesh" label top-left, and a rounded pill with minimize / zoom / close
+    /// top-right. AppKit overlays because the engine composites view{} OVER the vello layer,
+    /// so carapace vector can't paint on top of the full-bleed paper shader.
+    private func installTitlebarControls() {
+        let top = CGFloat(H)   // view is non-flipped: top edge is at y = height.
+
+        // Top-left: white dot + monospace label.
+        let dot = NSView(frame: NSRect(x: 16, y: top - 25, width: 11, height: 11))
+        dot.wantsLayer = true
+        dot.layer?.backgroundColor = NSColor.white.cgColor
+        dot.layer?.cornerRadius = 5.5
+        dot.layer?.opacity = 0.9
+        dot.autoresizingMask = [.maxXMargin, .minYMargin]
+        addSubview(dot)
+
+        let label = NSTextField(labelWithString: "paper_mesh")
+        label.font = NSFont.monospacedSystemFont(ofSize: 13, weight: .medium)
+        label.textColor = .white
+        label.frame = NSRect(x: 34, y: top - 28, width: 170, height: 18)
+        label.autoresizingMask = [.maxXMargin, .minYMargin]
+        addSubview(label)
+
+        // Top-right: rounded translucent pill with three glyph buttons.
+        let pillW: CGFloat = 104, pillH: CGFloat = 28
+        let pill = NSView(frame: NSRect(x: CGFloat(W) - pillW - 12, y: top - pillH - 8,
+                                        width: pillW, height: pillH))
+        pill.wantsLayer = true
+        pill.layer?.backgroundColor = NSColor(white: 0.04, alpha: 0.30).cgColor
+        pill.layer?.cornerRadius = 14
+        pill.layer?.borderWidth = 1
+        pill.layer?.borderColor = NSColor(white: 1, alpha: 0.16).cgColor
+        pill.autoresizingMask = [.minXMargin, .minYMargin]
+        addSubview(pill)
+
+        let items: [(String, Selector)] = [
+            ("\u{2013}", #selector(hostMinimize)),  // – minimize
+            ("\u{25A2}", #selector(hostZoom)),      // ▢ zoom
+            ("\u{2715}", #selector(hostClose)),     // ✕ close
+        ]
+        for (i, (title, sel)) in items.enumerated() {
+            let b = NSButton(title: title, target: self, action: sel)
+            b.isBordered = false
+            b.font = NSFont.systemFont(ofSize: 14, weight: .medium)
+            b.contentTintColor = .white
+            b.frame = NSRect(x: 6 + CGFloat(i) * 32, y: 0, width: 30, height: pillH)
+            pill.addSubview(b)
+        }
+    }
+
+    @objc private func hostMinimize() { window?.miniaturize(nil) }
+    @objc private func hostZoom()     { applyZoomDelta(1.12) }
+    @objc private func hostClose()    { NSApp.terminate(nil) }
 
     /// Load the bundled sample clip into a real AVAudioPlayer (looped; the demo has no
     /// playlist, just one track that repeats).
@@ -354,24 +414,28 @@ final class SkinView: NSView {
         let stride = content.bytesPerRow
         let cw     = CONTENT_W
         let ch     = CONTENT_H
+        // The surface is allocated at the backing scale; derive it so we draw in LOGICAL
+        // CONTENT_W×CONTENT_H units but render at full surface resolution (sharp on Retina).
+        let cScale = max(1, content.width / CONTENT_W)
 
         let cs  = CGColorSpaceCreateDeviceRGB()
         let bmp = CGImageAlphaInfo.premultipliedFirst.rawValue
                 | CGBitmapInfo.byteOrder32Little.rawValue
         guard let cg = CGContext(
             data:             base,
-            width:            cw,
-            height:           ch,
+            width:            cw * cScale,
+            height:           ch * cScale,
             bitsPerComponent: 8,
             bytesPerRow:      stride,
             space:            cs,
             bitmapInfo:       bmp
         ) else { return }
 
-        // Flip the raw bitmap context (which is y-up / bottom-left origin) to a top-left
-        // origin so BOTH the layout (y grows down) AND AppKit text render upright and
-        // un-mirrored. Verified in isolation via a PNG harness: translate+scale(1,-1) THEN
-        // NSGraphicsContext(flipped:true). (flipped:true alone, with no CTM flip, 180°-inverts.)
+        // Scale to the logical CONTENT_W×CONTENT_H space (Retina sharpness), THEN flip the
+        // raw bitmap context (y-up / bottom-left origin) to a top-left origin so BOTH the
+        // layout (y grows down) AND AppKit text render upright and un-mirrored. Verified in
+        // isolation: translate+scale(1,-1) THEN NSGraphicsContext(flipped:true).
+        cg.scaleBy(x: CGFloat(cScale), y: CGFloat(cScale))
         cg.translateBy(x: 0, y: CGFloat(ch))
         cg.scaleBy(x: 1, y: -1)
         let ns = NSGraphicsContext(cgContext: cg, flipped: true)
@@ -400,18 +464,6 @@ final class SkinView: NSView {
         NSBezierPath(roundedRect: NSRect(x: 0, y: 0, width: wF, height: hF),
                      xRadius: 12, yRadius: 12).fill()
 
-        // Window controls: macOS traffic lights at the card's top-left (the skin's invisible
-        // hotspots align to these). Drawn by the host because the engine composites view{} over
-        // the vello layer, so carapace vector can't paint over the full-bleed paper shader.
-        let controls: [(CGFloat, NSColor)] = [
-            (20, NSColor(red: 1.00, green: 0.37, blue: 0.34, alpha: 1)),  // close (red)
-            (40, NSColor(red: 1.00, green: 0.74, blue: 0.18, alpha: 1)),  // minimize (yellow)
-            (60, NSColor(red: 0.16, green: 0.79, blue: 0.25, alpha: 1)),  // zoom (green, cosmetic)
-        ]
-        for (dx, color) in controls {
-            color.setFill()
-            NSBezierPath(ovalIn: NSRect(x: dx - 6, y: 12, width: 12, height: 12)).fill()
-        }
 
         // Album art (rounded square, left).
         let art = NSRect(x: 22, y: hF*0.5 - 62, width: 124, height: 124)

@@ -9,16 +9,14 @@ region{ path = rect{x=0, y=0, w=480, h=300}, on_press = function() host.begin_dr
 -- The paper shader fills the whole window, behind everything.
 view{ id = "paper", x = 0, y = 0, w = 480, h = 300 }
 
--- Window controls: macOS traffic lights. The engine composites view{} textures OVER the vello
--- vector layer, so carapace vector can't paint over the full-bleed paper shader (same limitation
--- as the card corners; deferred). Instead the HOST draws the dots into the content card's
--- top-left (that view{} IS composited over paper, so it shows). These invisible hotspots align
--- to the drawn dots: content-local centers (20,40 @ y18) → canvas (44,64 @ y42).
-region{ path = rect{x=36, y=34, w=16, h=16}, on_press = function() host.close() end }
-region{ path = rect{x=56, y=34, w=16, h=16}, on_press = function() host.minimize() end }
+-- Window controls float over the gradient "titlebar" strip (top 40px) and are drawn as AppKit
+-- overlays by the host — carapace vector can't paint over the full-bleed paper shader (the engine
+-- composites view{} OVER the vello layer; deferred engine fix). The overlay buttons handle their
+-- own clicks, so no skin hotspots here.
 
--- The real macOS player content, framed by the gradient.
-view{ id = "content", x = 24, y = 24, w = 432, h = 252 }
+-- The real macOS player content, framed by the gradient. Inset 40px at the top to leave the
+-- titlebar strip for the floating controls; bottom stays at canvas y=276 (transport unchanged).
+view{ id = "content", x = 24, y = 40, w = 432, h = 236 }
 
 -- Transport hotspots over the content (the Swift host draws the glyphs + owns AVAudioPlayer).
 -- Rects aligned to the glyphs' ACTUAL canvas positions (Swift draws them at content-local
