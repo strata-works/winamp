@@ -4,6 +4,7 @@
 mod preview_host;
 mod protocol;
 mod render;
+mod skin_session;
 
 use std::process::ExitCode;
 
