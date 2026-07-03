@@ -1,0 +1,134 @@
+<!-- carapace-preview viewer -->
+<meta charset="utf-8" />
+<title>carapace-preview</title>
+<style>
+  body { margin: 0; font: 13px system-ui, sans-serif; background: #1b1b1f; color: #ddd; display: flex; }
+  #stage { flex: 1; display: flex; flex-direction: column; align-items: center; padding: 16px; gap: 8px; }
+  #skinName { font-weight: 600; }
+  #canvasWrap { background:
+      linear-gradient(45deg,#2a2a2e 25%,transparent 25%,transparent 75%,#2a2a2e 75%),
+      linear-gradient(45deg,#2a2a2e 25%,#232327 25%,#232327 75%,#2a2a2e 75%);
+    background-size: 20px 20px; background-position: 0 0, 10px 10px; }
+  canvas { display: block; }
+  #err { display: none; background: #5a1c1c; color: #ffd9d9; padding: 8px 12px; border-radius: 6px; max-width: 640px; white-space: pre-wrap; font-family: ui-monospace, monospace; }
+  #panel { width: 280px; background: #222226; padding: 12px; box-sizing: border-box; height: 100vh; overflow: auto; }
+  #panel h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: #999; margin: 16px 0 6px; }
+  .row { display: flex; gap: 6px; margin-bottom: 4px; }
+  .row input { flex: 1; min-width: 0; background: #2c2c31; border: 1px solid #3a3a40; color: #eee; padding: 4px 6px; border-radius: 4px; }
+  button { background: #33343a; border: 1px solid #45464d; color: #eee; padding: 4px 8px; border-radius: 4px; cursor: pointer; }
+  #log { font-family: ui-monospace, monospace; font-size: 12px; background: #17171a; border-radius: 4px; padding: 6px; height: 160px; overflow: auto; }
+  #status { color: #888; }
+</style>
+
+<div id="stage">
+  <div id="skinName">carapace-preview</div>
+  <div id="err"></div>
+  <div id="canvasWrap"><canvas id="c" width="10" height="10"></canvas></div>
+  <div id="status">connecting…</div>
+</div>
+
+<div id="panel">
+  <h2>Canvas size</h2>
+  <div class="row">
+    <input id="cw" type="number" placeholder="w" />
+    <input id="ch" type="number" placeholder="h" />
+    <button id="applyCanvas">Set</button>
+  </div>
+
+  <h2>Host data</h2>
+  <div id="values"></div>
+  <div class="row">
+    <input id="newKey" placeholder="key" />
+    <input id="newVal" placeholder="value" />
+    <button id="addVal">Add</button>
+  </div>
+
+  <h2>Action log</h2>
+  <div id="log"></div>
+</div>
+
+<script>
+  const canvas = document.getElementById("c");
+  const ctx = canvas.getContext("2d");
+  const err = document.getElementById("err");
+  const status = document.getElementById("status");
+  const logEl = document.getElementById("log");
+  const valuesEl = document.getElementById("values");
+  let designW = 10, designH = 10;
+
+  const ws = new WebSocket("ws://127.0.0.1:{{WS_PORT}}");
+  ws.binaryType = "arraybuffer";
+
+  ws.onopen = () => (status.textContent = "connected");
+  ws.onclose = () => {
+    status.textContent = "disconnected — retrying…";
+    setTimeout(() => location.reload(), 1000);
+  };
+
+  ws.onmessage = (ev) => {
+    if (ev.data instanceof ArrayBuffer) {
+      const blob = new Blob([ev.data], { type: "image/png" });
+      createImageBitmap(blob).then((bmp) => {
+        ctx.drawImage(bmp, 0, 0, canvas.width, canvas.height);
+        bmp.close();
+      });
+      return;
+    }
+    const msg = JSON.parse(ev.data);
+    if (msg.type === "meta") {
+      document.getElementById("skinName").textContent = msg.name;
+      designW = msg.w; designH = msg.h;
+      canvas.width = msg.w; canvas.height = msg.h;
+      document.getElementById("cw").value = msg.w;
+      document.getElementById("ch").value = msg.h;
+    } else if (msg.type === "actionLog") {
+      const line = document.createElement("div");
+      line.textContent = "▶ " + msg.action;
+      logEl.appendChild(line);
+      logEl.scrollTop = logEl.scrollHeight;
+    } else if (msg.type === "error") {
+      if (msg.message) { err.style.display = "block"; err.textContent = msg.message; }
+      else { err.style.display = "none"; }
+    }
+  };
+
+  function send(obj) { if (ws.readyState === 1) ws.send(JSON.stringify(obj)); }
+
+  canvas.addEventListener("click", (e) => {
+    const r = canvas.getBoundingClientRect();
+    const x = (e.clientX - r.left) * (designW / r.width);
+    const y = (e.clientY - r.top) * (designH / r.height);
+    send({ type: "pointer", x, y });
+  });
+
+  document.getElementById("applyCanvas").onclick = () => {
+    const w = parseInt(document.getElementById("cw").value, 10);
+    const h = parseInt(document.getElementById("ch").value, 10);
+    if (w > 0 && h > 0) send({ type: "setCanvas", w, h });
+  };
+
+  function addValueRow(key, val) {
+    const row = document.createElement("div");
+    row.className = "row";
+    const k = document.createElement("input"); k.value = key; k.placeholder = "key";
+    const v = document.createElement("input"); v.value = val; v.placeholder = "value";
+    const push = () => {
+      const num = parseFloat(v.value);
+      send({ type: "setValue", key: k.value, value: (v.value.trim() !== "" && !isNaN(num) && String(num) === v.value.trim()) ? num : v.value });
+    };
+    v.addEventListener("input", push);
+    k.addEventListener("change", push);
+    row.appendChild(k); row.appendChild(v);
+    valuesEl.appendChild(row);
+  }
+
+  document.getElementById("addVal").onclick = () => {
+    const key = document.getElementById("newKey").value.trim();
+    if (!key) return;
+    addValueRow(key, document.getElementById("newVal").value);
+    document.getElementById("newKey").value = "";
+    document.getElementById("newVal").value = "";
+    // fire once immediately
+    const num = parseFloat(document.querySelector("#values .row:last-child input:nth-child(2)").value);
+  };
+</script>
