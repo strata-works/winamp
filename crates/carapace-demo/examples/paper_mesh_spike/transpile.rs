@@ -32,6 +32,92 @@ pub fn preprocess(glsl: &str) -> String {
     glsl.to_string()
 }
 
+/// naga's SPIR-V frontend (`spv-in`) does NOT support Vulkan **combined** image
+/// samplers. It only resolves the sampled-image operand of `OpImageSample*` when
+/// that operand was produced by an `OpSampledImage` instruction (which combines a
+/// separate image + sampler). glslang lowers a combined `sampler2D` uniform to a
+/// direct `OpLoad` of an `OpTypeSampledImage` — no `OpSampledImage` — so naga can't
+/// find the operand and bails with `InvalidId`. This is exactly why `metaballs` and
+/// `voronoi` (the only two paper shaders that sample `u_noiseTexture`) failed while
+/// the texture-free shaders transpiled cleanly.
+///
+/// This rewrite splits each `uniform sampler2D NAME;` into the Vulkan-GLSL separate
+/// form (`texture2D NAME;` + `sampler NAME_smp;`) and rewrites `texture(NAME, …)`
+/// call sites to recombine them inline via `sampler2D(NAME, NAME_smp)`. glslang then
+/// emits an explicit `OpSampledImage`, which naga accepts. It is a pure syntactic
+/// normalization — the combined and separate forms sample identically — so it never
+/// touches effect logic.
+///
+/// Scope: only the `texture()` builtin is rewritten (the sole sampling call the paper
+/// shaders use). `texelFetch`/`textureSize` take the bare `texture2D` in separate form,
+/// so they are deliberately left for per-shader attention if a future shader needs them.
+fn separate_combined_samplers(glsl: &str) -> String {
+    let mut names = Vec::new();
+    let mut lines = Vec::new();
+    for line in glsl.lines() {
+        if let Some(name) = combined_sampler_decl_name(line) {
+            // A precision qualifier is mandatory for opaque types in GLSL ES; `mediump`
+            // matches paper's `precision mediump float;` and is ignored on desktop.
+            lines.push(format!("uniform mediump texture2D {name};"));
+            lines.push(format!("uniform mediump sampler {name}_smp;"));
+            names.push(name);
+        } else {
+            lines.push(line.to_string());
+        }
+    }
+    if names.is_empty() {
+        return glsl.to_string();
+    }
+    let mut src = lines.join("\n");
+    if glsl.ends_with('\n') {
+        src.push('\n');
+    }
+    for name in &names {
+        // Wrap the sampler where it is the first argument of `texture(…)`: inserting the
+        // constructor open after `texture(` and the sampler + close after the name turns
+        // `texture(NAME, coord)` into `texture(sampler2D(NAME, NAME_smp), coord)`.
+        src = src.replace(
+            &format!("texture({name},"),
+            &format!("texture(sampler2D({name}, {name}_smp),"),
+        );
+        src = src.replace(
+            &format!("texture({name} ,"),
+            &format!("texture(sampler2D({name}, {name}_smp) ,"),
+        );
+    }
+    src
+}
+
+/// If `line` declares a single combined `sampler2D` uniform, return its name.
+/// Tolerates a leading `layout(...)` qualifier and an optional precision qualifier.
+fn combined_sampler_decl_name(line: &str) -> Option<String> {
+    let mut s = line.trim();
+    if let Some(after_layout) = s.strip_prefix("layout") {
+        let after_layout = after_layout.trim_start();
+        let close = after_layout.find(')')?;
+        s = after_layout[close + 1..].trim_start();
+    }
+    let s = s.strip_prefix("uniform")?;
+    if !s.starts_with(char::is_whitespace) {
+        return None;
+    }
+    let s = s.trim_start();
+    let s = ["lowp ", "mediump ", "highp "]
+        .iter()
+        .find_map(|p| s.strip_prefix(p))
+        .unwrap_or(s)
+        .trim_start();
+    let s = s.strip_prefix("sampler2D")?;
+    if !s.starts_with(char::is_whitespace) {
+        return None;
+    }
+    let name = s.trim().strip_suffix(';')?.trim();
+    if name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+        return None;
+    }
+    Some(name.to_string())
+}
+
 fn naga_to_wgsl(
     glsl: &str,
     stage: naga::ShaderStage,
@@ -84,6 +170,11 @@ fn via_spirv(glsl: &str, stage: naga::ShaderStage) -> Result<Transpiled, String>
     // rules) permits the default/non-block uniforms, while Vulkan semantics emit
     // OriginUpperLeft (naga-friendly); `--amb`/`--aml` auto-map bindings/locations.
     let bumped = glsl.replacen("#version 300 es", "#version 310 es", 1);
+    // Second mechanical normalization: split combined `sampler2D` uniforms into the
+    // Vulkan-GLSL separate texture+sampler form so naga's spv-in can consume them
+    // (see `separate_combined_samplers` for the full root-cause note). No-op for the
+    // shaders that carry no combined sampler (mesh gradient + the 4 clean ones).
+    let bumped = separate_combined_samplers(&bumped);
     std::fs::write(&src, &bumped).map_err(|e| e.to_string())?;
     let out = Command::new(bin)
         .args([
@@ -175,6 +266,57 @@ mod tests {
         assert!(t.wgsl.contains("@fragment"), "wgsl:\n{}", t.wgsl);
     }
 
+    // A combined `sampler2D` + `texture()` — the exact shape that made metaballs/voronoi
+    // fail at naga spv-in with `InvalidId` before `separate_combined_samplers`.
+    const SAMPLED: &str = "#version 300 es\nprecision mediump float;\n\
+        uniform sampler2D u_noiseTexture;\nin vec2 v_uv;\nout vec4 fragColor;\n\
+        void main() { fragColor = texture(u_noiseTexture, v_uv); }";
+
+    #[test]
+    fn separate_combined_samplers_splits_decl_and_call() {
+        // Pure syntactic transform — no glslang/naga needed, so this always runs.
+        let out =
+            separate_combined_samplers(&SAMPLED.replace("#version 300 es", "#version 310 es"));
+        assert!(
+            out.contains("uniform mediump texture2D u_noiseTexture;")
+                && out.contains("uniform mediump sampler u_noiseTexture_smp;"),
+            "decl not split:\n{out}"
+        );
+        assert!(
+            out.contains("texture(sampler2D(u_noiseTexture, u_noiseTexture_smp), v_uv)"),
+            "call site not recombined:\n{out}"
+        );
+        assert!(
+            !out.contains("uniform sampler2D"),
+            "combined sampler2D uniform must be gone:\n{out}"
+        );
+        // No combined sampler -> exact no-op (byte-identical).
+        let plain = "#version 310 es\nout vec4 c;\nvoid main() { c = vec4(1.0); }";
+        assert_eq!(separate_combined_samplers(plain), plain);
+    }
+
+    #[test]
+    fn combined_sampler_uniform_transpiles_and_wgsl_reparses() {
+        // Regression for the metaballs/voronoi spv-in `InvalidId` failure: a combined
+        // `sampler2D` must (a) reach valid WGSL via the ladder and (b) round-trip through
+        // naga's wgsl-in — the same parse wgpu does at pipeline creation.
+        if !glslang_available() {
+            eprintln!("SKIP combined_sampler_uniform_transpiles: glslang not installed");
+            return;
+        }
+        let t = transpile(SAMPLED, naga::ShaderStage::Fragment)
+            .expect("combined sampler2D must transpile via the ladder");
+        assert!(matches!(t.rung, Rung::SpirV), "expected spirv rung");
+        assert!(t.wgsl.contains("@fragment"), "wgsl:\n{}", t.wgsl);
+        // wgsl-out -> wgsl-in round trip: what wgpu does when it builds the pipeline.
+        let module = naga::front::wgsl::parse_str(&t.wgsl).unwrap_or_else(|e| {
+            panic!("emitted WGSL must re-parse via wgsl-in: {e:?}\n{}", t.wgsl)
+        });
+        Validator::new(ValidationFlags::all(), Capabilities::all())
+            .validate(&module)
+            .expect("re-parsed WGSL module must validate");
+    }
+
     #[test]
     fn spirv_rung_reports_availability() {
         // Value is environment-dependent; assert the call is total + deterministic.
@@ -238,9 +380,10 @@ mod tests {
 
     /// Breadth DIAGNOSTIC: transpile every `*.frag` in $PAPER_MORE_DIR through the same ladder,
     /// reporting which of paper's OTHER shaders reuse the mesh-gradient path. Report-only (not a
-    /// gate): as of this exploration, most reach valid WGSL via the `spirv` rung, but a few
-    /// (e.g. metaballs, voronoi) fail at naga `spv-in` with `InvalidId` — glslang emits SPIR-V
-    /// naga's importer can't yet consume, so those need per-shader attention.
+    /// gate): every shader in the representative set reaches valid WGSL via the `spirv` rung.
+    /// metaballs and voronoi originally failed at naga `spv-in` with `InvalidId` (glslang emits a
+    /// combined image sampler naga can't import); `separate_combined_samplers` now normalizes those
+    /// to the separate texture+sampler form, so all six transpile.
     #[test]
     #[ignore]
     fn transpile_more_shaders() {
