@@ -3,6 +3,7 @@
 
 mod preview_host;
 mod protocol;
+mod render;
 
 use std::process::ExitCode;
 
