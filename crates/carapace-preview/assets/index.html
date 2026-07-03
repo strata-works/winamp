@@ -44,6 +44,12 @@
     <button id="addVal">Add</button>
   </div>
 
+  <h2>Parameters</h2>
+  <div id="params"></div>
+
+  <h2>Inspector <label style="font-weight:400"><input type="checkbox" id="inspectToggle" /> click to inspect</label></h2>
+  <div id="inspector"><div id="status2">click a node…</div></div>
+
   <h2>Action log</h2>
   <div id="log"></div>
 </div>
@@ -90,7 +96,8 @@
     } else if (msg.type === "error") {
       if (msg.message) { err.style.display = "block"; err.textContent = msg.message; }
       else { err.style.display = "none"; }
-    }
+    } else if (msg.type === "params") { renderParams(msg.params); }
+    else if (msg.type === "nodeInfo") { renderInspector(msg.info); }
   };
 
   function send(obj) { if (ws.readyState === 1) ws.send(JSON.stringify(obj)); }
@@ -99,7 +106,7 @@
     const r = canvas.getBoundingClientRect();
     const x = (e.clientX - r.left) * (designW / r.width);
     const y = (e.clientY - r.top) * (designH / r.height);
-    send({ type: "pointer", x, y });
+    send({ type: document.getElementById("inspectToggle").checked ? "pick" : "pointer", x, y });
   });
 
   document.getElementById("applyCanvas").onclick = () => {
@@ -137,4 +144,64 @@
     document.getElementById("newKey").value = "";
     document.getElementById("newVal").value = "";
   };
+
+  function renderParams(params) {
+    const el = document.getElementById("params");
+    el.innerHTML = "";
+    for (const p of params) {
+      if (p.kind === "scalar") {
+        el.appendChild(paramRow(p.name, p.value, (v) =>
+          send({ type: "setParam", name: p.name, field: null, value: coerce(v) })));
+      } else if (p.kind === "table") {
+        const label = document.createElement("div"); label.textContent = p.name; label.style.color = "#999";
+        el.appendChild(label);
+        for (const s of p.subfields) {
+          el.appendChild(paramRow("· " + s.name, s.value, (v) =>
+            send({ type: "setParam", name: p.name, field: s.name, value: coerce(v) })));
+        }
+      }
+    }
+  }
+
+  // Generic labelled input row that fires `onCommit(value)` on change.
+  function paramRow(name, value, onCommit) {
+    const row = document.createElement("div"); row.className = "row";
+    const k = document.createElement("span"); k.textContent = name; k.style.flex = "1";
+    const v = document.createElement("input"); v.value = value; v.style.flex = "1";
+    v.addEventListener("change", () => onCommit(v.value));
+    row.appendChild(k); row.appendChild(v);
+    return row;
+  }
+
+  function renderInspector(info) {
+    const el = document.getElementById("inspector");
+    el.innerHTML = "";
+    const title = document.createElement("div");
+    title.textContent = info.prim + "  (line " + info.line + ")";
+    title.style.fontWeight = "600";
+    el.appendChild(title);
+    for (const p of info.props) {
+      if (p.editable) {
+        const row = document.createElement("div"); row.className = "row";
+        const k = document.createElement("span"); k.textContent = p.name; k.style.flex = "1";
+        const v = document.createElement("input"); v.value = p.value ?? ""; v.style.flex = "1";
+        v.addEventListener("change", () =>
+          send({ type: "setProp", line: info.line, field: p.name, value: coerce(v.value) }));
+        row.appendChild(k); row.appendChild(v); el.appendChild(row);
+      } else {
+        const row = document.createElement("div"); row.style.color = "#888"; row.style.fontSize = "12px";
+        row.textContent = p.name + " — " + (p.reason || "read-only");
+        el.appendChild(row);
+      }
+    }
+  }
+
+  // "12" → 12 (number); "true"/"false" → boolean; else the raw string.
+  function coerce(s) {
+    const t = s.trim();
+    if (t === "true") return true;
+    if (t === "false") return false;
+    const n = parseFloat(t);
+    return (t !== "" && !isNaN(n) && String(n) === t) ? n : s;
+  }
 </script>
