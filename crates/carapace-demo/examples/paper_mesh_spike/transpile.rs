@@ -235,4 +235,50 @@ mod tests {
         std::fs::write(out.join("mesh_gradient.wgsl"), &f.wgsl).unwrap();
         eprintln!("wrote {}/{{vertex,mesh_gradient}}.wgsl", out.display());
     }
+
+    /// Breadth DIAGNOSTIC: transpile every `*.frag` in $PAPER_MORE_DIR through the same ladder,
+    /// reporting which of paper's OTHER shaders reuse the mesh-gradient path. Report-only (not a
+    /// gate): as of this exploration, most reach valid WGSL via the `spirv` rung, but a few
+    /// (e.g. metaballs, voronoi) fail at naga `spv-in` with `InvalidId` — glslang emits SPIR-V
+    /// naga's importer can't yet consume, so those need per-shader attention.
+    #[test]
+    #[ignore]
+    fn transpile_more_shaders() {
+        if !glslang_available() {
+            panic!("glslang required (sfw brew install glslang)");
+        }
+        let dir = std::path::PathBuf::from(
+            std::env::var("PAPER_MORE_DIR").expect("set PAPER_MORE_DIR"),
+        );
+        let mut frags: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.extension().is_some_and(|x| x == "frag"))
+            .collect();
+        frags.sort();
+        let rung_str = |r: &Rung| match r {
+            Rung::Direct => "direct",
+            Rung::Preprocessed => "preproc",
+            Rung::SpirV => "spirv",
+            Rung::Unavailable => "n/a",
+        };
+        let (mut ok, mut fail) = (0, 0);
+        for p in &frags {
+            let name = p.file_stem().unwrap().to_string_lossy();
+            match transpile(&std::fs::read_to_string(p).unwrap(), naga::ShaderStage::Fragment) {
+                Ok(t) => {
+                    ok += 1;
+                    assert!(t.wgsl.contains("@fragment"), "{name}: no @fragment");
+                    eprintln!("OK   {name:<14} rung={:<7} wgsl={}b", rung_str(&t.rung), t.wgsl.len());
+                }
+                Err(e) => {
+                    fail += 1;
+                    eprintln!("FAIL {name:<14} {}", e.lines().next().unwrap_or(""));
+                }
+            }
+        }
+        eprintln!("--- {ok} ok, {fail} fail (diagnostic; failures = naga spv-in edge cases) ---");
+        // Report-only: at least SOME of paper's other shaders must reuse the ladder cleanly.
+        assert!(ok > 0, "expected at least one other paper shader to transpile");
+    }
 }
