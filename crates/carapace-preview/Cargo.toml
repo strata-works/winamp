@@ -1,0 +1,21 @@
+[package]
+name = "carapace-preview"
+version = "0.1.0"
+edition = "2024"   # repo standard (rustfmt.toml + all non-spike crates)
+description = "Live, interactive browser previewer for carapace skins (dev tool)."
+publish = false
+
+[[bin]]
+name = "carapace-preview"
+path = "src/main.rs"
+
+[dependencies]
+carapace = { path = "../carapace" }
+wgpu = "29.0.3"
+pollster = "0.4.0"
+image = "0.25.10"
+notify = "8.2.0"
+tiny_http = "0.12.0"
+tungstenite = "0.29.0"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
