@@ -1,15 +1,29 @@
-//! Live paper mesh-gradient renderer for the macOS host (Phase 2).
+//! Live paper-shader renderer for the macOS host (Phase 2).
 //!
 //! Builds a wgpu pipeline from the PRE-BAKED Phase-1 WGSL against the engine's
 //! device, renders one animated frame per tick into an owned texture, and hands
 //! that texture's view to the engine's `view{ id = "paper" }` compositor.
-//! naga `wgsl-in` is used ONCE (in `new`) to compute uniform byte offsets from
-//! the baked WGSL — no glslang, no per-frame transpile.
+//! naga `wgsl-in` is used ONCE (per pipeline build) to compute uniform byte
+//! offsets from the baked WGSL — no glslang, no per-frame transpile.
+//!
+//! Multiple paper fragment shaders are vendored; `cycle()` switches the surround
+//! shader at runtime (rebuilds the pipeline, keeps the target texture).
 
 use std::collections::BTreeMap;
 
 const VERT_WGSL: &str = include_str!("../shaders/paper/vertex.wgsl");
-const FRAG_WGSL: &str = include_str!("../shaders/paper/mesh_gradient.wgsl");
+
+/// The paper fragment shaders available as the surround, cycled by `PaperView::cycle`.
+/// Each is pre-baked Phase-1 transpiler output; the shared vertex shader links them all.
+/// (Only shaders that transpile cleanly through the ladder are included — e.g. metaballs
+/// and voronoi currently fail at naga `spv-in`, see the breadth diagnostic.)
+const SHADERS: &[(&str, &str)] = &[
+    ("mesh", include_str!("../shaders/paper/mesh_gradient.wgsl")),
+    ("neuro", include_str!("../shaders/paper/neuroNoise.wgsl")),
+    ("swirl", include_str!("../shaders/paper/swirl.wgsl")),
+    ("waves", include_str!("../shaders/paper/waves.wgsl")),
+    ("dither", include_str!("../shaders/paper/dithering.wgsl")),
+];
 
 pub struct PaperView {
     pipeline: wgpu::RenderPipeline,
@@ -18,14 +32,18 @@ pub struct PaperView {
     /// (index into `buffers`, byte offset) of every `u_time` lane to update per frame.
     time_targets: Vec<(usize, u64)>,
     vbuf: wgpu::Buffer,
-    // Read via `texture()`, which is currently only called by the test's readback helper;
-    // Task 4 wires the FFI copy path through it too.
+    // Read via `texture()`, currently only called by the test readback helper.
     #[allow(dead_code)]
     texture: wgpu::Texture,
     view: wgpu::TextureView,
+    /// Index into `SHADERS` of the currently-built fragment shader.
+    idx: usize,
+    w: u32,
+    h: u32,
 }
 
-/// f32 lanes for a named uniform member. `time` animates `u_time`; unlisted -> empty.
+/// f32 lanes for a named uniform member (defaults across all vendored shaders). `time`
+/// animates `u_time`; unlisted names -> empty (zero-filled).
 fn member_values(name: &str, w: u32, h: u32, time: f32) -> Vec<f32> {
     match name {
         "u_time" => vec![time],
@@ -35,6 +53,7 @@ fn member_values(name: &str, w: u32, h: u32, time: f32) -> Vec<f32> {
             vec![0.0]
         }
         "u_originX" | "u_originY" => vec![0.5],
+        "u_center" => vec![0.5, 0.5],
         "u_colorsCount" => vec![4.0],
         "u_colors" => {
             let mut v = vec![
@@ -44,9 +63,31 @@ fn member_values(name: &str, w: u32, h: u32, time: f32) -> Vec<f32> {
             v.resize(40, 0.0);
             v
         }
+        // vec4 colors used by the noise / wave / dither shaders.
+        "u_colorBack" => vec![0.06, 0.07, 0.12, 1.0],
+        "u_colorFront" => vec![0.96, 0.42, 0.62, 1.0],
+        "u_colorMid" => vec![0.25, 0.55, 0.95, 1.0],
+        // mesh-gradient
         "u_distortion" => vec![0.6],
         "u_swirl" => vec![0.5],
         "u_grainMixer" | "u_grainOverlay" => vec![0.0],
+        // neuro noise
+        "u_brightness" | "u_contrast" => vec![1.0],
+        // swirl
+        "u_bandCount" => vec![5.0],
+        "u_noise" => vec![0.3],
+        "u_noiseFrequency" => vec![1.0],
+        "u_twist" => vec![0.4],
+        // waves
+        "u_amplitude" => vec![0.5],
+        "u_frequency" => vec![3.0],
+        "u_spacing" => vec![0.4],
+        // shared shape/softness/proportion knobs
+        "u_proportion" | "u_softness" => vec![0.5],
+        "u_shape" => vec![1.0],
+        // dithering
+        "u_pxSize" => vec![3.0],
+        "u_type" => vec![0.0],
         _ => vec![],
     }
 }
@@ -127,11 +168,7 @@ fn fill_blocks(wgsl: &str, w: u32, h: u32) -> Result<Vec<Block>, String> {
                     if name == "u_time" {
                         time_offset = Some(m.offset as u64);
                     }
-                    write(
-                        &mut data,
-                        m.offset as usize,
-                        &member_values(&name, w, h, 0.0),
-                    );
+                    write(&mut data, m.offset as usize, &member_values(&name, w, h, 0.0));
                 }
             }
             _ => {
@@ -152,120 +189,179 @@ fn fill_blocks(wgsl: &str, w: u32, h: u32) -> Result<Vec<Block>, String> {
     Ok(blocks)
 }
 
+type ShaderState = (
+    wgpu::RenderPipeline,
+    Vec<(u32, wgpu::BindGroup)>,
+    Vec<wgpu::Buffer>,
+    Vec<(usize, u64)>,
+);
+
+/// Build the per-shader GPU state (pipeline + uniform buffers) for one fragment shader,
+/// linked with the shared vertex shader. Validation-scoped: a shader wgpu rejects -> Err.
+fn build_shader(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    frag_src: &str,
+    w: u32,
+    h: u32,
+) -> Result<ShaderState, String> {
+    let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+
+    // Both stages emit their uniform block at @group(0); relocate the fragment's above the
+    // vertex's. Vertex uses group 0 only -> offset 1.
+    let vert_blocks = fill_blocks(VERT_WGSL, w, h)?;
+    let vert_max_group = vert_blocks.iter().map(|b| b.group).max();
+    let group_offset = vert_max_group.map(|g| g + 1).unwrap_or(0);
+    let frag_wgsl = shift_groups(frag_src, group_offset);
+    let frag_blocks = fill_blocks(&frag_wgsl, w, h)?;
+
+    let vs = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("paper-vs"),
+        source: wgpu::ShaderSource::Wgsl(VERT_WGSL.into()),
+    });
+    let fs = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("paper-fs"),
+        source: wgpu::ShaderSource::Wgsl(frag_wgsl.as_str().into()),
+    });
+
+    struct Bound {
+        binding: u32,
+        buffer_idx: usize,
+        vis: wgpu::ShaderStages,
+    }
+    let mut buffers: Vec<wgpu::Buffer> = Vec::new();
+    let mut time_targets: Vec<(usize, u64)> = Vec::new();
+    let mut groups: BTreeMap<u32, Vec<Bound>> = BTreeMap::new();
+    let add = |buffers: &mut Vec<wgpu::Buffer>,
+               groups: &mut BTreeMap<u32, Vec<Bound>>,
+               time_targets: &mut Vec<(usize, u64)>,
+               blk: &Block,
+               vis: wgpu::ShaderStages| {
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("paper-uniform"),
+            size: (blk.data.len() as u64).max(16),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&buffer, 0, &blk.data);
+        let idx = buffers.len();
+        buffers.push(buffer);
+        if let Some(off) = blk.time_offset {
+            time_targets.push((idx, off));
+        }
+        groups.entry(blk.group).or_default().push(Bound {
+            binding: blk.binding,
+            buffer_idx: idx,
+            vis,
+        });
+    };
+    for b in &vert_blocks {
+        add(
+            &mut buffers,
+            &mut groups,
+            &mut time_targets,
+            b,
+            wgpu::ShaderStages::VERTEX,
+        );
+    }
+    for b in &frag_blocks {
+        add(
+            &mut buffers,
+            &mut groups,
+            &mut time_targets,
+            b,
+            wgpu::ShaderStages::FRAGMENT,
+        );
+    }
+
+    let mut bgls: Vec<wgpu::BindGroupLayout> = Vec::new();
+    let mut bind_groups: Vec<(u32, wgpu::BindGroup)> = Vec::new();
+    for (gi, bounds) in groups.iter() {
+        let entries: Vec<wgpu::BindGroupLayoutEntry> = bounds
+            .iter()
+            .map(|b| wgpu::BindGroupLayoutEntry {
+                binding: b.binding,
+                visibility: b.vis,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            })
+            .collect();
+        let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("paper-bgl"),
+            entries: &entries,
+        });
+        let bg_entries: Vec<wgpu::BindGroupEntry> = bounds
+            .iter()
+            .map(|b| wgpu::BindGroupEntry {
+                binding: b.binding,
+                resource: buffers[b.buffer_idx].as_entire_binding(),
+            })
+            .collect();
+        let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("paper-bg"),
+            layout: &bgl,
+            entries: &bg_entries,
+        });
+        bgls.push(bgl);
+        bind_groups.push((*gi, bg));
+    }
+    let bgl_refs: Vec<Option<&wgpu::BindGroupLayout>> = bgls.iter().map(Some).collect();
+    let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("paper-pl"),
+        bind_group_layouts: &bgl_refs,
+        immediate_size: 0,
+    });
+
+    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("paper-pipeline"),
+        layout: Some(&pl),
+        vertex: wgpu::VertexState {
+            module: &vs,
+            entry_point: entry_point_name(VERT_WGSL, "@vertex").as_deref(),
+            compilation_options: Default::default(),
+            buffers: &[wgpu::VertexBufferLayout {
+                array_stride: 16,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &[wgpu::VertexAttribute {
+                    format: wgpu::VertexFormat::Float32x4,
+                    offset: 0,
+                    shader_location: 0,
+                }],
+            }],
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &fs,
+            entry_point: entry_point_name(frag_src, "@fragment").as_deref(),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                blend: None,
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleStrip,
+            ..Default::default()
+        },
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        multiview_mask: None,
+        cache: None,
+    });
+
+    if let Some(e) = pollster::block_on(scope.pop()) {
+        return Err(format!("paper pipeline validation: {e}"));
+    }
+    Ok((pipeline, bind_groups, buffers, time_targets))
+}
+
 impl PaperView {
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, w: u32, h: u32) -> Result<Self, String> {
-        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
-
-        // Both stages emit their uniform block at @group(0); relocate the fragment's
-        // above the vertex's. Vertex uses group 0 only -> offset 1.
-        let vert_blocks = fill_blocks(VERT_WGSL, w, h)?;
-        let vert_max_group = vert_blocks.iter().map(|b| b.group).max();
-        let group_offset = vert_max_group.map(|g| g + 1).unwrap_or(0);
-        let frag_wgsl = shift_groups(FRAG_WGSL, group_offset);
-        let frag_blocks = fill_blocks(&frag_wgsl, w, h)?;
-
-        let vs = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("paper-vs"),
-            source: wgpu::ShaderSource::Wgsl(VERT_WGSL.into()),
-        });
-        let fs = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("paper-fs"),
-            source: wgpu::ShaderSource::Wgsl(frag_wgsl.as_str().into()),
-        });
-
-        // Buffers per (group,binding), grouped by group index.
-        struct Bound {
-            binding: u32,
-            buffer_idx: usize,
-            vis: wgpu::ShaderStages,
-        }
-        let mut buffers: Vec<wgpu::Buffer> = Vec::new();
-        let mut time_targets: Vec<(usize, u64)> = Vec::new();
-        let mut groups: BTreeMap<u32, Vec<Bound>> = BTreeMap::new();
-        let add = |buffers: &mut Vec<wgpu::Buffer>,
-                   groups: &mut BTreeMap<u32, Vec<Bound>>,
-                   time_targets: &mut Vec<(usize, u64)>,
-                   blk: &Block,
-                   vis: wgpu::ShaderStages| {
-            let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("paper-uniform"),
-                size: (blk.data.len() as u64).max(16),
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            queue.write_buffer(&buffer, 0, &blk.data);
-            let idx = buffers.len();
-            buffers.push(buffer);
-            if let Some(off) = blk.time_offset {
-                time_targets.push((idx, off));
-            }
-            groups.entry(blk.group).or_default().push(Bound {
-                binding: blk.binding,
-                buffer_idx: idx,
-                vis,
-            });
-        };
-        for b in &vert_blocks {
-            add(
-                &mut buffers,
-                &mut groups,
-                &mut time_targets,
-                b,
-                wgpu::ShaderStages::VERTEX,
-            );
-        }
-        for b in &frag_blocks {
-            add(
-                &mut buffers,
-                &mut groups,
-                &mut time_targets,
-                b,
-                wgpu::ShaderStages::FRAGMENT,
-            );
-        }
-
-        let mut bgls: Vec<wgpu::BindGroupLayout> = Vec::new();
-        let mut bind_groups: Vec<(u32, wgpu::BindGroup)> = Vec::new();
-        for (gi, bounds) in groups.iter() {
-            let entries: Vec<wgpu::BindGroupLayoutEntry> = bounds
-                .iter()
-                .map(|b| wgpu::BindGroupLayoutEntry {
-                    binding: b.binding,
-                    visibility: b.vis,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                })
-                .collect();
-            let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("paper-bgl"),
-                entries: &entries,
-            });
-            let bg_entries: Vec<wgpu::BindGroupEntry> = bounds
-                .iter()
-                .map(|b| wgpu::BindGroupEntry {
-                    binding: b.binding,
-                    resource: buffers[b.buffer_idx].as_entire_binding(),
-                })
-                .collect();
-            let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("paper-bg"),
-                layout: &bgl,
-                entries: &bg_entries,
-            });
-            bgls.push(bgl);
-            bind_groups.push((*gi, bg));
-        }
-        let bgl_refs: Vec<Option<&wgpu::BindGroupLayout>> = bgls.iter().map(Some).collect();
-        let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("paper-pl"),
-            bind_group_layouts: &bgl_refs,
-            immediate_size: 0,
-        });
-
+        // Shared quad (a full clip-space quad) + target texture — reused across shaders.
         #[rustfmt::skip]
         let quad: [f32; 16] = [
             -1.0,-1.0,0.0,1.0,  1.0,-1.0,0.0,1.0,
@@ -279,43 +375,6 @@ impl PaperView {
         });
         queue.write_buffer(&vbuf, 0, unsafe {
             std::slice::from_raw_parts(quad.as_ptr() as *const u8, std::mem::size_of_val(&quad))
-        });
-
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("paper-pipeline"),
-            layout: Some(&pl),
-            vertex: wgpu::VertexState {
-                module: &vs,
-                entry_point: entry_point_name(VERT_WGSL, "@vertex").as_deref(),
-                compilation_options: Default::default(),
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: 16,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &[wgpu::VertexAttribute {
-                        format: wgpu::VertexFormat::Float32x4,
-                        offset: 0,
-                        shader_location: 0,
-                    }],
-                }],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &fs,
-                entry_point: entry_point_name(FRAG_WGSL, "@fragment").as_deref(),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::Rgba8Unorm,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleStrip,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
         });
 
         let texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -337,9 +396,9 @@ impl PaperView {
         });
         let view = texture.create_view(&Default::default());
 
-        if let Some(e) = pollster::block_on(scope.pop()) {
-            return Err(format!("paper pipeline validation: {e}"));
-        }
+        let (pipeline, bind_groups, buffers, time_targets) =
+            build_shader(device, queue, SHADERS[0].1, w, h)?;
+
         Ok(PaperView {
             pipeline,
             bind_groups,
@@ -348,7 +407,27 @@ impl PaperView {
             vbuf,
             texture,
             view,
+            idx: 0,
+            w,
+            h,
         })
+    }
+
+    /// Switch to the next vendored paper shader (rebuilds the pipeline; keeps the target
+    /// texture). A shader that fails to build is skipped and the current one is kept.
+    pub fn cycle(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        let next = (self.idx + 1) % SHADERS.len();
+        match build_shader(device, queue, SHADERS[next].1, self.w, self.h) {
+            Ok((pipeline, bind_groups, buffers, time_targets)) => {
+                self.pipeline = pipeline;
+                self.bind_groups = bind_groups;
+                self.buffers = buffers;
+                self.time_targets = time_targets;
+                self.idx = next;
+                eprintln!("[carapace] paper shader -> {}", SHADERS[next].0);
+            }
+            Err(e) => eprintln!("[carapace] paper shader '{}' build failed: {e}", SHADERS[next].0),
+        }
     }
 
     pub fn render(&self, device: &wgpu::Device, queue: &wgpu::Queue, time: f32) {
@@ -480,5 +559,27 @@ mod tests {
         // Animated: t=0 vs t=3 differ.
         let diff = a.iter().zip(b.iter()).filter(|(x, y)| x != y).count();
         assert!(diff as f64 / a.len() as f64 > 0.01, "u_time not animating");
+    }
+
+    /// Every vendored shader must build + render a non-flat image, and cycle() must walk
+    /// through all of them and return to the first.
+    #[test]
+    fn all_shaders_build_and_cycle() {
+        let (device, queue) = headless();
+        let (w, h) = (128u32, 128u32);
+        let mut pv = PaperView::new(&device, &queue, w, h).expect("new");
+        for i in 0..SHADERS.len() {
+            pv.render(&device, &queue, 1.0);
+            let px = readback(&device, &queue, &pv, w, h);
+            let first = &px[0..4];
+            assert!(
+                !px.chunks_exact(4).all(|p| p == first),
+                "shader '{}' rendered a flat image",
+                SHADERS[pv.idx].0
+            );
+            assert_eq!(pv.idx, i, "cycle order");
+            pv.cycle(&device, &queue);
+        }
+        assert_eq!(pv.idx, 0, "cycle should wrap back to the first shader");
     }
 }

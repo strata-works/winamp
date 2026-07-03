@@ -26,3 +26,5 @@ region{ path = rect{x=266, y=226, w=34, h=36}, on_press = function() host.toggle
 region{ path = rect{x=300, y=228, w=32, h=32}, on_press = function() host.next() end }
 -- Scrub strip over the progress bar (Swift draws the track at content-local y=180 → canvas y≈204).
 region{ path = rect{x=188, y=198, w=248, h=22}, on_press = function() host.scrub() end }
+-- (Clicking the album art cycles the paper surround shader — handled host-side in mouseUp,
+--  since it drives the engine's paper renderer directly, not a skin action. Also the 's' key.)

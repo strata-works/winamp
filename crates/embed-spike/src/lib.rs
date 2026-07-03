@@ -299,6 +299,21 @@ mod ffi_impl {
         }
     }
 
+    /// Switch the `view{ id = "paper" }` surround to the next vendored paper shader.
+    ///
+    /// # Safety
+    /// `ptr` must come from `carapace_create`.
+    #[no_mangle]
+    pub unsafe extern "C" fn carapace_cycle_shader(ptr: *mut CarapaceEngine) {
+        let Some(e) = (unsafe { ptr.as_mut() }) else {
+            return;
+        };
+        let CarapaceEngine { gpu, paper, .. } = e;
+        if let Some(pv) = paper.as_mut() {
+            pv.cycle(&gpu.device, &gpu.queue);
+        }
+    }
+
     /// Forward a pointer event in canvas coordinates. kind: 0 = press (others ignored in spike).
     ///
     /// # Safety

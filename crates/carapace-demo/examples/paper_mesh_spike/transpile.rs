@@ -262,6 +262,11 @@ mod tests {
             Rung::SpirV => "spirv",
             Rung::Unavailable => "n/a",
         };
+        // If PAPER_MORE_OUT is set, write each SUCCESSFUL transpile's WGSL there (vendoring).
+        let out = std::env::var("PAPER_MORE_OUT").ok().map(std::path::PathBuf::from);
+        if let Some(o) = &out {
+            std::fs::create_dir_all(o).unwrap();
+        }
         let (mut ok, mut fail) = (0, 0);
         for p in &frags {
             let name = p.file_stem().unwrap().to_string_lossy();
@@ -269,6 +274,9 @@ mod tests {
                 Ok(t) => {
                     ok += 1;
                     assert!(t.wgsl.contains("@fragment"), "{name}: no @fragment");
+                    if let Some(o) = &out {
+                        std::fs::write(o.join(format!("{name}.wgsl")), &t.wgsl).unwrap();
+                    }
                     eprintln!("OK   {name:<14} rung={:<7} wgsl={}b", rung_str(&t.rung), t.wgsl.len());
                 }
                 Err(e) => {
