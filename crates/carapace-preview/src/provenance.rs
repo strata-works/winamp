@@ -3,10 +3,6 @@
 //! the engine's per-node `Origin` (source line) to answer node-pick editability. See
 //! docs/superpowers/specs/2026-07-01-carapace-preview-design.md.
 //!
-//! Not wired into `main.rs` yet — this task only adds the static extraction + splice primitives.
-//! Later tasks (call-site indexing, correlation, protocol, UI) consume this module's public API.
-#![allow(dead_code)]
-
 use full_moon::ast::Stmt;
 use full_moon::node::Node;
 

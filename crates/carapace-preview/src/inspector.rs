@@ -5,8 +5,6 @@ use crate::provenance::{FieldState, LiteralValue, SourceModel};
 use carapace::scene::Origin;
 
 #[derive(Debug, Clone)]
-// Not wired into the UI yet — consumed starting Task 6/7.
-#[allow(dead_code)]
 pub struct NodeInfo {
     pub prim: String,
     pub line: u32,
@@ -14,8 +12,6 @@ pub struct NodeInfo {
 }
 
 #[derive(Debug, Clone)]
-// Not wired into the UI yet — consumed starting Task 6/7.
-#[allow(dead_code)]
 pub struct PropInfo {
     pub name: String,
     pub editable: bool,
@@ -38,8 +34,6 @@ fn literal_display(v: &LiteralValue) -> String {
 
 /// Build inspector info for the picked node. `None` if the node is engine-generated (`call: None`),
 /// has no source line, or no top-level call maps to that line (e.g. loop-nested and not indexed).
-// Not wired into the UI yet — consumed starting Task 6/7.
-#[allow(dead_code)]
 pub fn node_info(origins: &[Origin], picked: usize, model: &SourceModel) -> Option<NodeInfo> {
     let origin = origins.get(picked)?;
     origin.call?; // engine-generated rows/highlight are not inspectable

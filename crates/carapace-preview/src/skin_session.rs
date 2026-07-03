@@ -82,9 +82,6 @@ impl SkinSession {
         }
     }
 
-    // Not wired into main.rs/protocol dispatch yet — consumed starting Task 7/8
-    // (browser bridge + inspector wiring). Exercised directly by this file's tests today.
-    #[allow(dead_code)]
     pub fn entry_path(&self) -> PathBuf {
         self.dir.join(&self.entry)
     }
@@ -93,12 +90,10 @@ impl SkinSession {
         std::fs::read_to_string(self.entry_path()).unwrap_or_default()
     }
 
-    #[allow(dead_code)]
     pub fn source_model(&self) -> crate::provenance::SourceModel {
         crate::provenance::parse_source(&self.read_source())
     }
 
-    #[allow(dead_code)]
     pub fn params_json(&self) -> serde_json::Value {
         use crate::provenance::LiteralValue;
         let m = self.source_model();
@@ -121,7 +116,6 @@ impl SkinSession {
         serde_json::Value::Array(items)
     }
 
-    #[allow(dead_code)]
     pub fn pick(
         &self,
         w: f32,
@@ -134,7 +128,6 @@ impl SkinSession {
         crate::inspector::node_info(&origins, idx, &self.source_model())
     }
 
-    #[allow(dead_code)]
     pub fn apply_prop(&self, line: u32, field: &str, value: &str) -> Result<(), String> {
         use crate::provenance::{FieldState, LiteralValue};
         let src = self.read_source();
@@ -159,7 +152,6 @@ impl SkinSession {
         std::fs::write(self.entry_path(), out).map_err(|e| e.to_string())
     }
 
-    #[allow(dead_code)]
     pub fn apply_param(&self, name: &str, sub: Option<&str>, value: &str) -> Result<(), String> {
         use crate::provenance::LiteralValue;
         let src = self.read_source();
