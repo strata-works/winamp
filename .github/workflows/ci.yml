@@ -78,4 +78,6 @@ jobs:
         # needs compute (GL/llvmpipe can't drive vello).
         env:
           WGPU_BACKEND: vulkan
-        run: cargo test --locked -p carapace --features gpu-tests --test render_offscreen
+        run: |
+          cargo test --locked -p carapace --features gpu-tests --test render_offscreen
+          cargo test --locked -p carapace-preview --features gpu-tests renders_a_nonempty_frame

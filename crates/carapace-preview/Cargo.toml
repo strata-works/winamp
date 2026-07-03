@@ -9,6 +9,12 @@ publish = false
 name = "carapace-preview"
 path = "src/main.rs"
 
+[features]
+# Gates the offscreen-render test that needs a real GPU adapter. Off by default so
+# the headless `check` CI lane (`cargo test --workspace`) compiles it out; the
+# `render` lane (lavapipe software Vulkan) runs it with `--features gpu-tests`.
+gpu-tests = []
+
 [dependencies]
 carapace = { path = "../carapace" }
 wgpu = "29.0.3"

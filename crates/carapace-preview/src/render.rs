@@ -175,12 +175,16 @@ pub fn frame_hash(rgba: &[u8]) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "gpu-tests")]
     use std::path::Path;
+    #[cfg(feature = "gpu-tests")]
     use std::time::Duration;
 
     // The canonical minimal render fixture that ships with the engine crate.
+    #[cfg(feature = "gpu-tests")]
     const OK_SKIN: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../carapace/tests/skins/ok");
 
+    #[cfg(feature = "gpu-tests")]
     fn load_ok_engine() -> (carapace::engine::Engine, u32, u32) {
         let (manifest, source) =
             carapace::skin::load_dir(Path::new(OK_SKIN)).expect("load ok skin");
@@ -195,6 +199,7 @@ mod tests {
         (engine, manifest.canvas.width, manifest.canvas.height)
     }
 
+    #[cfg(feature = "gpu-tests")]
     #[test]
     fn renders_a_nonempty_frame_of_expected_dims() {
         let (mut engine, w, h) = load_ok_engine();
