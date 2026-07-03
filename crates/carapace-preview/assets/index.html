@@ -120,6 +120,7 @@
     k.addEventListener("change", push);
     row.appendChild(k); row.appendChild(v);
     valuesEl.appendChild(row);
+    push();
   }
 
   document.getElementById("addVal").onclick = () => {
@@ -128,7 +129,5 @@
     addValueRow(key, document.getElementById("newVal").value);
     document.getElementById("newKey").value = "";
     document.getElementById("newVal").value = "";
-    // fire once immediately
-    const num = parseFloat(document.querySelector("#values .row:last-child input:nth-child(2)").value);
   };
 </script>
