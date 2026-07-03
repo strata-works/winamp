@@ -236,6 +236,19 @@ pub enum Node {
     },
 }
 
+/// Where a scene node came from in the skin source. Metadata only — the renderer and
+/// hit-test ignore it. Populated at load; carried through `layout`. See
+/// `docs/superpowers/specs/2026-07-03-scene-node-provenance-design.md`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct Origin {
+    /// 1-based line of the primitive call in the skin's entry Lua, if known.
+    pub line: Option<u32>,
+    /// Monotonic index of the primitive call that emitted this node. Nodes from the
+    /// same call (e.g. a `fill{}` with `on_press` emits Fill + Hotspot) share it.
+    /// `None` for engine-generated nodes (list rows, selection highlight).
+    pub call: Option<u32>,
+}
+
 #[derive(Clone, Debug)]
 pub struct Scene {
     pub nodes: Vec<Node>,
@@ -489,6 +502,23 @@ impl Scene {
         None
     }
 
+    /// Index of the topmost (last in z-order) node whose bounding box contains `p`. Zero-area
+    /// nodes (Text has no measured size) are skipped. This is a scene-level pick for authoring
+    /// tools — broader than `hit_any`, which dispatches only interactive kinds. Call on a
+    /// layout-resolved scene so bounds are in logical coordinates.
+    pub fn pick(&self, p: Pt) -> Option<usize> {
+        self.nodes.iter().enumerate().rev().find_map(|(i, node)| {
+            let b = crate::layout::node_bbox(node)?;
+            let inside = b.w > 0.0
+                && b.h > 0.0
+                && p.x >= b.x
+                && p.x <= b.x + b.w
+                && p.y >= b.y
+                && p.y <= b.y + b.h;
+            inside.then_some(i)
+        })
+    }
+
     /// True if `p` falls inside any drawn node's bounds — the skin's opaque coverage geometry.
     /// Rect-bounded nodes use their dest/region; polygon nodes use `region_of(path)`. `Text` is
     /// ignored (no reliable glyph bounds). This is the geometry a host uses for a shaped-window /
@@ -646,6 +676,61 @@ mod tests {
             scene.hit_any(Pt { x: 50.0, y: 80.0 }),
             Some(Hit::Handler(7))
         );
+    }
+
+    #[test]
+    fn pick_returns_topmost_node_by_bbox() {
+        fn fill(pts: &[(f32, f32)]) -> Node {
+            Node::Fill {
+                path: pts.iter().map(|&(x, y)| Pt { x, y }).collect(),
+                paint: Paint::Solid(Color {
+                    r: 0,
+                    g: 0,
+                    b: 0,
+                    a: 255,
+                }),
+            }
+        }
+        let scene = Scene {
+            nodes: vec![
+                fill(&[(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)]), // big, drawn first
+                fill(&[(10.0, 10.0), (30.0, 10.0), (30.0, 30.0), (10.0, 30.0)]), // small, drawn on top
+            ],
+            canvas: (100, 100),
+        };
+        assert_eq!(scene.pick(Pt { x: 20.0, y: 20.0 }), Some(1), "topmost wins");
+        assert_eq!(
+            scene.pick(Pt { x: 80.0, y: 80.0 }),
+            Some(0),
+            "only the big fill"
+        );
+        assert_eq!(scene.pick(Pt { x: 200.0, y: 200.0 }), None, "empty space");
+        // pick uses inclusive <=/>= bounds, so a point exactly on the big fill's bbox edge
+        // (100,100) is still contained.
+        assert_eq!(
+            scene.pick(Pt { x: 100.0, y: 100.0 }),
+            Some(0),
+            "point on bbox edge is inclusive"
+        );
+    }
+
+    #[test]
+    fn pick_skips_zero_area_nodes() {
+        // A degenerate single-point path has a zero-area bbox — same as a Text node (which
+        // node_bbox reports as a zero-size point). Neither is pickable.
+        let scene = Scene {
+            nodes: vec![Node::Fill {
+                path: vec![Pt { x: 5.0, y: 5.0 }],
+                paint: Paint::Solid(Color {
+                    r: 0,
+                    g: 0,
+                    b: 0,
+                    a: 255,
+                }),
+            }],
+            canvas: (50, 50),
+        };
+        assert_eq!(scene.pick(Pt { x: 5.0, y: 5.0 }), None);
     }
 
     fn l_path() -> Vec<Pt> {

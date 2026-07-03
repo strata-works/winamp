@@ -74,9 +74,10 @@ pub fn resolve_bbox(design: (f32, f32), logical: (f32, f32), bbox: Rect, a: Anch
     Rect { x, y, w, h }
 }
 
-/// The design-space bounding box of a node (rect for rect-nodes; point-bbox for text; path bbox
-/// otherwise). Returns `None` for nodes without geometry to resolve.
-fn node_bbox(node: &Node) -> Option<Rect> {
+/// The design/logical bounding box of a node (rect for rect-nodes; point-bbox for text; path bbox
+/// otherwise). `None` for nodes without geometry. Public for authoring tools that render selection
+/// outlines and pick nodes.
+pub fn node_bbox(node: &Node) -> Option<Rect> {
     fn path_bbox(path: &[Pt]) -> Option<Rect> {
         let xs = path.iter().map(|p| p.x);
         let ys = path.iter().map(|p| p.y);
