@@ -1,9 +1,15 @@
 //! Panic-safety, status codes, and the thread-local error channel shared by every export.
 //!
-//! Boundary policy: every `#[unsafe(no_mangle)]` export wraps its body in `ffi_guard!`, which catches any
-//! panic (so nothing unwinds into the host's foreign frames) and turns it into `ErrPanic`. Handle-
-//! bearing calls additionally *poison* the handle. We NEVER `abort()`: carapace runs inside the
-//! host's process.
+//! Boundary policy: `carapace_create` wraps its synchronous init body in `ffi_guard_no_handle!`,
+//! catching any panic (so nothing unwinds into the host's foreign frames) and turning it into
+//! `ErrPanic`. Once a handle exists, panics are caught on the RENDER THREAD instead
+//! (`render_thread::render_guarded`'s `catch_unwind`), which sets the shared `poisoned` flag and
+//! lets the thread exit; every front-end export then short-circuits with `ErrPoisoned` by reading
+//! that atomic directly — no per-call guard needed for the thin, genuinely panic-free front-end
+//! functions. `carapace_hit_test` is the one exception: it runs engine geometry code on the
+//! CALLER's thread (not the render thread), so it carries its own `catch_unwind` and reports a
+//! caught panic there as `ErrPanic` without poisoning the handle. We NEVER `abort()`: carapace runs
+//! inside the host's process.
 
 use std::cell::RefCell;
 use std::ffi::c_char;
@@ -21,8 +27,8 @@ pub enum CarapaceStatus {
     ErrPanic = 5,
 }
 
-pub const CARAPACE_ABI_MAJOR: u32 = 0;
-pub const CARAPACE_ABI_MINOR: u32 = 1;
+pub const CARAPACE_ABI_MAJOR: u32 = 2;
+pub const CARAPACE_ABI_MINOR: u32 = 0;
 
 thread_local! {
     static LAST_ERROR: RefCell<String> = const { RefCell::new(String::new()) };
@@ -35,6 +41,16 @@ thread_local! {
 #[cfg_attr(not(any(target_os = "macos", target_os = "ios")), allow(dead_code))]
 pub fn set_last_error(msg: &str) {
     LAST_ERROR.with(|e| *e.borrow_mut() = msg.to_string());
+}
+
+/// Read the current thread's last error as an owned `String` (a clone; the TLS is left intact).
+/// The render thread uses this to lift the panic message the process-wide panic hook just wrote
+/// into ITS thread-local — captured on the render thread — up into the shared poison slot, so a
+/// host calling `carapace_last_error` on its OWN thread can retrieve it via the poison path.
+// Only non-test caller is `render_guarded` (Apple-gated); dead on non-Apple.
+#[cfg_attr(not(any(target_os = "macos", target_os = "ios")), allow(dead_code))]
+pub fn last_error_string() -> String {
+    LAST_ERROR.with(|e| e.borrow().clone())
 }
 
 /// Install (once per process) a panic hook that captures the panic message + location into the
@@ -65,25 +81,6 @@ macro_rules! ffi_guard_no_handle {
     };
 }
 
-/// Wrap a handle-bearing export body. On panic: poison the handle, return `ErrPanic`.
-/// `$ptr` is the `*mut CarapaceEngine` passed to the export.
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-macro_rules! ffi_guard {
-    ($ptr:expr, $body:expr) => {
-        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| $body)) {
-            Ok(status) => status,
-            Err(_) => {
-                if let Some(h) = unsafe { ($ptr).as_mut() } {
-                    h.poisoned = true;
-                }
-                $crate::guard::CarapaceStatus::ErrPanic
-            }
-        }
-    };
-}
-
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-pub(crate) use ffi_guard;
 // Only imported via this path by `handle.rs` (Apple-gated); dead on non-Apple (the crate's own
 // tests below reach the macro directly, without going through this re-export).
 #[cfg_attr(

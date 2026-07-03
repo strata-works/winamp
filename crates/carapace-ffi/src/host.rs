@@ -15,12 +15,11 @@ pub struct CarapaceHostVTable {
     pub get_num: Option<extern "C" fn(*mut c_void, *const c_char, *mut f64) -> bool>,
     pub get_str: Option<extern "C" fn(*mut c_void, *const c_char, *mut c_char, usize) -> bool>,
     pub invoke: Option<extern "C" fn(*mut c_void, *const c_char)>,
+    /// v2: fired on the render thread when a frame lands in `surfaces[index]`. `frame_id` is a
+    /// monotonic counter starting at 1. Must be thread-safe, non-blocking, and MUST NOT call any
+    /// `carapace_*` function (that reenters the queue/loop and can deadlock).
+    pub frame_ready: Option<extern "C" fn(*mut c_void, u32, u64)>,
 }
-
-// The spike runs the engine and the host calls on one thread (the render tick); the raw ctx
-// pointer is only ever touched there. Send/Sync are asserted to satisfy the engine's `Box<dyn Host>`.
-unsafe impl Send for CarapaceHostVTable {}
-unsafe impl Sync for CarapaceHostVTable {}
 
 const ACTIONS: &[ActionSpec] = &[
     ActionSpec { name: "toggle" },
@@ -131,7 +130,20 @@ mod tests {
             get_num: Some(fake_get_num),
             get_str: None,
             invoke: Some(fake_invoke),
+            frame_ready: None,
         }
+    }
+
+    #[test]
+    fn vtable_has_frame_ready_slot() {
+        let vt = CarapaceHostVTable {
+            ctx: std::ptr::null_mut(),
+            get_num: None,
+            get_str: None,
+            invoke: None,
+            frame_ready: None,
+        };
+        assert!(vt.frame_ready.is_none());
     }
 
     #[test]
