@@ -33,6 +33,31 @@ pub struct ScalarSpan {
     pub span: (usize, usize),
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct SourceModel {
+    pub params: Vec<Param>,
+    pub calls: Vec<CallSite>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CallSite {
+    pub line: u32,
+    pub prim: String,
+    pub fields: Vec<FieldInfo>,
+}
+
+#[derive(Debug, Clone)]
+pub struct FieldInfo {
+    pub name: String,
+    pub state: FieldState,
+}
+
+#[derive(Debug, Clone)]
+pub enum FieldState {
+    Literal { value: LiteralValue },
+    NonLiteral { reason: String },
+}
+
 /// Byte-splice `new_text` over `span` in `src`. The single write primitive — never regenerates.
 pub fn splice(src: &str, span: (usize, usize), new_text: &str) -> String {
     let mut out = String::with_capacity(src.len());
@@ -94,6 +119,91 @@ pub fn parse_params(src: &str) -> Vec<Param> {
     out
 }
 
+/// Full model: params (Task 1) + top-level primitive call sites (this task).
+pub fn parse_source(src: &str) -> SourceModel {
+    SourceModel {
+        params: parse_params(src),
+        calls: parse_calls(src),
+    }
+}
+
+/// The bare name a `FunctionCall` prefix targets, if it's a simple identifier (`fill`), plus the
+/// table-constructor argument of a single `{...}` call. Returns `None` for anything else.
+fn call_prim_and_table(
+    fc: &full_moon::ast::FunctionCall,
+) -> Option<(String, &full_moon::ast::TableConstructor)> {
+    use full_moon::ast::{Call, FunctionArgs, Prefix, Suffix};
+    let Prefix::Name(name) = fc.prefix() else {
+        return None;
+    };
+    let prim = name.token().to_string();
+    // Exactly one suffix: an anonymous call taking a table constructor: `fill{ ... }`.
+    let mut suffixes = fc.suffixes();
+    let (first, second) = (suffixes.next(), suffixes.next());
+    if second.is_some() {
+        return None;
+    }
+    match first {
+        Some(Suffix::Call(Call::AnonymousCall(FunctionArgs::TableConstructor(t)))) => {
+            Some((prim, t))
+        }
+        _ => None,
+    }
+}
+
+fn parse_calls(src: &str) -> Vec<CallSite> {
+    let Ok(ast) = full_moon::parse(src) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for stmt in ast.nodes().stmts() {
+        let Stmt::FunctionCall(fc) = stmt else {
+            continue;
+        };
+        let Some((prim, table)) = call_prim_and_table(fc) else {
+            continue;
+        };
+        let line = fc.start_position().map(|p| p.line() as u32).unwrap_or(0);
+        let fields = table_fields(src, table);
+        out.push(CallSite { line, prim, fields });
+    }
+    out
+}
+
+/// Index the `NameKey` fields (`x = 10`, `color = {...}`) of a table constructor.
+fn table_fields(src: &str, table: &full_moon::ast::TableConstructor) -> Vec<FieldInfo> {
+    use full_moon::ast::Field;
+    let mut out = Vec::new();
+    for field in table.fields() {
+        let Field::NameKey { key, value, .. } = field else {
+            continue; // positional / [expr]-key fields: not addressable by name (v1)
+        };
+        let name = key.token().to_string();
+        let state = match scalar_literal(src, value) {
+            Some(value) => FieldState::Literal { value },
+            None => FieldState::NonLiteral {
+                reason: non_literal_reason(value),
+            },
+        };
+        out.push(FieldInfo { name, state });
+    }
+    out
+}
+
+/// A short human reason a field isn't an editable scalar literal.
+fn non_literal_reason(expr: &full_moon::ast::Expression) -> String {
+    use full_moon::ast::Expression;
+    match expr {
+        Expression::Var(_) => "bound to a variable".to_string(),
+        Expression::TableConstructor(_) => "table value".to_string(),
+        Expression::FunctionCall(_) => "computed by a call".to_string(),
+        Expression::BinaryOperator { .. } | Expression::UnaryOperator { .. } => {
+            "computed expression".to_string()
+        }
+        _ => "not a literal".to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -151,5 +261,43 @@ mod tests {
         let src = "local RI = 90\n";
         let out = splice(src, (11, 13), "120");
         assert_eq!(out, "local RI = 120\n");
+    }
+
+    #[test]
+    fn indexes_top_level_call_fields_with_line_and_literacy() {
+        let src = "fill{ x = 10, y = 20, color = STONE, tint = 1 + 2 }\n";
+        let model = parse_source(src);
+        assert_eq!(model.calls.len(), 1);
+        let c = &model.calls[0];
+        assert_eq!(c.prim, "fill");
+        assert_eq!(c.line, 1);
+        let f = |n: &str| c.fields.iter().find(|f| f.name == n).unwrap();
+        match &f("x").state {
+            FieldState::Literal {
+                value: LiteralValue::Scalar { text, span },
+            } => {
+                assert_eq!(text, "10");
+                assert_eq!(&src[span.0..span.1], "10");
+            }
+            _ => panic!("x literal"),
+        }
+        assert!(
+            matches!(f("color").state, FieldState::NonLiteral { .. }),
+            "STONE is a variable"
+        );
+        assert!(
+            matches!(f("tint").state, FieldState::NonLiteral { .. }),
+            "1+2 is an expression"
+        );
+    }
+
+    #[test]
+    fn ignores_calls_nested_in_loops_at_this_stage() {
+        let src = "for i=1,3 do\n  fill{ x = 10 }\nend\n";
+        let model = parse_source(src);
+        assert!(
+            model.calls.is_empty(),
+            "loop-nested calls are not top-level"
+        );
     }
 }
