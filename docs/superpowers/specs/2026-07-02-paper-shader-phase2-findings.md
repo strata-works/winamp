@@ -87,12 +87,35 @@ representative 6 through the Phase-1 ladder (diagnostic `transpile_more_shaders`
 
 - **4 transpile clean** via the `spirv` rung: dithering, neuro noise, swirl, waves — vendored +
   wired into the switcher (with mesh gradient = 5 total).
-- **2 fail** at naga `spv-in` with `InvalidId`: **metaballs, voronoi** — glslang emits valid
-  SPIR-V that naga's importer can't consume.
+- **2 originally failed** at naga `spv-in` with `InvalidId`: **metaballs, voronoi** — the only two
+  that sample `u_noiseTexture`. **Now resolved** (post-spike follow-up): all 6 transpile.
 
-**Conclusion:** "trivial by reuse" is *mostly* true but **NOT 100%** — a subset of shaders hit
-naga `spv-in` edge cases needing per-shader attention (different glslang flags, a naga workaround,
-or SPIRV-Cross). The switcher ships the 4 clean ones, not all ~20.
+### Update (2026-07-03) — metaballs/voronoi `spv-in` `InvalidId` resolved
+
+Root cause: naga 29's SPIR-V frontend does **not** support Vulkan **combined** image samplers. It
+resolves the sampled-image operand of `OpImageSample*` only when produced by an `OpSampledImage`
+instruction; glslang lowers a combined `sampler2D` uniform to a direct `OpLoad` of an
+`OpTypeSampledImage` (no `OpSampledImage`), so naga can't find the operand → `InvalidId`. This is
+exactly why only the two texture-sampling shaders failed.
+
+Fix (`transpile.rs::separate_combined_samplers`): a mechanical, documented normalization in the
+`spirv` rung that rewrites each `uniform sampler2D NAME;` into the Vulkan-GLSL separate form
+(`texture2D NAME;` + `sampler NAME_smp;`) and recombines it at `texture(NAME, …)` call sites via
+`sampler2D(NAME, NAME_smp)`. glslang then emits an explicit `OpSampledImage`, which naga accepts.
+Pure syntactic change — no effect logic touched. Pinned by two tests: a glslang-free unit test of
+the transform, and an end-to-end test that transpiles a combined-`sampler2D` shader and round-trips
+the emitted WGSL through naga `wgsl-in` (the parse wgpu does at pipeline build). Diagnostic now
+reports **6 ok, 0 fail**.
+
+**Not done here (still per-shader if needed):** only the `texture()` builtin is rewritten (the sole
+sampling call the paper shaders use); `texelFetch`/`textureSize`, which take the bare texture in
+separate form, are left for attention if a future shader uses them. Wiring metaballs/voronoi into
+the *live* switcher additionally needs a runtime noise-texture + sampler binding in `PaperView` —
+out of scope for the transpile fix.
+
+**Conclusion:** "trivial by reuse" is *mostly* true — one class of shaders (combined-sampler) needed
+a single mechanical normalization, after which the representative set transpiles 6/6. The switcher
+still ships the texture-free ones until `PaperView` grows a noise-texture binding.
 
 ## Scope / caveats
 
@@ -101,7 +124,9 @@ or SPIRV-Cross). The switcher ships the 4 clean ones, not all ~20.
 - **Perf:** the surround renders the whole window every frame though only the border + frosted
   card reveal it. Border-only / dirty-region optimization is out of scope (a measured P4 note).
 - **Out of scope (unchanged):** a real `shader{}` Lua primitive, sandbox/trust, general uniform
-  mapping, build-time transpile pipeline, the metaballs/voronoi `spv-in` fixes.
+  mapping, build-time transpile pipeline. (The metaballs/voronoi `spv-in` fix landed post-spike —
+  see the Update above; wiring them into the live switcher still needs a `PaperView` noise-texture
+  binding.)
 
 ## Recommendation (productization)
 
@@ -110,7 +135,9 @@ or SPIRV-Cross). The switcher ships the 4 clean ones, not all ~20.
    schema; the runtime just binds uniforms and renders (as `PaperView` does).
 2. **Compositor alpha-blend**: the engine change here is a genuine improvement (hosts can supply
    transparent content) — land it as its own reviewed PR, like the math-table PR.
-3. **Shader coverage**: to cover all ~20 paper shaders, resolve the naga `spv-in` `InvalidId`
-   cases (metaballs/voronoi) — try SPIRV-Cross for MSL/WGSL or a newer naga.
+3. **Shader coverage**: the combined-sampler `InvalidId` case (metaballs/voronoi) is resolved by
+   `separate_combined_samplers` (see Update). To cover *all* ~29, extend that normalization to the
+   remaining sampling builtins (`texelFetch`/`textureSize`) and add a runtime noise-texture binding
+   to `PaperView` so the sampler-driven shaders can render live.
 4. **Skin-vector-over-shader** (optional): if controls should be skin-drawn over the shader,
    composite the vello vector layer *after* the view layer, or give the paper view alpha holes.
