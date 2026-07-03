@@ -25,3 +25,4 @@ tiny_http = "0.12.0"
 tungstenite = "0.29.0"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
+full_moon = { version = "2.2.0", features = ["lua54"] }

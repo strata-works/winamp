@@ -3,6 +3,7 @@
 
 mod preview_host;
 mod protocol;
+mod provenance;
 mod render;
 mod server;
 mod skin_session;
