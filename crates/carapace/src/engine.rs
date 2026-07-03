@@ -139,17 +139,33 @@ impl Engine {
     }
 
     /// Resolve the design scene to a logical scene for the given window logical size, using the
-    /// skin's per-element anchors. The result's `canvas` equals the logical size, so the renderer
-    /// applies only the DPI scale. Frame skins call this on resize; gadget skins render the design
-    /// scene directly.
+    /// skin's per-element anchors. The result's `canvas` equals the logical size. Frame skins call
+    /// this on resize; gadget skins render the design scene directly.
     pub fn layout(&self, logical_w: f32, logical_h: f32) -> Scene {
+        self.resolve_expand(logical_w, logical_h).0
+    }
+
+    /// Like `layout`, but also returns per-node source origins aligned 1:1 with the returned
+    /// `scene.nodes`. For authoring tools (the preview inspector). See `scene_origins` for the
+    /// pre-layout design origins.
+    pub fn layout_with_origins(
+        &self,
+        logical_w: f32,
+        logical_h: f32,
+    ) -> (Scene, Vec<crate::scene::Origin>) {
+        self.resolve_expand(logical_w, logical_h)
+    }
+
+    fn resolve_expand(&self, logical_w: f32, logical_h: f32) -> (Scene, Vec<crate::scene::Origin>) {
         let mut scene = crate::layout::resolve_scene(
             &self.skin.scene,
             &self.skin.anchors,
             (logical_w, logical_h),
         );
-        expand_lists(&mut scene, self.host.as_ref());
-        scene
+        // resolve_scene preserves node order 1:1, so design origins line up with the resolved nodes.
+        let mut origins = self.skin.origins.clone();
+        expand_lists(&mut scene, self.host.as_ref(), &mut origins);
+        (scene, origins)
     }
 
     pub fn state(&self, key: &str) -> Option<StateValue> {
@@ -157,15 +173,18 @@ impl Engine {
     }
 }
 
-/// Replace each `Node::List` with [retained List (count=n), then n×template Text rows].
-/// `n` is clamped to the rows that fit the region height. Pure Rust — no Lua.
-fn expand_lists(scene: &mut Scene, host: &dyn Host) {
-    use crate::scene::Node;
+/// Replace each `Node::List` with [retained List (count=n), then n×template Text rows], keeping
+/// `origins` aligned 1:1 with the rebuilt node list. Generated nodes (highlight + rows) inherit the
+/// list's source line with `call: None`. Pure Rust — no Lua.
+fn expand_lists(scene: &mut Scene, host: &dyn Host, origins: &mut Vec<crate::scene::Origin>) {
+    use crate::scene::{Node, Origin, Paint, Pt};
 
-    use crate::scene::{Paint, Pt};
+    let old_nodes = std::mem::take(&mut scene.nodes);
+    let old_origins = std::mem::take(origins);
+    let mut out = Vec::with_capacity(old_nodes.len());
+    let mut out_origins: Vec<Origin> = Vec::with_capacity(old_nodes.len());
 
-    let mut out = Vec::with_capacity(scene.nodes.len());
-    for node in std::mem::take(&mut scene.nodes) {
+    for (node, origin) in old_nodes.into_iter().zip(old_origins) {
         let Node::List {
             collection,
             region,
@@ -178,7 +197,14 @@ fn expand_lists(scene: &mut Scene, host: &dyn Host) {
         } = node
         else {
             out.push(node);
+            out_origins.push(origin);
             continue;
+        };
+
+        // Every node produced from this list inherits its line but is engine-generated.
+        let generated = Origin {
+            line: origin.line,
+            call: None,
         };
 
         let rows = host.rows(&collection);
@@ -199,6 +225,7 @@ fn expand_lists(scene: &mut Scene, host: &dyn Host) {
             highlight,
             selected: selected.clone(),
         });
+        out_origins.push(origin);
 
         // Selection highlight: a bar behind the row whose index == the host scalar at `selected`.
         if let (Some(color), Some(key)) = (highlight, selected.as_deref())
@@ -229,6 +256,7 @@ fn expand_lists(scene: &mut Scene, host: &dyn Host) {
                     ],
                     paint: Paint::Solid(color),
                 });
+                out_origins.push(generated);
             }
         }
 
@@ -242,8 +270,100 @@ fn expand_lists(scene: &mut Scene, host: &dyn Host) {
                     None => String::new(),
                 };
                 out.push(cell.to_node(&region, row_top, &value));
+                out_origins.push(generated);
             }
         }
     }
     scene.nodes = out;
+    *origins = out_origins;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fixture::FixtureHost;
+    use crate::host::{ActionSpec, Host, Row, Value};
+    use crate::scene::Node;
+    use crate::state::StateValue;
+    use crate::vocab::VocabRegistry;
+    use std::time::Duration;
+
+    fn engine_with(host: Box<dyn Host>, lua: &str, canvas: (u32, u32)) -> Engine {
+        Engine::new(host, VocabRegistry::base(), SkinSource::inline(lua, canvas)).unwrap()
+    }
+
+    #[test]
+    fn layout_with_origins_aligns_and_survives_resolve() {
+        let e = engine_with(
+            Box::new(FixtureHost::new()),
+            "fill{ path={{x=0,y=0},{x=10,y=0},{x=10,y=5}}, color={r=1,g=2,b=3} }\n\
+             fill{ path={{x=0,y=0},{x=5,y=0},{x=5,y=5}}, color={r=4,g=5,b=6} }",
+            (100, 60),
+        );
+        let (scene, origins) = e.layout_with_origins(100.0, 60.0);
+        assert_eq!(scene.nodes.len(), origins.len());
+        assert_eq!(origins.len(), 2);
+        assert_eq!(origins[0].line, Some(1));
+        assert_eq!(origins[1].line, Some(2));
+    }
+
+    #[test]
+    fn layout_matches_layout_with_origins_scene() {
+        let e = engine_with(
+            Box::new(FixtureHost::new()),
+            "fill{ path={{x=0,y=0},{x=10,y=0},{x=10,y=5}}, color={r=1,g=2,b=3} }",
+            (100, 60),
+        );
+        // The scene from the unchanged `layout` equals the scene half of `layout_with_origins`.
+        assert_eq!(
+            e.layout(100.0, 60.0).summary(),
+            e.layout_with_origins(100.0, 60.0).0.summary()
+        );
+    }
+
+    // Host that returns two rows for any collection, so a `list{}` expands.
+    struct RowsHost;
+    impl Host for RowsHost {
+        fn name(&self) -> &str {
+            "rows"
+        }
+        fn tick(&mut self, _dt: Duration) {}
+        fn get(&self, _key: &str) -> Option<StateValue> {
+            None
+        }
+        fn actions(&self) -> &[ActionSpec] {
+            &[]
+        }
+        fn invoke(&mut self, _action: &str, _args: &[Value]) {}
+        fn rows(&self, _collection: &str) -> Vec<Row> {
+            vec![
+                Row::new().set("name", StateValue::Str("a".into())),
+                Row::new().set("name", StateValue::Str("b".into())),
+            ]
+        }
+    }
+
+    #[test]
+    fn list_expansion_marks_generated_rows_as_call_none() {
+        let e = engine_with(
+            Box::new(RowsHost),
+            "list{ collection='entries', x=10, y=20, w=100, h=80, row_height=20, \
+             template={ { bind='name', x=4, y=3, size=12, color={r=1,g=2,b=3} } } }",
+            (200, 120),
+        );
+        let (scene, origins) = e.layout_with_origins(200.0, 120.0);
+        assert_eq!(scene.nodes.len(), origins.len());
+        // Node 0 is the retained List (real call); the rest are generated rows.
+        assert!(matches!(scene.nodes[0], Node::List { .. }));
+        assert!(origins[0].call.is_some(), "the list{{}} call is real");
+        assert!(origins.len() > 1, "rows were generated");
+        assert!(
+            origins[1..].iter().all(|o| o.call.is_none()),
+            "generated rows carry no call ordinal"
+        );
+        assert!(
+            origins[1..].iter().all(|o| o.line == origins[0].line),
+            "generated rows inherit the list's source line"
+        );
+    }
 }
