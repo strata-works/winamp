@@ -286,13 +286,33 @@ mod ffi_impl {
                 blitter,
                 ..
             } => {
-                render_frame(engine, renderer, gpu, &off.view, w, h, dt, false, &host_views);
+                render_frame(
+                    engine,
+                    renderer,
+                    gpu,
+                    &off.view,
+                    w,
+                    h,
+                    dt,
+                    false,
+                    &host_views,
+                );
                 blit(gpu, blitter, &off.view, iosurface_view);
             }
             // Tier 1: render, read back, swizzle-copy into the IOSurface.
             // wait=true: readback_rgba must see completed GPU work before it maps the buffer.
             Present::Readback { off } => {
-                render_frame(engine, renderer, gpu, &off.view, w, h, dt, true, &host_views);
+                render_frame(
+                    engine,
+                    renderer,
+                    gpu,
+                    &off.view,
+                    w,
+                    h,
+                    dt,
+                    true,
+                    &host_views,
+                );
                 let rgba = readback_rgba(gpu, &off.tex, w, h);
                 unsafe { copy_into_iosurface(*surface, &rgba, w, h) };
             }

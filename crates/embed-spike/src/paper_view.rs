@@ -168,7 +168,11 @@ fn fill_blocks(wgsl: &str, w: u32, h: u32) -> Result<Vec<Block>, String> {
                     if name == "u_time" {
                         time_offset = Some(m.offset as u64);
                     }
-                    write(&mut data, m.offset as usize, &member_values(&name, w, h, 0.0));
+                    write(
+                        &mut data,
+                        m.offset as usize,
+                        &member_values(&name, w, h, 0.0),
+                    );
                 }
             }
             _ => {
@@ -426,7 +430,10 @@ impl PaperView {
                 self.idx = next;
                 eprintln!("[carapace] paper shader -> {}", SHADERS[next].0);
             }
-            Err(e) => eprintln!("[carapace] paper shader '{}' build failed: {e}", SHADERS[next].0),
+            Err(e) => eprintln!(
+                "[carapace] paper shader '{}' build failed: {e}",
+                SHADERS[next].0
+            ),
         }
     }
 

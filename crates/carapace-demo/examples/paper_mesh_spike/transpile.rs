@@ -247,9 +247,8 @@ mod tests {
         if !glslang_available() {
             panic!("glslang required (sfw brew install glslang)");
         }
-        let dir = std::path::PathBuf::from(
-            std::env::var("PAPER_MORE_DIR").expect("set PAPER_MORE_DIR"),
-        );
+        let dir =
+            std::path::PathBuf::from(std::env::var("PAPER_MORE_DIR").expect("set PAPER_MORE_DIR"));
         let mut frags: Vec<_> = std::fs::read_dir(&dir)
             .unwrap()
             .filter_map(|e| e.ok().map(|e| e.path()))
@@ -263,21 +262,30 @@ mod tests {
             Rung::Unavailable => "n/a",
         };
         // If PAPER_MORE_OUT is set, write each SUCCESSFUL transpile's WGSL there (vendoring).
-        let out = std::env::var("PAPER_MORE_OUT").ok().map(std::path::PathBuf::from);
+        let out = std::env::var("PAPER_MORE_OUT")
+            .ok()
+            .map(std::path::PathBuf::from);
         if let Some(o) = &out {
             std::fs::create_dir_all(o).unwrap();
         }
         let (mut ok, mut fail) = (0, 0);
         for p in &frags {
             let name = p.file_stem().unwrap().to_string_lossy();
-            match transpile(&std::fs::read_to_string(p).unwrap(), naga::ShaderStage::Fragment) {
+            match transpile(
+                &std::fs::read_to_string(p).unwrap(),
+                naga::ShaderStage::Fragment,
+            ) {
                 Ok(t) => {
                     ok += 1;
                     assert!(t.wgsl.contains("@fragment"), "{name}: no @fragment");
                     if let Some(o) = &out {
                         std::fs::write(o.join(format!("{name}.wgsl")), &t.wgsl).unwrap();
                     }
-                    eprintln!("OK   {name:<14} rung={:<7} wgsl={}b", rung_str(&t.rung), t.wgsl.len());
+                    eprintln!(
+                        "OK   {name:<14} rung={:<7} wgsl={}b",
+                        rung_str(&t.rung),
+                        t.wgsl.len()
+                    );
                 }
                 Err(e) => {
                     fail += 1;
@@ -287,6 +295,9 @@ mod tests {
         }
         eprintln!("--- {ok} ok, {fail} fail (diagnostic; failures = naga spv-in edge cases) ---");
         // Report-only: at least SOME of paper's other shaders must reuse the ladder cleanly.
-        assert!(ok > 0, "expected at least one other paper shader to transpile");
+        assert!(
+            ok > 0,
+            "expected at least one other paper shader to transpile"
+        );
     }
 }

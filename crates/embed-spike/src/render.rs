@@ -104,8 +104,12 @@ pub fn render_frame(
                        // callers) sx = 1 and behavior is identical.
     let (cw, ch) = engine.scene().canvas;
     let scene = engine.layout(cw as f32, ch as f32);
-    let view_tex =
-        |id: &str| host_views.iter().find(|(vid, _)| *vid == id).map(|(_, v)| *v);
+    let view_tex = |id: &str| {
+        host_views
+            .iter()
+            .find(|(vid, _)| *vid == id)
+            .map(|(_, v)| *v)
+    };
     renderer.draw(
         &scene,
         |k| engine.state(k),
