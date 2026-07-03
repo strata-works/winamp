@@ -23,18 +23,15 @@ pub enum ClientMsg {
         w: u32,
         h: u32,
     },
-    #[allow(dead_code)]
     Pick {
         x: f32,
         y: f32,
     },
-    #[allow(dead_code)]
     SetProp {
         line: u32,
         field: String,
         value: serde_json::Value,
     },
-    #[allow(dead_code)]
     SetParam {
         name: String,
         #[serde(default)]
@@ -51,25 +48,11 @@ pub fn parse_client_msg(text: &str) -> Result<ClientMsg, serde_json::Error> {
 #[derive(Debug, Clone)]
 pub enum OutMsg {
     Frame(Vec<u8>), // PNG-encoded RGBA
-    Meta {
-        name: String,
-        w: u32,
-        h: u32,
-    },
-    ActionLog {
-        action: String,
-    },
-    Error {
-        message: Option<String>,
-    },
-    #[allow(dead_code)]
-    NodeInfo {
-        json: serde_json::Value,
-    },
-    #[allow(dead_code)]
-    Params {
-        json: serde_json::Value,
-    },
+    Meta { name: String, w: u32, h: u32 },
+    ActionLog { action: String },
+    Error { message: Option<String> },
+    NodeInfo { json: serde_json::Value },
+    Params { json: serde_json::Value },
 }
 
 pub fn out_to_ws(msg: &OutMsg) -> tungstenite::Message {

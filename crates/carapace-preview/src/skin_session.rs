@@ -187,14 +187,20 @@ mod tests {
         // integration-test binaries (files under `tests/`), not for unit tests
         // compiled into `src/main.rs` — so read it at runtime instead, with the
         // same fallback Cargo itself suggests.
+        //
+        // Nanosecond time alone isn't a reliable uniqueness source under parallel
+        // test execution — two tests can land on the same nanosecond and collide
+        // on the same directory. Mix in a process-wide counter as well.
+        static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let tmpdir = std::env::var("CARGO_TARGET_TMPDIR")
             .unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().into_owned());
         let base = std::path::Path::new(&tmpdir).join(format!(
-            "skin_{}",
+            "skin_{}_{}",
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
-                .as_nanos()
+                .as_nanos(),
+            COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ));
         fs::create_dir_all(&base).unwrap();
         fs::write(
