@@ -73,25 +73,54 @@ fn span_of(node: &impl Node) -> Option<(usize, usize)> {
     Some((a.bytes(), b.bytes()))
 }
 
-/// Classify an expression as a scalar literal (number / string / boolean symbol) → its span+text.
-/// Anything else (variable, binop, call, table, function) is not a scalar literal.
-fn scalar_literal(src: &str, expr: &full_moon::ast::Expression) -> Option<LiteralValue> {
-    use full_moon::ast::Expression;
-    let is_scalar = match expr {
-        Expression::Number(_) | Expression::String(_) => true,
-        Expression::Symbol(sym) => {
-            matches!(sym.token().to_string().as_str(), "true" | "false")
+/// Classify an expression as an editable literal: a scalar (number/string/bool) or a table whose
+/// every `NameKey` value is a number (colors, sizes). Anything else → `None`.
+fn literal_value(src: &str, expr: &full_moon::ast::Expression) -> Option<LiteralValue> {
+    use full_moon::ast::{Expression, Field};
+    match expr {
+        Expression::Number(_) | Expression::String(_) => {
+            let span = span_of(expr)?;
+            Some(LiteralValue::Scalar {
+                text: src[span.0..span.1].to_string(),
+                span,
+            })
         }
-        _ => false,
-    };
-    if !is_scalar {
-        return None;
+        Expression::Symbol(sym) if matches!(sym.token().to_string().as_str(), "true" | "false") => {
+            let span = span_of(expr)?;
+            Some(LiteralValue::Scalar {
+                text: src[span.0..span.1].to_string(),
+                span,
+            })
+        }
+        Expression::TableConstructor(t) => {
+            let mut subfields = Vec::new();
+            for field in t.fields() {
+                let Field::NameKey { key, value, .. } = field else {
+                    return None;
+                };
+                // Every subfield must be a bare number literal.
+                match value {
+                    Expression::Number(_) => {
+                        let span = span_of(value)?;
+                        subfields.push((
+                            key.token().to_string(),
+                            ScalarSpan {
+                                text: src[span.0..span.1].to_string(),
+                                span,
+                            },
+                        ));
+                    }
+                    _ => return None,
+                }
+            }
+            if subfields.is_empty() {
+                None
+            } else {
+                Some(LiteralValue::Table { subfields })
+            }
+        }
+        _ => None,
     }
-    let span = span_of(expr)?;
-    Some(LiteralValue::Scalar {
-        text: src[span.0..span.1].to_string(),
-        span,
-    })
 }
 
 /// Top-level `local NAME = <scalar literal>` definitions (single name, single scalar value).
@@ -109,7 +138,7 @@ pub fn parse_params(src: &str) -> Vec<Param> {
         if names.len() != 1 || exprs.len() != 1 {
             continue; // `local a, b = ...` unsupported (v1)
         }
-        if let Some(value) = scalar_literal(src, exprs[0]) {
+        if let Some(value) = literal_value(src, exprs[0]) {
             out.push(Param {
                 name: names[0].token().to_string(),
                 value,
@@ -179,7 +208,7 @@ fn table_fields(src: &str, table: &full_moon::ast::TableConstructor) -> Vec<Fiel
             continue; // positional / [expr]-key fields: not addressable by name (v1)
         };
         let name = key.token().to_string();
-        let state = match scalar_literal(src, value) {
+        let state = match literal_value(src, value) {
             Some(value) => FieldState::Literal { value },
             None => FieldState::NonLiteral {
                 reason: non_literal_reason(value),
@@ -299,5 +328,42 @@ mod tests {
             model.calls.is_empty(),
             "loop-nested calls are not top-level"
         );
+    }
+
+    #[test]
+    fn color_table_param_exposes_numeric_subfields() {
+        let src = "local STONE = {r=10, g=20, b=30}\n";
+        let params = parse_params(src);
+        let p = &params[0];
+        match &p.value {
+            LiteralValue::Table { subfields } => {
+                let g = subfields.iter().find(|(n, _)| n == "g").unwrap();
+                assert_eq!(g.1.text, "20");
+                assert_eq!(&src[g.1.span.0..g.1.span.1], "20");
+            }
+            _ => panic!("expected table"),
+        }
+    }
+
+    #[test]
+    fn color_field_on_a_call_is_editable_as_table() {
+        let src = "fill{ color = {r=1, g=2, b=3} }\n";
+        let c = &parse_source(src).calls[0];
+        let color = c.fields.iter().find(|f| f.name == "color").unwrap();
+        assert!(matches!(
+            &color.state,
+            FieldState::Literal {
+                value: LiteralValue::Table { .. }
+            }
+        ));
+    }
+
+    #[test]
+    fn non_numeric_table_is_not_a_literal() {
+        // A table with a nested table / non-numeric value is not an editable literal.
+        let src = "fill{ meta = {name=\"x\"} }\n";
+        let c = &parse_source(src).calls[0];
+        let meta = c.fields.iter().find(|f| f.name == "meta").unwrap();
+        assert!(matches!(meta.state, FieldState::NonLiteral { .. }));
     }
 }
