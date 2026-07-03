@@ -293,4 +293,22 @@ mod tests {
         let on_disk = std::fs::read_to_string(s.entry_path()).unwrap();
         assert!(on_disk.contains("g=99"), "got: {on_disk}");
     }
+
+    /// Locks the engine <-> full_moon line-agreement contract end-to-end: the `Origin.line`
+    /// the engine's layout attaches to a picked node must equal the `full_moon`-parsed source
+    /// line for that same primitive. Uses `SkinSession::pick`, which is CPU-only (layout +
+    /// `Scene::pick`, no rendering) — same as the other headless tests in this module — so it
+    /// runs fine in the plain `cargo test` lane without a GPU adapter.
+    #[test]
+    fn pick_line_agrees_with_full_moon_source_line() {
+        let dir =
+            tmp_skin("fill{ path = {{x=0,y=0},{x=100,y=0},{x=100,y=60}}, color = {r=1,g=2,b=3} }");
+        let s = SkinSession::new(dir, Default::default(), Default::default());
+        // Point inside the triangle (0,0)-(100,0)-(100,60).
+        let info = s
+            .pick(100.0, 60.0, carapace::scene::Pt { x: 90.0, y: 30.0 })
+            .expect("pick should hit the fill primitive");
+        assert_eq!(info.prim, "fill");
+        assert_eq!(info.line, 1);
+    }
 }

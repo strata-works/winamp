@@ -276,9 +276,32 @@ fn json_scalar_to_lua(v: &serde_json::Value) -> String {
     match v {
         serde_json::Value::Number(n) => n.to_string(),
         serde_json::Value::Bool(b) => b.to_string(),
-        serde_json::Value::String(s) => format!("{s:?}"), // Rust debug = valid Lua double-quoted string
+        serde_json::Value::String(s) => lua_string_literal(s),
         _ => "nil".to_string(),
     }
+}
+
+/// Build a valid Lua double-quoted string literal for `s`. Unlike Rust's `Debug` formatting
+/// (which uses `\u{...}` escapes Lua doesn't understand), this only ever emits escapes Lua
+/// itself accepts: the standard backslash escapes for `\`, `"`, `\n`, `\r`, `\t`, and decimal
+/// (`\ddd`) escapes for any other control character. Everything else, including printable
+/// non-ASCII/UTF-8, passes through unchanged.
+fn lua_string_literal(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\{}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 fn json_to_state(v: &serde_json::Value) -> Option<StateValue> {
@@ -287,5 +310,48 @@ fn json_to_state(v: &serde_json::Value) -> Option<StateValue> {
         serde_json::Value::String(s) => Some(StateValue::Str(Arc::from(s.as_str()))),
         serde_json::Value::Bool(b) => Some(StateValue::Bool(*b)),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn json_scalar_to_lua_number() {
+        assert_eq!(json_scalar_to_lua(&serde_json::json!(12)), "12");
+    }
+
+    #[test]
+    fn json_scalar_to_lua_bool() {
+        assert_eq!(json_scalar_to_lua(&serde_json::json!(true)), "true");
+    }
+
+    #[test]
+    fn json_scalar_to_lua_plain_string() {
+        assert_eq!(json_scalar_to_lua(&serde_json::json!("door")), "\"door\"");
+    }
+
+    #[test]
+    fn json_scalar_to_lua_escapes_quote_and_backslash() {
+        assert_eq!(
+            json_scalar_to_lua(&serde_json::json!("a\"b\\c")),
+            "\"a\\\"b\\\\c\""
+        );
+    }
+
+    #[test]
+    fn json_scalar_to_lua_escapes_newline() {
+        let out = json_scalar_to_lua(&serde_json::json!("a\nb"));
+        assert_eq!(out, "\"a\\nb\"");
+        assert!(!out.contains('\n'), "newline must be escaped, not literal");
+    }
+
+    #[test]
+    fn json_scalar_to_lua_escapes_control_char_as_decimal() {
+        // Byte 7 (bell) must become the valid-Lua decimal escape `\7`, not Rust's
+        // Debug-style `\u{7}` (which Lua does not understand).
+        let out = json_scalar_to_lua(&serde_json::json!("a\u{7}b"));
+        assert_eq!(out, "\"a\\7b\"");
     }
 }
