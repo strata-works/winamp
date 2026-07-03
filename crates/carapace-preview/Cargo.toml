@@ -1,0 +1,27 @@
+[package]
+name = "carapace-preview"
+version = "0.1.0"
+edition = "2024"   # repo standard (rustfmt.toml + all non-spike crates)
+description = "Live, interactive browser previewer for carapace skins (dev tool)."
+publish = false
+
+[[bin]]
+name = "carapace-preview"
+path = "src/main.rs"
+
+[features]
+# Gates the offscreen-render test that needs a real GPU adapter. Off by default so
+# the headless `check` CI lane (`cargo test --workspace`) compiles it out; the
+# `render` lane (lavapipe software Vulkan) runs it with `--features gpu-tests`.
+gpu-tests = []
+
+[dependencies]
+carapace = { path = "../carapace" }
+wgpu = "29.0.3"
+pollster = "0.4.0"
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+notify = "8.2.0"
+tiny_http = "0.12.0"
+tungstenite = "0.29.0"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
