@@ -13,6 +13,7 @@ pub struct SkinSession {
     pub engine: Option<Engine>,
     pub name: String,
     pub canvas: (u32, u32),
+    entry: String,
     pub last_error: Option<String>,
     values: Values,
     log: ActionLog,
@@ -23,7 +24,7 @@ fn build_engine(
     dir: &Path,
     values: &Values,
     log: &ActionLog,
-) -> Result<(Engine, String, (u32, u32)), String> {
+) -> Result<(Engine, String, (u32, u32), String), String> {
     let (manifest, source) = carapace::skin::load_dir(dir).map_err(|e| format!("{e:?}"))?;
     let actions: Vec<ActionSpec> = scan_actions(&source.lua_src)
         .into_iter()
@@ -35,6 +36,7 @@ fn build_engine(
         engine,
         manifest.name,
         (manifest.canvas.width, manifest.canvas.height),
+        manifest.entry,
     ))
 }
 
@@ -45,6 +47,7 @@ impl SkinSession {
             engine: None,
             name: String::new(),
             canvas: (0, 0),
+            entry: "skin.lua".to_string(),
             last_error: None,
             values,
             log,
@@ -55,10 +58,11 @@ impl SkinSession {
 
     pub fn reload(&mut self) {
         match build_engine(&self.dir, &self.values, &self.log) {
-            Ok((engine, name, canvas)) => {
+            Ok((engine, name, canvas, entry)) => {
                 self.engine = Some(engine);
                 self.name = name;
                 self.canvas = canvas;
+                self.entry = entry;
                 self.last_error = None;
             }
             Err(e) => {
@@ -76,6 +80,106 @@ impl SkinSession {
             Some(e) => Err(e.clone()),
             None => Ok(()),
         }
+    }
+
+    // Not wired into main.rs/protocol dispatch yet — consumed starting Task 7/8
+    // (browser bridge + inspector wiring). Exercised directly by this file's tests today.
+    #[allow(dead_code)]
+    pub fn entry_path(&self) -> PathBuf {
+        self.dir.join(&self.entry)
+    }
+
+    fn read_source(&self) -> String {
+        std::fs::read_to_string(self.entry_path()).unwrap_or_default()
+    }
+
+    #[allow(dead_code)]
+    pub fn source_model(&self) -> crate::provenance::SourceModel {
+        crate::provenance::parse_source(&self.read_source())
+    }
+
+    #[allow(dead_code)]
+    pub fn params_json(&self) -> serde_json::Value {
+        use crate::provenance::LiteralValue;
+        let m = self.source_model();
+        let items: Vec<serde_json::Value> = m
+            .params
+            .iter()
+            .map(|p| match &p.value {
+                LiteralValue::Scalar { text, .. } => {
+                    serde_json::json!({"name": p.name, "kind": "scalar", "value": text})
+                }
+                LiteralValue::Table { subfields } => {
+                    let subs: Vec<_> = subfields
+                        .iter()
+                        .map(|(n, s)| serde_json::json!({"name": n, "value": s.text}))
+                        .collect();
+                    serde_json::json!({"name": p.name, "kind": "table", "subfields": subs})
+                }
+            })
+            .collect();
+        serde_json::Value::Array(items)
+    }
+
+    #[allow(dead_code)]
+    pub fn pick(
+        &self,
+        w: f32,
+        h: f32,
+        p: carapace::scene::Pt,
+    ) -> Option<crate::inspector::NodeInfo> {
+        let engine = self.engine.as_ref()?;
+        let (scene, origins) = engine.layout_with_origins(w, h);
+        let idx = scene.pick(p)?;
+        crate::inspector::node_info(&origins, idx, &self.source_model())
+    }
+
+    #[allow(dead_code)]
+    pub fn apply_prop(&self, line: u32, field: &str, value: &str) -> Result<(), String> {
+        use crate::provenance::{FieldState, LiteralValue};
+        let src = self.read_source();
+        let model = crate::provenance::parse_source(&src);
+        let call = model
+            .calls
+            .iter()
+            .find(|c| c.line == line)
+            .ok_or_else(|| format!("no call at line {line}"))?;
+        let f = call
+            .fields
+            .iter()
+            .find(|f| f.name == field)
+            .ok_or_else(|| format!("no field {field}"))?;
+        let FieldState::Literal {
+            value: LiteralValue::Scalar { span, .. },
+        } = &f.state
+        else {
+            return Err(format!("{field} is not an editable scalar"));
+        };
+        let out = crate::provenance::splice(&src, *span, value);
+        std::fs::write(self.entry_path(), out).map_err(|e| e.to_string())
+    }
+
+    #[allow(dead_code)]
+    pub fn apply_param(&self, name: &str, sub: Option<&str>, value: &str) -> Result<(), String> {
+        use crate::provenance::LiteralValue;
+        let src = self.read_source();
+        let model = crate::provenance::parse_source(&src);
+        let param = model
+            .params
+            .iter()
+            .find(|p| p.name == name)
+            .ok_or_else(|| format!("no param {name}"))?;
+        let span = match (&param.value, sub) {
+            (LiteralValue::Scalar { span, .. }, None) => *span,
+            (LiteralValue::Table { subfields }, Some(sub)) => subfields
+                .iter()
+                .find(|(n, _)| n == sub)
+                .map(|(_, s)| s.span)
+                .ok_or_else(|| format!("no subfield {sub}"))?,
+            _ => return Err("param/subfield mismatch".to_string()),
+        };
+        let out = crate::provenance::splice(&src, span, value);
+        std::fs::write(self.entry_path(), out).map_err(|e| e.to_string())
     }
 }
 
@@ -147,5 +251,48 @@ mod tests {
         s.reload();
         assert!(s.last_error.is_none());
         assert!(s.engine.is_some());
+    }
+
+    #[test]
+    fn source_model_reads_params_from_disk() {
+        let dir = tmp_skin(
+            "local RI = 90\nfill{ path = {{x=0,y=0},{x=1,y=0},{x=1,y=1}}, color = {r=1,g=2,b=3} }",
+        );
+        let s = SkinSession::new(dir, Default::default(), Default::default());
+        let m = s.source_model();
+        assert!(m.params.iter().any(|p| p.name == "RI"));
+    }
+
+    #[test]
+    fn apply_param_rewrites_the_file() {
+        let dir = tmp_skin(
+            "local RI = 90\nfill{ path = {{x=0,y=0},{x=1,y=0},{x=1,y=1}}, color = {r=1,g=2,b=3} }",
+        );
+        let s = SkinSession::new(dir.clone(), Default::default(), Default::default());
+        s.apply_param("RI", None, "120").unwrap();
+        let on_disk = std::fs::read_to_string(s.entry_path()).unwrap();
+        assert!(on_disk.starts_with("local RI = 120"), "got: {on_disk}");
+    }
+
+    #[test]
+    fn apply_prop_rewrites_a_call_field() {
+        let dir = tmp_skin(
+            "fill{ x = 10, path = {{x=0,y=0},{x=1,y=0},{x=1,y=1}}, color = {r=1,g=2,b=3} }",
+        );
+        let s = SkinSession::new(dir.clone(), Default::default(), Default::default());
+        s.apply_prop(1, "x", "42").unwrap();
+        let on_disk = std::fs::read_to_string(s.entry_path()).unwrap();
+        assert!(on_disk.contains("x = 42"), "got: {on_disk}");
+    }
+
+    #[test]
+    fn apply_param_color_subfield() {
+        let dir = tmp_skin(
+            "local STONE = {r=10, g=20, b=30}\nfill{ path = {{x=0,y=0},{x=1,y=0},{x=1,y=1}}, color = STONE }",
+        );
+        let s = SkinSession::new(dir.clone(), Default::default(), Default::default());
+        s.apply_param("STONE", Some("g"), "99").unwrap();
+        let on_disk = std::fs::read_to_string(s.entry_path()).unwrap();
+        assert!(on_disk.contains("g=99"), "got: {on_disk}");
     }
 }
