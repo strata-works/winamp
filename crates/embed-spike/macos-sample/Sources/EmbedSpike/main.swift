@@ -457,11 +457,13 @@ final class SkinView: NSView {
         let pos = CGFloat((player?.currentTime ?? 0) / max(dur, 0.001))
         let playing = player?.isPlaying ?? false
 
-        // Clear to transparent so the card's rounded corners reveal the LIVE paper gradient
-        // behind it — the engine now alpha-blends this content over the paper layer.
+        // Clear to transparent so the card reveals the LIVE paper gradient behind it — the
+        // engine alpha-blends this content over the paper layer.
         NSGraphicsContext.current?.cgContext.clear(CGRect(x: 0, y: 0, width: wF, height: hF))
-        // Card background (near-white, real macOS look) — rounded to match the window corners.
-        NSColor(white: 0.98, alpha: 1.0).setFill()
+        // TRANSLUCENT card: a light frosted panel (~62% white) so the soft gradient shines
+        // through the whole card, not just the corners (macOS-vibrancy feel; no real blur —
+        // the content pass has no access to the paper pixels, but the gradient is soft enough).
+        NSColor(white: 0.99, alpha: 0.62).setFill()
         NSBezierPath(roundedRect: NSRect(x: 0, y: 0, width: wF, height: hF),
                      xRadius: 12, yRadius: 12).fill()
 
