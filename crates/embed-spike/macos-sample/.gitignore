@@ -1,2 +1,4 @@
 .build/
 *.resolved
+# Local, copyrighted demo track — never commit (see setupAudio; placeholder = bundled sample.m4a)
+local-track.m4a

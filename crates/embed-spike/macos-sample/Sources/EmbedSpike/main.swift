@@ -390,9 +390,19 @@ final class SkinView: NSView {
     /// Load the bundled sample clip into a real AVAudioPlayer (looped; the demo has no
     /// playlist, just one track that repeats).
     private func setupAudio() {
-        guard let url = Bundle.module.url(forResource: "sample", withExtension: "m4a") else {
-            print("[carapace] sample.m4a not found in bundle"); return
-        }
+        // Prefer a LOCAL, git-ignored track (macos-sample/local-track.m4a) if present — this lets
+        // the demo play a real song WITHOUT ever committing copyrighted audio. It lives outside the
+        // SwiftPM target dir so it isn't a bundled resource and can't be staged. The committed,
+        // bundled `sample.m4a` is a synth-tone placeholder used when no local track is present.
+        let localURL = URL(fileURLWithPath: #filePath)   // .../macos-sample/Sources/EmbedSpike/main.swift
+            .deletingLastPathComponent()                 // → Sources/EmbedSpike/
+            .deletingLastPathComponent()                 // → Sources/
+            .deletingLastPathComponent()                 // → macos-sample/
+            .appendingPathComponent("local-track.m4a")
+        let url: URL? = FileManager.default.fileExists(atPath: localURL.path)
+            ? localURL
+            : Bundle.module.url(forResource: "sample", withExtension: "m4a")
+        guard let url else { print("[carapace] no audio file found"); return }
         player = try? AVAudioPlayer(contentsOf: url)
         player?.numberOfLoops = -1
         player?.prepareToPlay()
@@ -581,9 +591,11 @@ final class SkinView: NSView {
             // BEFORE returning here — so cx (this same tap's design-space x) is exactly the
             // click position the scrub should seek to.
             if scrubPending, let p = player {
-                // Content view{} spans design x 24..456; scrub strip spans canvas x 180..408.
-                let localX = min(max(cx - 180, 0), 228)
-                p.currentTime = (localX / 228) * p.duration
+                // The scrubber track is DRAWN at content-local x=168 w=240; the content view{}
+                // origin is canvas x=24, so the visible track spans canvas x 192..432 (w=240).
+                // Map the click into that exact span so the seek matches where the thumb sits.
+                let localX = min(max(cx - 192, 0), 240)
+                p.currentTime = (localX / 240) * p.duration
                 scrubPending = false
             }
             // Tapping the album art cycles the paper surround shader (also bound to the 's' key).

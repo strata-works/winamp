@@ -48,7 +48,7 @@ mod ffi_impl {
     /// Host-supplied live content for a skin `view{}` cutout. We hold a NORMAL wgpu `Bgra8Unorm`
     /// texture (`tex`/`view`) plus the caller-owned content `surface`. Each tick we re-read the
     /// surface's current bytes and upload them into `tex` (see `carapace_tick`), so the engine
-    /// composites THIS frame's host content into the matching `view{ id = "host" }` rect — fixing
+    /// composites THIS frame's host content into the matching `view{ id = "content" }` rect — fixing
     /// the frozen-content bug an IOSurface-aliased import causes (the GPU caches the first frame
     /// and never re-reads the CPU's per-frame writes).
     #[allow(deprecated)]
@@ -69,7 +69,7 @@ mod ffi_impl {
         pub engine: Engine,
         pub present: Present,
         pub surface: IOSurfaceRef,
-        /// Optional live host content composited into the skin's `view{ id = "host" }` cutout.
+        /// Optional live host content composited into the skin's `view{ id = "content" }` cutout.
         pub content: Option<ContentTex>,
         /// Live paper mesh-gradient surround, composited into `view{ id = "paper" }`.
         pub paper: Option<PaperView>,
@@ -95,7 +95,7 @@ mod ffi_impl {
     /// `skin_dir` must be a valid NUL-terminated UTF-8 path. `vtable` function pointers must
     /// outlive the returned engine. `surface` must be a valid IOSurface of size w×h, BGRA format,
     /// that outlives the engine. `content_surface`, if non-null, must be a valid BGRA8 IOSurface
-    /// (any size — it's sampled into the skin's `view{ id = "host" }` cutout) that outlives the
+    /// (any size — it's sampled into the skin's `view{ id = "content" }` cutout) that outlives the
     /// engine; pass null to supply no host content. Returns null on failure.
     #[no_mangle]
     #[allow(deprecated)]
@@ -182,7 +182,7 @@ mod ffi_impl {
         };
 
         // Optionally import the host's content IOSurface as a sampled texture for the skin's
-        // `view{ id = "host" }` cutout. Null surface, a failed import, or zero dimensions all
+        // `view{ id = "content" }` cutout. Null surface, a failed import, or zero dimensions all
         // yield None (the cutout simply shows nothing). NEVER panic.
         let content = if content_surface.is_null() {
             None
@@ -255,7 +255,7 @@ mod ffi_impl {
         let (w, h) = (*w, *h);
         // Upload THIS frame's host content into the content texture before rendering, so the
         // engine samples fresh bytes (the CPU→GPU coherency fix). Then supply that texture for
-        // the skin's `view{ id = "host" }` cutout.
+        // the skin's `view{ id = "content" }` cutout.
         if let Some(c) = content.as_ref() {
             unsafe { upload_iosurface_to_texture(&gpu.queue, c.surface, &c.tex, c.w, c.h) };
         }
