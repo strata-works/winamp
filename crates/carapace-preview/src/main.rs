@@ -129,6 +129,9 @@ fn run_engine_loop(
                     let _ = tx.send(OutMsg::Error {
                         message: session.last_error.clone(),
                     });
+                    let _ = tx.send(OutMsg::Params {
+                        json: session.params_json(),
+                    });
                     if let Some(png) = &last_png {
                         let _ = tx.send(OutMsg::Frame(png.clone()));
                     }
@@ -170,14 +173,33 @@ fn run_engine_loop(
                         },
                     );
                 }
-                EngineMsg::Client(ClientMsg::Pick { .. }) => {
-                    // TODO: implement pick handling
+                EngineMsg::Client(ClientMsg::Pick { x, y }) => {
+                    if let Some(info) =
+                        session.pick(render_size.0 as f32, render_size.1 as f32, Pt { x, y })
+                    {
+                        let json = serde_json::json!({
+                            "prim": info.prim,
+                            "line": info.line,
+                            "props": info.props.iter().map(|p| serde_json::json!({
+                                "name": p.name, "editable": p.editable,
+                                "value": p.value, "reason": p.reason,
+                            })).collect::<Vec<_>>(),
+                        });
+                        broadcast(&mut clients, &OutMsg::NodeInfo { json });
+                    }
                 }
-                EngineMsg::Client(ClientMsg::SetProp { .. }) => {
-                    // TODO: implement setprop handling
+                EngineMsg::Client(ClientMsg::SetProp { line, field, value }) => {
+                    let text = json_scalar_to_lua(&value);
+                    if let Err(e) = session.apply_prop(line, &field, &text) {
+                        eprintln!("setProp failed: {e}");
+                    }
+                    // The file watcher fires a Reload; no explicit re-render here.
                 }
-                EngineMsg::Client(ClientMsg::SetParam { .. }) => {
-                    // TODO: implement setparam handling
+                EngineMsg::Client(ClientMsg::SetParam { name, field, value }) => {
+                    let text = json_scalar_to_lua(&value);
+                    if let Err(e) = session.apply_param(&name, field.as_deref(), &text) {
+                        eprintln!("setParam failed: {e}");
+                    }
                 }
                 EngineMsg::Reload => {
                     session.reload();
@@ -200,6 +222,12 @@ fn run_engine_loop(
                             name: session.name.clone(),
                             w: render_size.0,
                             h: render_size.1,
+                        },
+                    );
+                    broadcast(
+                        &mut clients,
+                        &OutMsg::Params {
+                            json: session.params_json(),
                         },
                     );
                     last_hash = None;
@@ -240,6 +268,17 @@ fn run_engine_loop(
 /// Broadcast to all clients, pruning any whose receiver has dropped.
 fn broadcast(clients: &mut Vec<mpsc::Sender<OutMsg>>, msg: &OutMsg) {
     clients.retain(|tx| tx.send(msg.clone()).is_ok());
+}
+
+/// Render a JSON scalar as the Lua literal text to splice into the source. Numbers pass through;
+/// strings become quoted Lua strings; booleans become `true`/`false`.
+fn json_scalar_to_lua(v: &serde_json::Value) -> String {
+    match v {
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::Bool(b) => b.to_string(),
+        serde_json::Value::String(s) => format!("{s:?}"), // Rust debug = valid Lua double-quoted string
+        _ => "nil".to_string(),
+    }
 }
 
 fn json_to_state(v: &serde_json::Value) -> Option<StateValue> {
