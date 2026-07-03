@@ -16,6 +16,9 @@ pub enum ClientMsg {
         key: String,
         value: serde_json::Value,
     },
+    RemoveValue {
+        key: String,
+    },
     SetCanvas {
         w: u32,
         h: u32,
@@ -74,6 +77,12 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn parses_remove_value() {
+        let m = parse_client_msg(r#"{"type":"removeValue","key":"level"}"#).unwrap();
+        assert!(matches!(m, ClientMsg::RemoveValue { ref key } if key == "level"));
     }
 
     #[test]

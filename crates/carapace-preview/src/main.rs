@@ -149,6 +149,11 @@ fn run_engine_loop(
                         last_hash = None; // force a resend
                     }
                 }
+                EngineMsg::Client(ClientMsg::RemoveValue { key }) => {
+                    // Drop the key so the binding falls back to its default (get → None).
+                    values.borrow_mut().remove(&key);
+                    last_hash = None; // force a resend
+                }
                 EngineMsg::Client(ClientMsg::SetCanvas { w, h }) => {
                     let (w, h) = (w.max(1), h.max(1));
                     render_size = (w, h);

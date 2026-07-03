@@ -23,8 +23,9 @@ and opens a browser tab. The **real carapace engine** renders the skin offscreen
   server and last-good frame survive.
 - **Click to interact:** clicking the preview forwards a pointer event, so
   `region{}` hotspots fire their actions (shown in the action log).
-- **Host-data panel:** add/edit the host values the skin binds
+- **Host-data panel:** add / edit / remove the host values the skin binds
   (`value_fill{ value="level" }`, `text{ value="track" }`, …); edits re-render live.
+  Removing a key (the ✕ button) drops it, so the binding falls back to its default.
 - **Animated skins play** — the engine ticks continuously with wall-clock `dt`.
 - **Canvas size** input re-lays-out resizable (anchored / frame) skins.
 
