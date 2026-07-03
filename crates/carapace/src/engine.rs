@@ -132,6 +132,12 @@ impl Engine {
         &self.skin.anchors
     }
 
+    /// The per-node source origins parallel to `scene().nodes` (the design scene). For the
+    /// post-layout scene, use `layout_with_origins`.
+    pub fn scene_origins(&self) -> &[crate::scene::Origin] {
+        &self.skin.origins
+    }
+
     /// Resolve the design scene to a logical scene for the given window logical size, using the
     /// skin's per-element anchors. The result's `canvas` equals the logical size, so the renderer
     /// applies only the DPI scale. Frame skins call this on resize; gadget skins render the design

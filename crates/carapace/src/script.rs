@@ -6,7 +6,7 @@ use mlua::{Function, Lua, RegistryKey, Table, Value as LuaValue};
 
 use crate::command::{Command, Queue, SkinSource};
 use crate::host::{Host, Value};
-use crate::scene::{HandlerId, Node, Scene};
+use crate::scene::{HandlerId, Node, Origin, Scene};
 use crate::vocab::{BuildContext, BuildError, VocabRegistry};
 
 #[derive(Debug)]
@@ -40,6 +40,7 @@ enum Handler {
 pub struct LoadedSkin {
     pub scene: Scene,
     pub anchors: Vec<crate::layout::Anchors>,
+    pub origins: Vec<Origin>,
     lua: Lua,
     handlers: Vec<Handler>,
     queue: Queue,
@@ -49,6 +50,8 @@ pub struct LoadedSkin {
 struct SceneBuilder {
     nodes: Vec<Node>,
     anchors: Vec<crate::layout::Anchors>,
+    origins: Vec<Origin>,
+    call_seq: u32,
     handlers: Vec<HandlerSpec>,
     assets: std::rc::Rc<crate::asset::AssetResolver>,
 }
@@ -120,6 +123,8 @@ pub fn load(
     let builder = Rc::new(RefCell::new(SceneBuilder {
         nodes: Vec::new(),
         anchors: Vec::new(),
+        origins: Vec::new(),
+        call_seq: 0,
         handlers: Vec::new(),
         assets: source.assets.clone(),
     }));
@@ -130,18 +135,29 @@ pub fn load(
         let registry = registry.clone();
         let builder = builder.clone();
         let id_for_closure = id.clone();
-        let ctor = lua.create_function(move |_, args: Table| {
+        let ctor = lua.create_function(move |lua, args: Table| {
             let prim = registry
                 .iter()
                 .find(|p| p.id() == id_for_closure)
                 .expect("primitive id stable for skin lifetime");
+            // Line of the `fill{…}`/`text{…}` call in the skin chunk (level 1 = Lua caller).
+            let line = lua
+                .inspect_stack(1, |d| d.current_line())
+                .flatten()
+                .map(|n| n as u32);
             let mut b = builder.borrow_mut();
             let nodes = prim
                 .build(&args, &mut *b)
                 .map_err(|e| mlua::Error::external(format!("{e:?}")))?;
             let anchors = parse_anchors(&args)?;
+            let call = b.call_seq;
+            b.call_seq += 1;
             for _ in &nodes {
                 b.anchors.push(anchors);
+                b.origins.push(Origin {
+                    line,
+                    call: Some(call),
+                });
             }
             b.nodes.extend(nodes);
             Ok(())
@@ -223,11 +239,12 @@ pub fn load(
     // so we accept and document them as part of the sandbox contract.
     lua.load(&source.lua_src).set_environment(env).exec()?;
 
-    let (nodes, builder_anchors, specs) = {
+    let (nodes, builder_anchors, builder_origins, specs) = {
         let mut b = builder.borrow_mut();
         (
             std::mem::take(&mut b.nodes),
             std::mem::take(&mut b.anchors),
+            std::mem::take(&mut b.origins),
             std::mem::take(&mut b.handlers),
         )
     };
@@ -245,6 +262,7 @@ pub fn load(
             canvas: source.canvas,
         },
         anchors: builder_anchors,
+        origins: builder_origins,
         lua,
         handlers,
         queue,
@@ -573,5 +591,66 @@ mod tests {
             new_queue(),
         );
         assert!(r_req.is_err(), "require('os') must be blocked");
+    }
+
+    #[test]
+    fn origins_capture_line_and_call_per_node() {
+        // Two fills on lines 1 and 2 of the inline source.
+        let s = "fill{ path={{x=0,y=0},{x=10,y=0},{x=10,y=5}}, color={r=1,g=2,b=3} }\n\
+                 fill{ path={{x=0,y=0},{x=1,y=0},{x=1,y=1}}, color={r=4,g=5,b=6} }";
+        let skin = load(
+            &src(s),
+            &FixtureHost::new(),
+            Rc::new(VocabRegistry::base()),
+            new_queue(),
+        )
+        .unwrap();
+        assert_eq!(skin.origins.len(), skin.scene.nodes.len());
+        assert_eq!(skin.origins.len(), 2);
+        assert_eq!(skin.origins[0].line, Some(1));
+        assert_eq!(skin.origins[1].line, Some(2));
+        assert_eq!(skin.origins[0].call, Some(0));
+        assert_eq!(skin.origins[1].call, Some(1));
+    }
+
+    #[test]
+    fn one_call_emitting_two_nodes_shares_a_call_ordinal() {
+        // `fill` with `on_press` emits Fill + Hotspot from a single constructor call.
+        let s = "fill{ path=rect{x=0,y=0,w=10,h=10}, color={r=0,g=0,b=0}, \
+                 on_press=function() host.toggle() end }";
+        let skin = load(
+            &src(s),
+            &FixtureHost::new(),
+            Rc::new(VocabRegistry::base()),
+            new_queue(),
+        )
+        .unwrap();
+        assert_eq!(skin.scene.nodes.len(), 2, "fill + hotspot");
+        assert_eq!(skin.origins.len(), 2);
+        assert_eq!(skin.origins[0].call, Some(0));
+        assert_eq!(skin.origins[1].call, Some(0), "both share the one call");
+        assert_eq!(skin.origins[0].line, Some(1));
+        assert_eq!(skin.origins[1].line, Some(1));
+    }
+
+    #[test]
+    fn a_loop_yields_same_line_distinct_calls() {
+        let s = "for i=1,3 do\n\
+                 \x20 fill{ path={{x=0,y=0},{x=1,y=0},{x=1,y=1}}, color={r=1,g=1,b=1} }\n\
+                 end";
+        let skin = load(
+            &src(s),
+            &FixtureHost::new(),
+            Rc::new(VocabRegistry::base()),
+            new_queue(),
+        )
+        .unwrap();
+        assert_eq!(skin.origins.len(), 3);
+        assert!(
+            skin.origins.iter().all(|o| o.line == Some(2)),
+            "fill body is line 2"
+        );
+        let calls: Vec<_> = skin.origins.iter().map(|o| o.call).collect();
+        assert_eq!(calls, vec![Some(0), Some(1), Some(2)]);
     }
 }

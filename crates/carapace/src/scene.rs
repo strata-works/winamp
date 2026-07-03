@@ -236,6 +236,19 @@ pub enum Node {
     },
 }
 
+/// Where a scene node came from in the skin source. Metadata only — the renderer and
+/// hit-test ignore it. Populated at load; carried through `layout`. See
+/// `docs/superpowers/specs/2026-07-03-scene-node-provenance-design.md`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct Origin {
+    /// 1-based line of the primitive call in the skin's entry Lua, if known.
+    pub line: Option<u32>,
+    /// Monotonic index of the primitive call that emitted this node. Nodes from the
+    /// same call (e.g. a `fill{}` with `on_press` emits Fill + Hotspot) share it.
+    /// `None` for engine-generated nodes (list rows, selection highlight).
+    pub call: Option<u32>,
+}
+
 #[derive(Clone, Debug)]
 pub struct Scene {
     pub nodes: Vec<Node>,
