@@ -183,7 +183,14 @@ impl Renderer {
                 entry_point: Some("fs"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: wgpu::TextureFormat::Rgba8Unorm,
-                    blend: None,
+                    // Alpha-blend embedder-supplied view content OVER what's already in the
+                    // target (vello scene + earlier view{} layers), so a view with transparent
+                    // regions lets the layer behind it show through (e.g. a host content card
+                    // with rounded/transparent corners reveals the paper shader behind it).
+                    // Content textures are premultiplied (CGContext premultipliedFirst), so use
+                    // premultiplied-alpha blending. Opaque content (alpha=1) is unchanged, so
+                    // this is backward-compatible with existing opaque host content.
+                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
                 compilation_options: Default::default(),
