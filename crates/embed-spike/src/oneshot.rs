@@ -89,7 +89,7 @@ pub fn render_skin_with_host(
         h,
         Duration::ZERO,
         true,
-        None,
+        &[],
     );
     let rgba = readback_rgba(&gpu, &off.tex, w, h);
     image::save_buffer(out, &rgba, w, h, image::ColorType::Rgba8).ok()?;

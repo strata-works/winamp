@@ -37,6 +37,9 @@ void carapace_pointer(CarapaceEngine* e, double x, double y, int32_t kind);
 /* Returns 1 = Readback (CPU copy into IOSurface), 2 = Shared (zero-copy Metal texture). */
 int32_t carapace_active_tier(CarapaceEngine* e);
 
+// Switch the paper-shader surround to the next vendored shader.
+void carapace_cycle_shader(CarapaceEngine* e);
+
 /* Destroy the engine. Do not use e after this call. */
 void carapace_destroy(CarapaceEngine* e);
 

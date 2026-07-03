@@ -14,6 +14,7 @@ pollster = "0.4.0"
 wgpu = "29.0.3"
 wgpu-hal = "=29.0.3"
 image = { version = "0.24", default-features = false, features = ["png"] }
+naga = { version = "29", features = ["wgsl-in"] }
 
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 core-foundation = "0.10.1"

@@ -7,6 +7,9 @@ pub mod render;
 pub mod oneshot;
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
+pub mod paper_view;
+
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 mod ffi_impl {
     use std::ffi::{c_char, CStr};
     use std::time::Duration;
@@ -17,6 +20,7 @@ mod ffi_impl {
     use carapace::scene::Pt;
 
     use crate::host::{CarapaceHostVTable, FfiHost};
+    use crate::paper_view::PaperView;
     use crate::render::{
         blit, copy_into_iosurface, init_gpu, make_content_texture, new_offscreen, readback_rgba,
         render_frame, try_shared, upload_iosurface_to_texture, GpuCtx, OffscreenTarget, Tier,
@@ -44,7 +48,7 @@ mod ffi_impl {
     /// Host-supplied live content for a skin `view{}` cutout. We hold a NORMAL wgpu `Bgra8Unorm`
     /// texture (`tex`/`view`) plus the caller-owned content `surface`. Each tick we re-read the
     /// surface's current bytes and upload them into `tex` (see `carapace_tick`), so the engine
-    /// composites THIS frame's host content into the matching `view{ id = "host" }` rect — fixing
+    /// composites THIS frame's host content into the matching `view{ id = "content" }` rect — fixing
     /// the frozen-content bug an IOSurface-aliased import causes (the GPU caches the first frame
     /// and never re-reads the CPU's per-frame writes).
     #[allow(deprecated)]
@@ -65,8 +69,12 @@ mod ffi_impl {
         pub engine: Engine,
         pub present: Present,
         pub surface: IOSurfaceRef,
-        /// Optional live host content composited into the skin's `view{ id = "host" }` cutout.
+        /// Optional live host content composited into the skin's `view{ id = "content" }` cutout.
         pub content: Option<ContentTex>,
+        /// Live paper mesh-gradient surround, composited into `view{ id = "paper" }`.
+        pub paper: Option<PaperView>,
+        /// Accumulated shader time (seconds), advanced by wall-clock dt each tick.
+        pub paper_time: f32,
         pub tier: Tier,
         /// Surface (output) pixel size — the IOSurface / offscreen / Tier-2 textures are this size.
         /// On a 2× Retina display this is 2× the design canvas (e.g. 684×788 for Headspace).
@@ -87,7 +95,7 @@ mod ffi_impl {
     /// `skin_dir` must be a valid NUL-terminated UTF-8 path. `vtable` function pointers must
     /// outlive the returned engine. `surface` must be a valid IOSurface of size w×h, BGRA format,
     /// that outlives the engine. `content_surface`, if non-null, must be a valid BGRA8 IOSurface
-    /// (any size — it's sampled into the skin's `view{ id = "host" }` cutout) that outlives the
+    /// (any size — it's sampled into the skin's `view{ id = "content" }` cutout) that outlives the
     /// engine; pass null to supply no host content. Returns null on failure.
     #[no_mangle]
     #[allow(deprecated)]
@@ -127,6 +135,16 @@ mod ffi_impl {
         let gpu = init_gpu();
         let renderer = Renderer::new(&gpu.device);
 
+        // Live paper shader surround, sized to the SURFACE (w×h). On failure the "paper"
+        // cutout simply shows nothing — never panic across the C ABI.
+        let paper = match PaperView::new(&gpu.device, &gpu.queue, w, h) {
+            Ok(pv) => Some(pv),
+            Err(e) => {
+                eprintln!("[carapace] paper shader disabled: {e}");
+                None
+            }
+        };
+
         // Try Tier 2 (zero-copy IOSurface import) first; fall back to Tier 1 readback on any
         // failure. The IOSurface texture only needs RENDER_ATTACHMENT — the blitter renders into
         // it, so no BGRA storage feature is required.
@@ -164,7 +182,7 @@ mod ffi_impl {
         };
 
         // Optionally import the host's content IOSurface as a sampled texture for the skin's
-        // `view{ id = "host" }` cutout. Null surface, a failed import, or zero dimensions all
+        // `view{ id = "content" }` cutout. Null surface, a failed import, or zero dimensions all
         // yield None (the cutout simply shows nothing). NEVER panic.
         let content = if content_surface.is_null() {
             None
@@ -199,6 +217,8 @@ mod ffi_impl {
             present,
             surface,
             content,
+            paper,
+            paper_time: 0.0,
             tier,
             w,
             h,
@@ -226,6 +246,8 @@ mod ffi_impl {
             present,
             surface,
             content,
+            paper,
+            paper_time,
             w,
             h,
             ..
@@ -233,11 +255,26 @@ mod ffi_impl {
         let (w, h) = (*w, *h);
         // Upload THIS frame's host content into the content texture before rendering, so the
         // engine samples fresh bytes (the CPU→GPU coherency fix). Then supply that texture for
-        // the skin's `view{ id = "host" }` cutout.
+        // the skin's `view{ id = "content" }` cutout.
         if let Some(c) = content.as_ref() {
             unsafe { upload_iosurface_to_texture(&gpu.queue, c.surface, &c.tex, c.w, c.h) };
         }
-        let host_view = content.as_ref().map(|c| ("host", &c.view));
+        // Advance + render the paper shader with this frame's wall-clock dt.
+        if let Some(pv) = paper.as_ref() {
+            *paper_time += dt.as_secs_f32();
+            pv.render(&gpu.device, &gpu.queue, *paper_time);
+        }
+        // Build the host-views slice fresh each frame. This is just an id→texture lookup
+        // for the compositor; push order is cosmetic. True z-order comes from the ORDER the
+        // skin declares its `view{}` nodes (the skin puts `id="paper"` before `id="content"`
+        // so the gradient composites behind the content).
+        let mut host_views: Vec<(&str, &wgpu::TextureView)> = Vec::new();
+        if let Some(pv) = paper.as_ref() {
+            host_views.push(("paper", pv.texture_view()));
+        }
+        if let Some(c) = content.as_ref() {
+            host_views.push(("content", &c.view));
+        }
         match present {
             // Tier 2: render into the Rgba8 offscreen, then GPU-blit it into the IOSurface
             // texture. No CPU readback, no swizzle copy — the blitter reorders RGBA→BGRA on
@@ -249,16 +286,51 @@ mod ffi_impl {
                 blitter,
                 ..
             } => {
-                render_frame(engine, renderer, gpu, &off.view, w, h, dt, false, host_view);
+                render_frame(
+                    engine,
+                    renderer,
+                    gpu,
+                    &off.view,
+                    w,
+                    h,
+                    dt,
+                    false,
+                    &host_views,
+                );
                 blit(gpu, blitter, &off.view, iosurface_view);
             }
             // Tier 1: render, read back, swizzle-copy into the IOSurface.
             // wait=true: readback_rgba must see completed GPU work before it maps the buffer.
             Present::Readback { off } => {
-                render_frame(engine, renderer, gpu, &off.view, w, h, dt, true, host_view);
+                render_frame(
+                    engine,
+                    renderer,
+                    gpu,
+                    &off.view,
+                    w,
+                    h,
+                    dt,
+                    true,
+                    &host_views,
+                );
                 let rgba = readback_rgba(gpu, &off.tex, w, h);
                 unsafe { copy_into_iosurface(*surface, &rgba, w, h) };
             }
+        }
+    }
+
+    /// Switch the `view{ id = "paper" }` surround to the next vendored paper shader.
+    ///
+    /// # Safety
+    /// `ptr` must come from `carapace_create`.
+    #[no_mangle]
+    pub unsafe extern "C" fn carapace_cycle_shader(ptr: *mut CarapaceEngine) {
+        let Some(e) = (unsafe { ptr.as_mut() }) else {
+            return;
+        };
+        let CarapaceEngine { gpu, paper, .. } = e;
+        if let Some(pv) = paper.as_mut() {
+            pv.cycle(&gpu.device, &gpu.queue);
         }
     }
 

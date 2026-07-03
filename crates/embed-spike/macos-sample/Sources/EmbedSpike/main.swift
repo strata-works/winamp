@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import CoreText
 import IOSurface
 import IOKit.ps
@@ -7,10 +8,16 @@ import CCarapace
 // Fix A: unbuffer stdout so runtime prints flush immediately to a non-TTY pipe.
 setvbuf(stdout, nil, _IONBF, 0)
 
-let W: UInt32 = 342, H: UInt32 = 394
-// The host-content IOSurface for the skin's view{ id = "host" } cutout (70,60..272,206 → 202×146).
-// Rendered at 2× for crispness; the engine samples it into the cutout rect.
-let CW: Int = 404, CH: Int = 292
+// Design canvas for skin-paper-surround (skin.toml canvas = 480×300).
+let W: UInt32 = 480, H: UInt32 = 300
+let CW: Int = 480, CH: Int = 300
+// The host-content IOSurface for the skin's view{ id = "content" } cutout
+// (24,40..456,276 → 432×236). The card is inset 40px at the top so the floating window
+// controls have a gradient "titlebar" strip; the bottom stays at canvas y=276.
+// The IOSurface is allocated at the backing scale (2× on Retina) so the player draws SHARP;
+// the engine samples it into the cutout rect. The "paper" cutout behind it is rendered
+// directly by the engine's transpiled mesh-gradient shader.
+let CONTENT_W: Int = 432, CONTENT_H: Int = 236
 
 // ---------------------------------------------------------------------------
 // Swift-owned host state
@@ -153,6 +160,16 @@ final class WeakWindowBox {
 // Will be set after the window is created; the C callback captures it.
 var windowBox: WeakWindowBox? = nil
 
+// Same pattern as WeakWindowBox: invokeAction is a top-level C-compatible function with
+// no captured context, so transport actions reach the real AVAudioPlayer (owned by
+// SkinView) through a weak box set once the view exists.
+final class WeakViewBox {
+    weak var view: SkinView?
+    init(_ v: SkinView) { view = v }
+}
+
+var viewBox: WeakViewBox? = nil
+
 func invokeAction(
     _ ctx: UnsafeMutableRawPointer?,
     _ action: UnsafePointer<CChar>?
@@ -162,8 +179,22 @@ func invokeAction(
     print("[host] invoke: \(name)")
     switch name {
     case "toggle_play":
-        state.togglePlay()
-        print("[host] paused =", state.paused)
+        if let v = viewBox?.view {
+            if v.player?.isPlaying == true { v.player?.pause() } else { v.player?.play() }
+        }
+    case "prev":
+        if let p = viewBox?.view?.player {
+            p.currentTime = max(0, p.currentTime - 15)
+        }
+    case "next":
+        if let p = viewBox?.view?.player {
+            p.currentTime = min((p.duration) - 0.1, p.currentTime + 15)
+        }
+    case "scrub":
+        // The actual seek is computed in mouseUp against the click x that produced this
+        // very hit-test (carapace_pointer → engine hit-test → this callback, all synchronous
+        // within the same call), so just flag it here.
+        viewBox?.view?.scrubPending = true
     case "minimize":
         DispatchQueue.main.async {
             windowBox?.window?.miniaturize(nil)
@@ -199,10 +230,14 @@ final class SkinView: NSView {
     let contentStart = CACurrentMediaTime()
     var last = CACurrentMediaTime()
 
+    // Real playback: an actual AVAudioPlayer, routed to from invokeAction via viewBox.
+    var player: AVAudioPlayer?
+    var scrubPending = false
+
     // Zoom state for scroll/pinch resize (aspect-locked, 0.5…3.0×).
     private var zoom: CGFloat = 1.0
-    private let baseW: CGFloat = 342
-    private let baseH: CGFloat = 394
+    private let baseW: CGFloat = 480
+    private let baseH: CGFloat = 300
 
     // Drag state
     private var dragStartMouse:  NSPoint?
@@ -237,9 +272,12 @@ final class SkinView: NSView {
         ])!
 
         // Second IOSurface holding the host app's OWN live content for the view{} cutout.
+        // Allocated at the backing scale so the player renders SHARP on Retina (the engine
+        // upscales this surface into the cutout; a 1× surface looked blurry at 2×).
+        let cScale = Int(scale.rounded())
         content = IOSurface(properties: [
-            .width: CW,
-            .height: CH,
+            .width: CONTENT_W * cScale,
+            .height: CONTENT_H * cScale,
             .bytesPerElement: 4,
             .pixelFormat: 0x42475241 as UInt32   // 'BGRA'
         ])!
@@ -253,20 +291,21 @@ final class SkinView: NSView {
         )
 
         // Derive skin path relative to this source file. The view{}-cutout skin lives under
-        // embed-spike now (NOT carapace-demo): 4 hops to .../crates/embed-spike/, then skin-headspace.
+        // embed-spike now (NOT carapace-demo): 4 hops to .../crates/embed-spike/, then
+        // skin-paper-surround (Phase 2: gradient surround + real player content cutout).
         // #filePath  = .../crates/embed-spike/macos-sample/Sources/EmbedSpike/main.swift
         // hop 1 → strip main.swift         → .../Sources/EmbedSpike/
         // hop 2 → strip EmbedSpike/        → .../Sources/
         // hop 3 → strip Sources/           → .../macos-sample/
         // hop 4 → strip macos-sample/      → .../embed-spike/
-        // + skin-headspace                 → view{} cutout Headspace skin ✓
+        // + skin-paper-surround            → view{} cutout paper-surround skin ✓
         let thisFile = URL(fileURLWithPath: #filePath)
         let skinURL = thisFile
             .deletingLastPathComponent()   // → .../Sources/EmbedSpike/
             .deletingLastPathComponent()   // → .../Sources/
             .deletingLastPathComponent()   // → .../macos-sample/
             .deletingLastPathComponent()   // → .../embed-spike/
-            .appendingPathComponent("skin-headspace")
+            .appendingPathComponent("skin-paper-surround")
         let skinDir = skinURL.path
         print("[carapace] skin dir:", skinDir)
         let skinExists = FileManager.default.fileExists(atPath: skinDir)
@@ -290,26 +329,99 @@ final class SkinView: NSView {
         let pinch = NSMagnificationGestureRecognizer(target: self, action: #selector(handlePinch(_:)))
         addGestureRecognizer(pinch)
 
-        // Visible +/− resize buttons (the input device reports 0 scroll delta, and a
-        // borderless window has no OS resize handles — so give explicit on-screen controls).
-        let minus = NSButton(title: "−", target: self, action: #selector(zoomOut))
-        let plus  = NSButton(title: "+", target: self, action: #selector(zoomIn))
-        let bw: CGFloat = 26, gap: CGFloat = 8
-        let startX = (CGFloat(W) - (bw * 2 + gap)) / 2   // horizontally centered on the chin
-        for (i, b) in [minus, plus].enumerated() {
-            b.bezelStyle = .circular
-            b.font = NSFont.boldSystemFont(ofSize: 15)
-            b.frame = NSRect(x: startX + CGFloat(i) * (bw + gap), y: 12, width: bw, height: bw)
-            // Stay centered horizontally and fixed above the bottom edge as the window zooms.
-            b.autoresizingMask = [.minXMargin, .maxXMargin, .maxYMargin]
-            addSubview(b)
+        installTitlebarControls()
+        setupAudio()
+    }
+
+    /// Floating window controls (AppKit overlays) over the gradient "titlebar" strip: a
+    /// dot + "paper_mesh" label top-left, and a rounded pill with minimize / zoom / close
+    /// top-right. AppKit overlays because the engine composites view{} OVER the vello layer,
+    /// so carapace vector can't paint on top of the full-bleed paper shader.
+    private func installTitlebarControls() {
+        let top = CGFloat(H)   // view is non-flipped: top edge is at y = height.
+
+        // Top-left: white dot + monospace label.
+        let dot = NSView(frame: NSRect(x: 16, y: top - 25, width: 11, height: 11))
+        dot.wantsLayer = true
+        dot.layer?.backgroundColor = NSColor.white.cgColor
+        dot.layer?.cornerRadius = 5.5
+        dot.layer?.opacity = 0.9
+        dot.autoresizingMask = [.maxXMargin, .minYMargin]
+        addSubview(dot)
+
+        let label = NSTextField(labelWithString: "paper_mesh")
+        label.font = NSFont.monospacedSystemFont(ofSize: 13, weight: .medium)
+        label.textColor = .white
+        label.frame = NSRect(x: 34, y: top - 28, width: 170, height: 18)
+        label.autoresizingMask = [.maxXMargin, .minYMargin]
+        addSubview(label)
+
+        // Top-right: rounded translucent pill with three glyph buttons.
+        let pillW: CGFloat = 104, pillH: CGFloat = 28
+        let pill = NSView(frame: NSRect(x: CGFloat(W) - pillW - 12, y: top - pillH - 8,
+                                        width: pillW, height: pillH))
+        pill.wantsLayer = true
+        pill.layer?.backgroundColor = NSColor(white: 0.04, alpha: 0.30).cgColor
+        pill.layer?.cornerRadius = 14
+        pill.layer?.borderWidth = 1
+        pill.layer?.borderColor = NSColor(white: 1, alpha: 0.16).cgColor
+        pill.autoresizingMask = [.minXMargin, .minYMargin]
+        addSubview(pill)
+
+        let items: [(String, Selector)] = [
+            ("\u{2013}", #selector(hostMinimize)),  // – minimize
+            ("\u{25A2}", #selector(hostZoom)),      // ▢ zoom
+            ("\u{2715}", #selector(hostClose)),     // ✕ close
+        ]
+        for (i, (title, sel)) in items.enumerated() {
+            let b = NSButton(title: title, target: self, action: sel)
+            b.isBordered = false
+            b.font = NSFont.systemFont(ofSize: 14, weight: .medium)
+            b.contentTintColor = .white
+            b.frame = NSRect(x: 6 + CGFloat(i) * 32, y: 0, width: 30, height: pillH)
+            pill.addSubview(b)
         }
+    }
+
+    @objc private func hostMinimize() { window?.miniaturize(nil) }
+    @objc private func hostZoom()     { applyZoomDelta(1.12) }
+    @objc private func hostClose()    { NSApp.terminate(nil) }
+
+    /// Load the bundled sample clip into a real AVAudioPlayer (looped; the demo has no
+    /// playlist, just one track that repeats).
+    private func setupAudio() {
+        // Prefer a LOCAL, git-ignored track (macos-sample/local-track.m4a) if present — this lets
+        // the demo play a real song WITHOUT ever committing copyrighted audio. It lives outside the
+        // SwiftPM target dir so it isn't a bundled resource and can't be staged. The committed,
+        // bundled `sample.m4a` is a synth-tone placeholder used when no local track is present.
+        let localURL = URL(fileURLWithPath: #filePath)   // .../macos-sample/Sources/EmbedSpike/main.swift
+            .deletingLastPathComponent()                 // → Sources/EmbedSpike/
+            .deletingLastPathComponent()                 // → Sources/
+            .deletingLastPathComponent()                 // → macos-sample/
+            .appendingPathComponent("local-track.m4a")
+        let url: URL? = FileManager.default.fileExists(atPath: localURL.path)
+            ? localURL
+            : Bundle.module.url(forResource: "sample", withExtension: "m4a")
+        guard let url else { print("[carapace] no audio file found"); return }
+        player = try? AVAudioPlayer(contentsOf: url)
+        player?.numberOfLoops = -1
+        player?.prepareToPlay()
     }
 
     @objc private func zoomIn()  { applyZoomDelta(1.1) }
     @objc private func zoomOut() { applyZoomDelta(1.0 / 1.1) }
 
     required init?(coder: NSCoder) { fatalError() }
+
+    /// Draw an SF Symbol (the macOS iconography) centered at (cx, cy) in the current flipped
+    /// content context. Template symbols render black — reads correctly on the near-white card.
+    private func drawSymbol(_ name: String, cx: CGFloat, cy: CGFloat, size: CGFloat) {
+        let cfg = NSImage.SymbolConfiguration(pointSize: size, weight: .semibold)
+        guard let img = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
+            .withSymbolConfiguration(cfg) else { return }
+        let s = img.size
+        img.draw(in: NSRect(x: cx - s.width / 2, y: cy - s.height / 2, width: s.width, height: s.height))
+    }
 
     /// Draw the host app's OWN live content into the content IOSurface via a flipped
     /// NSGraphicsContext so text and layout use top-left origin (y grows DOWN) — no manual
@@ -320,73 +432,90 @@ final class SkinView: NSView {
 
         let base   = content.baseAddress
         let stride = content.bytesPerRow
-        let cw     = CW
-        let ch     = CH
+        let cw     = CONTENT_W
+        let ch     = CONTENT_H
+        // The surface is allocated at the backing scale; derive it so we draw in LOGICAL
+        // CONTENT_W×CONTENT_H units but render at full surface resolution (sharp on Retina).
+        let cScale = max(1, content.width / CONTENT_W)
 
         let cs  = CGColorSpaceCreateDeviceRGB()
         let bmp = CGImageAlphaInfo.premultipliedFirst.rawValue
                 | CGBitmapInfo.byteOrder32Little.rawValue
         guard let cg = CGContext(
             data:             base,
-            width:            cw,
-            height:           ch,
+            width:            cw * cScale,
+            height:           ch * cScale,
             bitsPerComponent: 8,
             bytesPerRow:      stride,
             space:            cs,
             bitmapInfo:       bmp
         ) else { return }
 
-        // Flip the raw bitmap context (which is y-up / bottom-left origin) to a top-left
-        // origin so BOTH the layout (y grows down) AND AppKit text render upright and
-        // un-mirrored. Verified in isolation via a PNG harness: translate+scale(1,-1) THEN
-        // NSGraphicsContext(flipped:true). (flipped:true alone, with no CTM flip, 180°-inverts.)
+        // Scale to the logical CONTENT_W×CONTENT_H space (Retina sharpness), THEN flip the
+        // raw bitmap context (y-up / bottom-left origin) to a top-left origin so BOTH the
+        // layout (y grows down) AND AppKit text render upright and un-mirrored. Verified in
+        // isolation: translate+scale(1,-1) THEN NSGraphicsContext(flipped:true).
+        cg.scaleBy(x: CGFloat(cScale), y: CGFloat(cScale))
         cg.translateBy(x: 0, y: CGFloat(ch))
         cg.scaleBy(x: 1, y: -1)
         let ns = NSGraphicsContext(cgContext: cg, flipped: true)
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = ns
 
-        let wF  = CGFloat(cw)
-        let hF  = CGFloat(ch)
-        let pos = CGFloat(state.position())
+        let wF = CGFloat(cw), hF = CGFloat(ch)
+        let dur = player?.duration ?? 1
+        let pos = CGFloat((player?.currentTime ?? 0) / max(dur, 0.001))
+        let playing = player?.isPlaying ?? false
 
-        // 1. Dark background.
-        NSColor(red: 0.04, green: 0.06, blue: 0.10, alpha: 0.92).setFill()
-        NSRect(x: 0, y: 0, width: wF, height: hF).fill()
+        // Clear to transparent so the card reveals the LIVE paper gradient behind it — the
+        // engine alpha-blends this content over the paper layer.
+        NSGraphicsContext.current?.cgContext.clear(CGRect(x: 0, y: 0, width: wF, height: hF))
+        // TRANSLUCENT card: a light frosted panel (~62% white) so the soft gradient shines
+        // through the whole card, not just the corners (macOS-vibrancy feel; no real blur —
+        // the content pass has no access to the paper pixels, but the gradient is soft enough).
+        NSColor(white: 0.99, alpha: 0.62).setFill()
+        NSBezierPath(roundedRect: NSRect(x: 0, y: 0, width: wF, height: hF),
+                     xRadius: 12, yRadius: 12).fill()
 
-        // 2. Amber accent header bar near the top (small y = top in flipped coords).
-        NSColor(red: 1.0, green: 0.62, blue: 0.16, alpha: 1.0).setFill()
-        NSRect(x: 0, y: 0, width: wF, height: hF * 0.16).fill()
 
-        // 3. Header label inside the accent bar.
-        let headerAttrs: [NSAttributedString.Key: Any] = [
-            .font:            NSFont(name: "HelveticaNeue-Bold", size: 18) ?? NSFont.boldSystemFont(ofSize: 18),
-            .foregroundColor: NSColor(red: 0.05, green: 0.04, blue: 0.02, alpha: 1.0),
-        ]
-        ("Swift host content" as NSString).draw(at: NSPoint(x: 8, y: 6), withAttributes: headerAttrs)
+        // Album art (rounded square, left).
+        let art = NSRect(x: 22, y: hF*0.5 - 62, width: 124, height: 124)
+        let grad = NSGradient(colors: [NSColor(red:0.93,green:0.35,blue:0.57,alpha:1),
+                                       NSColor(red:0.23,green:0.43,blue:0.94,alpha:1)])
+        NSBezierPath(roundedRect: art, xRadius: 16, yRadius: 16).addClip()
+        grad?.draw(in: art, angle: -60)
+        NSGraphicsContext.current?.cgContext.resetClip()
 
-        // 4. LIVE digital clock (HH:MM:SS).
-        let df = DateFormatter()
-        df.dateFormat = "HH:mm:ss"
-        let clock = df.string(from: Date())
-        let clockAttrs: [NSAttributedString.Key: Any] = [
-            .font:            NSFont.monospacedSystemFont(ofSize: 34, weight: .bold),
-            .foregroundColor: NSColor(white: 0.95, alpha: 1.0),
-        ]
-        (clock as NSString).draw(at: NSPoint(x: 8, y: hF * 0.16 + 8), withAttributes: clockAttrs)
+        // Title + artist.
+        let titleAttrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 26, weight: .bold),
+            .foregroundColor: NSColor(white: 0.08, alpha: 1)]
+        ("Cascade" as NSString).draw(at: NSPoint(x: 168, y: hF*0.5 - 52), withAttributes: titleAttrs)
+        let subAttrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 14, weight: .regular),
+            .foregroundColor: NSColor(white: 0.42, alpha: 1)]
+        ("paper.design — Mesh Sessions" as NSString)
+            .draw(at: NSPoint(x: 168, y: hF*0.5 - 18), withAttributes: subAttrs)
 
-        // 5. Status line: live · up Ns · pos N%.
-        let elapsed = Int(CACurrentMediaTime() - contentStart)
-        let statusLine = "live · up \(elapsed)s · pos \(Int(pos * 100))%"
-        let statusAttrs: [NSAttributedString.Key: Any] = [
-            .font:            NSFont.monospacedSystemFont(ofSize: 13, weight: .regular),
-            .foregroundColor: NSColor(red: 0.55, green: 0.80, blue: 0.95, alpha: 1.0),
-        ]
-        (statusLine as NSString).draw(at: NSPoint(x: 8, y: hF * 0.16 + 54), withAttributes: statusAttrs)
+        // Scrubber track + fill + macOS slider thumb.
+        let trackY = hF - 72
+        NSColor(white: 0.88, alpha: 1).setFill()
+        NSBezierPath(roundedRect: NSRect(x: 168, y: trackY, width: 240, height: 5), xRadius: 2.5, yRadius: 2.5).fill()
+        NSColor(red:0.93,green:0.35,blue:0.57,alpha:1).setFill()
+        NSBezierPath(roundedRect: NSRect(x: 168, y: trackY, width: 240*pos, height: 5), xRadius: 2.5, yRadius: 2.5).fill()
+        let thumbX = 168 + 240 * pos
+        NSColor.white.setFill()
+        let thumb = NSBezierPath(ovalIn: NSRect(x: thumbX - 7, y: trackY + 2.5 - 7, width: 14, height: 14))
+        thumb.fill()
+        NSColor(white: 0, alpha: 0.14).setStroke()
+        thumb.lineWidth = 0.5
+        thumb.stroke()
 
-        // 6. Green sweep bar near the bottom (large y = bottom in flipped coords).
-        NSColor(red: 0.20, green: 0.85, blue: 0.55, alpha: 1.0).setFill()
-        NSRect(x: 8, y: hF - 16, width: CGFloat(cw - 16) * pos, height: 8).fill()
+        // Transport controls as SF Symbols (the macOS iconography). Centers align to the skin's
+        // transport hotspots; SF Symbols render black (template) on the near-white card.
+        drawSymbol("backward.fill",                        cx: 225, cy: hF - 33, size: 15)
+        drawSymbol(playing ? "pause.fill" : "play.fill",   cx: 257, cy: hF - 33, size: 19)
+        drawSymbol("forward.fill",                         cx: 289, cy: hF - 33, size: 15)
 
         NSGraphicsContext.restoreGraphicsState()
     }
@@ -407,6 +536,11 @@ final class SkinView: NSView {
             l.backgroundColor = NSColor.clear.cgColor
             l.contents = surface
             l.contentsGravity = .resizeAspect
+            // Round the borderless window's corners to the SAME radius as the inner content
+            // card (12pt) so the two read as concentric, and the gradient surround looks like
+            // a real shaped window rather than a hard rectangle (drop shadow follows the mask).
+            l.cornerRadius = 12
+            l.masksToBounds = true
             let sel = Selector(("setContentsChanged"))
             if l.responds(to: sel) { l.perform(sel) }
         }
@@ -452,6 +586,23 @@ final class SkinView: NSView {
             let cy = (Double(bounds.height) - Double(p.y)) * Double(H) / Double(bounds.height)
             print("[input] pointer tap at canvas (\(Int(cx)), \(Int(cy)))")
             carapace_pointer(engine, cx, cy, 0)
+            // carapace_pointer hit-tests synchronously and, if the tap landed on the skin's
+            // scrub region, calls invokeAction("scrub") → viewBox.view.scrubPending = true
+            // BEFORE returning here — so cx (this same tap's design-space x) is exactly the
+            // click position the scrub should seek to.
+            if scrubPending, let p = player {
+                // The scrubber track is DRAWN at content-local x=168 w=240; the content view{}
+                // origin is canvas x=24, so the visible track spans canvas x 192..432 (w=240).
+                // Map the click into that exact span so the seek matches where the thumb sits.
+                let localX = min(max(cx - 192, 0), 240)
+                p.currentTime = (localX / 240) * p.duration
+                scrubPending = false
+            }
+            // Tapping the album art cycles the paper surround shader (also bound to the 's' key).
+            // Handled here (not via a skin action) because it drives the engine's paper renderer.
+            if cx >= 46, cx <= 170, cy >= 96, cy <= 220 {
+                carapace_cycle_shader(engine)
+            }
         }
         // If didDrag: window already moved; nothing more to do.
         dragStartMouse  = nil
@@ -488,6 +639,7 @@ final class SkinView: NSView {
         switch e.charactersIgnoringModifiers ?? "" {
         case "+", "=": applyZoomDelta(1.1)
         case "-", "_": applyZoomDelta(1.0 / 1.1)
+        case "s", "S": carapace_cycle_shader(engine)   // cycle the paper surround shader
         default:       super.keyDown(with: e)
         }
     }
@@ -527,6 +679,7 @@ windowBox = WeakWindowBox(win)
 let view = SkinView(frame: win.contentLayoutRect)
 view.autoresizingMask = [.width, .height]
 win.contentView = view
+viewBox = WeakViewBox(view)
 win.makeKeyAndOrderFront(nil)
 win.makeFirstResponder(view)    // route events directly to SkinView
 

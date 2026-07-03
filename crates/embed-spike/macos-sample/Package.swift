@@ -16,6 +16,7 @@ let package = Package(
         .executableTarget(
             name: "EmbedSpike",
             dependencies: ["CCarapace"],
+            resources: [ .copy("Resources/sample.m4a") ],
             swiftSettings: [
                 .swiftLanguageMode(.v5)
             ],

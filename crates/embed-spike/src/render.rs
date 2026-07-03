@@ -77,9 +77,9 @@ pub fn new_offscreen(device: &wgpu::Device, w: u32, h: u32) -> OffscreenTarget {
 
 /// The one draw path every tier shares: drain+tick, reflow, draw into `view`.
 ///
-/// `host_view`: optional `(view_id, texture_view)` for a skin `view{}` cutout. When present, a
-/// skin node `view{ id = view_id, ... }` is composited with the supplied texture (the host's own
-/// live content). `None` means no host content is supplied for any view id.
+/// `host_views`: a slice of `(view_id, texture_view)` pairs for skin `view{}` cutouts. Each
+/// matching `view{ id }` is composited with its corresponding texture (the host's own live
+/// content).
 ///
 /// `wait`: set `true` when the caller needs all prior GPU work complete before returning
 /// (e.g. Readback path — `readback_rgba` runs immediately after). Set `false` when the
@@ -95,7 +95,7 @@ pub fn render_frame(
     h: u32,
     dt: Duration,
     wait: bool,
-    host_view: Option<(&str, &wgpu::TextureView)>,
+    host_views: &[(&str, &wgpu::TextureView)],
 ) {
     engine.update(dt); // drains queued host actions, ticks host
                        // Lay out at the DESIGN CANVAS, not the surface (`w,h`) size. The renderer computes
@@ -104,7 +104,12 @@ pub fn render_frame(
                        // callers) sx = 1 and behavior is identical.
     let (cw, ch) = engine.scene().canvas;
     let scene = engine.layout(cw as f32, ch as f32);
-    let view_tex = |id: &str| host_view.and_then(|(vid, v)| if vid == id { Some(v) } else { None });
+    let view_tex = |id: &str| {
+        host_views
+            .iter()
+            .find(|(vid, _)| *vid == id)
+            .map(|(_, v)| *v)
+    };
     renderer.draw(
         &scene,
         |k| engine.state(k),
