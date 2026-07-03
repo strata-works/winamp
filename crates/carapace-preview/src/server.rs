@@ -5,8 +5,6 @@
 //! `!Send` crosses.
 //! Consumed by the engine wiring added in a later task — kept ungated so it's testable now.
 
-#![allow(dead_code)]
-
 use crate::protocol::{ClientMsg, OutMsg, out_to_ws, parse_client_msg};
 use std::net::TcpListener;
 use std::sync::mpsc::{Receiver, Sender};
@@ -21,6 +19,9 @@ pub enum EngineMsg {
 
 pub struct Ports {
     pub http: u16,
+    /// Not read by `main.rs` today — the browser learns the WS port from the templated
+    /// HTML page, not from this struct. Kept for tests/tools that want it directly.
+    #[allow(dead_code)]
     pub ws: u16,
 }
 

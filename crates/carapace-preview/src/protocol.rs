@@ -1,8 +1,6 @@
 //! Wire protocol between the browser viewer and the engine thread over the WebSocket connection.
 //! Consumed by the server task added in a later task — kept ungated so it's unit-tested now.
 
-#![allow(dead_code)]
-
 use serde::Deserialize;
 use serde_json::json;
 

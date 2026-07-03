@@ -2,7 +2,6 @@
 //! `Rgba8Unorm` texture, reads it back to tightly-packed RGBA, PNG-encodes it,
 //! and hashes frames for change-detection. Mirrors the proven `embed-spike`
 //! offscreen path against the public `carapace` API.
-#![allow(dead_code)]
 
 use carapace::engine::Engine;
 use carapace::render::{RenderTarget, Renderer};

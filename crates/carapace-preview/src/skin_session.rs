@@ -1,7 +1,6 @@
 //! `SkinSession`: skin load + reload with captured (non-fatal) Lua errors.
 //! Consumed by the engine-thread task added later — kept ungated so it's
 //! unit-tested now (same precedent as `preview_host.rs`).
-#![allow(dead_code)]
 
 use crate::preview_host::{ActionLog, PreviewHost, Values, scan_actions};
 use carapace::engine::Engine;
@@ -69,6 +68,9 @@ impl SkinSession {
         }
     }
 
+    /// Not called by `main.rs` today (it reads `last_error` directly) — a convenience
+    /// accessor kept for callers (tests, future tooling) that want a `Result`.
+    #[allow(dead_code)]
     pub fn load_result(&self) -> Result<(), String> {
         match &self.last_error {
             Some(e) => Err(e.clone()),

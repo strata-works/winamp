@@ -1,7 +1,6 @@
 //! `PreviewHost`: the `carapace::host::Host` impl driving skins in the previewer.
 //! Consumed by the server/engine-thread task added later — kept ungated so it's
 //! unit-tested now (same precedent as `protocol.rs`).
-#![allow(dead_code)]
 
 use carapace::host::{ActionSpec, Host, Value};
 use carapace::state::StateValue;
