@@ -13,6 +13,7 @@ pub struct SkinSession {
     pub engine: Option<Engine>,
     pub name: String,
     pub canvas: (u32, u32),
+    entry: String,
     pub last_error: Option<String>,
     values: Values,
     log: ActionLog,
@@ -23,7 +24,7 @@ fn build_engine(
     dir: &Path,
     values: &Values,
     log: &ActionLog,
-) -> Result<(Engine, String, (u32, u32)), String> {
+) -> Result<(Engine, String, (u32, u32), String), String> {
     let (manifest, source) = carapace::skin::load_dir(dir).map_err(|e| format!("{e:?}"))?;
     let actions: Vec<ActionSpec> = scan_actions(&source.lua_src)
         .into_iter()
@@ -35,6 +36,7 @@ fn build_engine(
         engine,
         manifest.name,
         (manifest.canvas.width, manifest.canvas.height),
+        manifest.entry,
     ))
 }
 
@@ -45,6 +47,7 @@ impl SkinSession {
             engine: None,
             name: String::new(),
             canvas: (0, 0),
+            entry: "skin.lua".to_string(),
             last_error: None,
             values,
             log,
@@ -55,10 +58,11 @@ impl SkinSession {
 
     pub fn reload(&mut self) {
         match build_engine(&self.dir, &self.values, &self.log) {
-            Ok((engine, name, canvas)) => {
+            Ok((engine, name, canvas, entry)) => {
                 self.engine = Some(engine);
                 self.name = name;
                 self.canvas = canvas;
+                self.entry = entry;
                 self.last_error = None;
             }
             Err(e) => {
@@ -77,6 +81,121 @@ impl SkinSession {
             None => Ok(()),
         }
     }
+
+    pub fn entry_path(&self) -> PathBuf {
+        self.dir.join(&self.entry)
+    }
+
+    fn read_source(&self) -> String {
+        std::fs::read_to_string(self.entry_path()).unwrap_or_default()
+    }
+
+    pub fn source_model(&self) -> crate::provenance::SourceModel {
+        crate::provenance::parse_source(&self.read_source())
+    }
+
+    pub fn params_json(&self) -> serde_json::Value {
+        use crate::provenance::LiteralValue;
+        let m = self.source_model();
+        let items: Vec<serde_json::Value> = m
+            .params
+            .iter()
+            .map(|p| match &p.value {
+                LiteralValue::Scalar { text, .. } => {
+                    serde_json::json!({"name": p.name, "kind": "scalar", "value": text})
+                }
+                LiteralValue::Table { subfields } => {
+                    let subs: Vec<_> = subfields
+                        .iter()
+                        .map(|(n, s)| serde_json::json!({"name": n, "value": s.text}))
+                        .collect();
+                    serde_json::json!({"name": p.name, "kind": "table", "subfields": subs})
+                }
+            })
+            .collect();
+        serde_json::Value::Array(items)
+    }
+
+    pub fn pick(
+        &self,
+        w: f32,
+        h: f32,
+        p: carapace::scene::Pt,
+    ) -> Option<crate::inspector::NodeInfo> {
+        let engine = self.engine.as_ref()?;
+        let (scene, origins) = engine.layout_with_origins(w, h);
+        let idx = scene.pick(p)?;
+        crate::inspector::node_info(&origins, idx, &self.source_model())
+    }
+
+    pub fn apply_prop(
+        &self,
+        line: u32,
+        field: &str,
+        sub: Option<&str>,
+        value: &str,
+    ) -> Result<(), String> {
+        use crate::provenance::{FieldState, LiteralValue};
+        let src = self.read_source();
+        let model = crate::provenance::parse_source(&src);
+        let call = model
+            .calls
+            .iter()
+            .find(|c| c.line == line)
+            .ok_or_else(|| format!("no call at line {line}"))?;
+        let f = call
+            .fields
+            .iter()
+            .find(|f| f.name == field)
+            .ok_or_else(|| format!("no field {field}"))?;
+        let span = match (&f.state, sub) {
+            (
+                FieldState::Literal {
+                    value: LiteralValue::Scalar { span, .. },
+                },
+                None,
+            ) => *span,
+            (
+                FieldState::Literal {
+                    value: LiteralValue::Table { subfields },
+                },
+                Some(sub),
+            ) => subfields
+                .iter()
+                .find(|(n, _)| n == sub)
+                .map(|(_, s)| s.span)
+                .ok_or_else(|| format!("no subfield {sub}"))?,
+            _ => {
+                return Err(format!(
+                    "{field} is not an editable scalar or color subfield"
+                ));
+            }
+        };
+        let out = crate::provenance::splice(&src, span, value);
+        std::fs::write(self.entry_path(), out).map_err(|e| e.to_string())
+    }
+
+    pub fn apply_param(&self, name: &str, sub: Option<&str>, value: &str) -> Result<(), String> {
+        use crate::provenance::LiteralValue;
+        let src = self.read_source();
+        let model = crate::provenance::parse_source(&src);
+        let param = model
+            .params
+            .iter()
+            .find(|p| p.name == name)
+            .ok_or_else(|| format!("no param {name}"))?;
+        let span = match (&param.value, sub) {
+            (LiteralValue::Scalar { span, .. }, None) => *span,
+            (LiteralValue::Table { subfields }, Some(sub)) => subfields
+                .iter()
+                .find(|(n, _)| n == sub)
+                .map(|(_, s)| s.span)
+                .ok_or_else(|| format!("no subfield {sub}"))?,
+            _ => return Err("param/subfield mismatch".to_string()),
+        };
+        let out = crate::provenance::splice(&src, span, value);
+        std::fs::write(self.entry_path(), out).map_err(|e| e.to_string())
+    }
 }
 
 #[cfg(test)]
@@ -91,14 +210,20 @@ mod tests {
         // integration-test binaries (files under `tests/`), not for unit tests
         // compiled into `src/main.rs` — so read it at runtime instead, with the
         // same fallback Cargo itself suggests.
+        //
+        // Nanosecond time alone isn't a reliable uniqueness source under parallel
+        // test execution — two tests can land on the same nanosecond and collide
+        // on the same directory. Mix in a process-wide counter as well.
+        static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let tmpdir = std::env::var("CARGO_TARGET_TMPDIR")
             .unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().into_owned());
         let base = std::path::Path::new(&tmpdir).join(format!(
-            "skin_{}",
+            "skin_{}_{}",
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
-                .as_nanos()
+                .as_nanos(),
+            COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ));
         fs::create_dir_all(&base).unwrap();
         fs::write(
@@ -147,5 +272,84 @@ mod tests {
         s.reload();
         assert!(s.last_error.is_none());
         assert!(s.engine.is_some());
+    }
+
+    #[test]
+    fn source_model_reads_params_from_disk() {
+        let dir = tmp_skin(
+            "local RI = 90\nfill{ path = {{x=0,y=0},{x=1,y=0},{x=1,y=1}}, color = {r=1,g=2,b=3} }",
+        );
+        let s = SkinSession::new(dir, Default::default(), Default::default());
+        let m = s.source_model();
+        assert!(m.params.iter().any(|p| p.name == "RI"));
+    }
+
+    #[test]
+    fn apply_param_rewrites_the_file() {
+        let dir = tmp_skin(
+            "local RI = 90\nfill{ path = {{x=0,y=0},{x=1,y=0},{x=1,y=1}}, color = {r=1,g=2,b=3} }",
+        );
+        let s = SkinSession::new(dir.clone(), Default::default(), Default::default());
+        s.apply_param("RI", None, "120").unwrap();
+        let on_disk = std::fs::read_to_string(s.entry_path()).unwrap();
+        assert!(on_disk.starts_with("local RI = 120"), "got: {on_disk}");
+    }
+
+    #[test]
+    fn apply_prop_rewrites_a_call_field() {
+        let dir = tmp_skin(
+            "fill{ x = 10, path = {{x=0,y=0},{x=1,y=0},{x=1,y=1}}, color = {r=1,g=2,b=3} }",
+        );
+        let s = SkinSession::new(dir.clone(), Default::default(), Default::default());
+        s.apply_prop(1, "x", None, "42").unwrap();
+        let on_disk = std::fs::read_to_string(s.entry_path()).unwrap();
+        assert!(on_disk.contains("x = 42"), "got: {on_disk}");
+    }
+
+    #[test]
+    fn apply_prop_rewrites_a_color_subfield() {
+        let dir =
+            tmp_skin("fill{ path = {{x=0,y=0},{x=100,y=0},{x=100,y=60}}, color = {r=1,g=2,b=3} }");
+        let s = SkinSession::new(dir.clone(), Default::default(), Default::default());
+        s.apply_prop(1, "color", Some("g"), "9").unwrap();
+        let on_disk = std::fs::read_to_string(s.entry_path()).unwrap();
+        assert!(on_disk.contains("g=9"), "got: {on_disk}");
+    }
+
+    #[test]
+    fn apply_prop_table_field_with_no_sub_is_an_error() {
+        let dir =
+            tmp_skin("fill{ path = {{x=0,y=0},{x=100,y=0},{x=100,y=60}}, color = {r=1,g=2,b=3} }");
+        let s = SkinSession::new(dir, Default::default(), Default::default());
+        assert!(s.apply_prop(1, "color", None, "x").is_err());
+    }
+
+    #[test]
+    fn apply_param_color_subfield() {
+        let dir = tmp_skin(
+            "local STONE = {r=10, g=20, b=30}\nfill{ path = {{x=0,y=0},{x=1,y=0},{x=1,y=1}}, color = STONE }",
+        );
+        let s = SkinSession::new(dir.clone(), Default::default(), Default::default());
+        s.apply_param("STONE", Some("g"), "99").unwrap();
+        let on_disk = std::fs::read_to_string(s.entry_path()).unwrap();
+        assert!(on_disk.contains("g=99"), "got: {on_disk}");
+    }
+
+    /// Locks the engine <-> full_moon line-agreement contract end-to-end: the `Origin.line`
+    /// the engine's layout attaches to a picked node must equal the `full_moon`-parsed source
+    /// line for that same primitive. Uses `SkinSession::pick`, which is CPU-only (layout +
+    /// `Scene::pick`, no rendering) — same as the other headless tests in this module — so it
+    /// runs fine in the plain `cargo test` lane without a GPU adapter.
+    #[test]
+    fn pick_line_agrees_with_full_moon_source_line() {
+        let dir =
+            tmp_skin("fill{ path = {{x=0,y=0},{x=100,y=0},{x=100,y=60}}, color = {r=1,g=2,b=3} }");
+        let s = SkinSession::new(dir, Default::default(), Default::default());
+        // Point inside the triangle (0,0)-(100,0)-(100,60).
+        let info = s
+            .pick(100.0, 60.0, carapace::scene::Pt { x: 90.0, y: 30.0 })
+            .expect("pick should hit the fill primitive");
+        assert_eq!(info.prim, "fill");
+        assert_eq!(info.line, 1);
     }
 }

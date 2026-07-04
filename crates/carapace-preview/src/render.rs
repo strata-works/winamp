@@ -48,7 +48,16 @@ pub struct Offscreen {
     pub h: u32,
 }
 
+/// Clamp requested offscreen dimensions to `[1, max]` on each axis. A canvas request larger than the
+/// GPU's `max_texture_dimension_2d` would otherwise panic wgpu in `create_texture`; clamping degrades
+/// an oversized request to a large-but-valid texture instead of crashing the previewer.
+pub(crate) fn clamp_offscreen_dims(w: u32, h: u32, max: u32) -> (u32, u32) {
+    let max = max.max(1);
+    (w.clamp(1, max), h.clamp(1, max))
+}
+
 pub fn new_offscreen(device: &wgpu::Device, w: u32, h: u32) -> Offscreen {
+    let (w, h) = clamp_offscreen_dims(w, h, device.limits().max_texture_dimension_2d);
     let tex = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("carapace-preview-offscreen"),
         size: wgpu::Extent3d {
@@ -213,6 +222,18 @@ mod tests {
             rgba.chunks_exact(4).any(|p| p[3] > 0),
             "expected some opaque pixels"
         );
+    }
+
+    #[test]
+    fn clamp_offscreen_dims_bounds_each_axis() {
+        // In range: unchanged.
+        assert_eq!(clamp_offscreen_dims(342, 394, 16384), (342, 394));
+        // Oversized height (the reported crash: setCanvas h=394400) clamps to max, width kept.
+        assert_eq!(clamp_offscreen_dims(342, 394400, 16384), (342, 16384));
+        // Both axes oversized clamp to max.
+        assert_eq!(clamp_offscreen_dims(99999, 99999, 16384), (16384, 16384));
+        // Zero floors to 1 so wgpu never sees a zero-area texture.
+        assert_eq!(clamp_offscreen_dims(0, 0, 16384), (1, 1));
     }
 
     #[test]

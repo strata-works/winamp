@@ -1,8 +1,10 @@
 //! carapace-preview — a live, interactive browser previewer for carapace skins.
 //! See docs/superpowers/specs/2026-07-01-carapace-preview-design.md.
 
+mod inspector;
 mod preview_host;
 mod protocol;
+mod provenance;
 mod render;
 mod server;
 mod skin_session;
@@ -127,6 +129,9 @@ fn run_engine_loop(
                     let _ = tx.send(OutMsg::Error {
                         message: session.last_error.clone(),
                     });
+                    let _ = tx.send(OutMsg::Params {
+                        json: session.params_json(),
+                    });
                     if let Some(png) = &last_png {
                         let _ = tx.send(OutMsg::Frame(png.clone()));
                     }
@@ -155,18 +160,57 @@ fn run_engine_loop(
                     last_hash = None; // force a resend
                 }
                 EngineMsg::Client(ClientMsg::SetCanvas { w, h }) => {
-                    let (w, h) = (w.max(1), h.max(1));
-                    render_size = (w, h);
+                    // new_offscreen clamps to the GPU's max texture size; mirror the size it
+                    // actually settled on so meta/pick stay consistent with the real texture.
                     off = render::new_offscreen(&gpu.device, w, h);
+                    render_size = (off.w, off.h);
                     last_hash = None;
+                    // Broadcast the CLAMPED size (render_size), not the raw request, so the
+                    // browser sizes its canvas and scales pick coordinates to the real texture.
                     broadcast(
                         &mut clients,
                         &OutMsg::Meta {
                             name: session.name.clone(),
-                            w,
-                            h,
+                            w: render_size.0,
+                            h: render_size.1,
                         },
                     );
+                }
+                EngineMsg::Client(ClientMsg::Pick { x, y }) => {
+                    if let Some(info) =
+                        session.pick(render_size.0 as f32, render_size.1 as f32, Pt { x, y })
+                    {
+                        let json = serde_json::json!({
+                            "prim": info.prim,
+                            "line": info.line,
+                            "props": info.props.iter().map(|p| serde_json::json!({
+                                "name": p.name, "editable": p.editable,
+                                "value": p.value, "reason": p.reason,
+                                "subfields": p.subfields.as_ref().map(|subs|
+                                    subs.iter().map(|s| serde_json::json!({"name": s.name, "value": s.value}))
+                                        .collect::<Vec<_>>()),
+                            })).collect::<Vec<_>>(),
+                        });
+                        broadcast(&mut clients, &OutMsg::NodeInfo { json });
+                    }
+                }
+                EngineMsg::Client(ClientMsg::SetProp {
+                    line,
+                    field,
+                    sub,
+                    value,
+                }) => {
+                    let text = json_scalar_to_lua(&value);
+                    if let Err(e) = session.apply_prop(line, &field, sub.as_deref(), &text) {
+                        eprintln!("setProp failed: {e}");
+                    }
+                    // The file watcher fires a Reload; no explicit re-render here.
+                }
+                EngineMsg::Client(ClientMsg::SetParam { name, field, value }) => {
+                    let text = json_scalar_to_lua(&value);
+                    if let Err(e) = session.apply_param(&name, field.as_deref(), &text) {
+                        eprintln!("setParam failed: {e}");
+                    }
                 }
                 EngineMsg::Reload => {
                     session.reload();
@@ -189,6 +233,12 @@ fn run_engine_loop(
                             name: session.name.clone(),
                             w: render_size.0,
                             h: render_size.1,
+                        },
+                    );
+                    broadcast(
+                        &mut clients,
+                        &OutMsg::Params {
+                            json: session.params_json(),
                         },
                     );
                     last_hash = None;
@@ -231,11 +281,101 @@ fn broadcast(clients: &mut Vec<mpsc::Sender<OutMsg>>, msg: &OutMsg) {
     clients.retain(|tx| tx.send(msg.clone()).is_ok());
 }
 
+/// Render a JSON scalar as the Lua literal text to splice into the source. Numbers pass through;
+/// strings become quoted Lua strings; booleans become `true`/`false`.
+fn json_scalar_to_lua(v: &serde_json::Value) -> String {
+    match v {
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::Bool(b) => b.to_string(),
+        serde_json::Value::String(s) => lua_string_literal(s),
+        _ => "nil".to_string(),
+    }
+}
+
+/// Build a valid Lua double-quoted string literal for `s`. Unlike Rust's `Debug` formatting
+/// (which uses `\u{...}` escapes Lua doesn't understand), this only ever emits escapes Lua
+/// itself accepts: the standard backslash escapes for `\`, `"`, `\n`, `\r`, `\t`, and decimal
+/// (`\ddd`) escapes for any other control character. Everything else, including printable
+/// non-ASCII/UTF-8, passes through unchanged.
+fn lua_string_literal(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            // Zero-pad to 3 digits: Lua reads `\ddd` as at most 3 decimal digits, so a
+            // fixed-width form stays unambiguous even when the next char is a digit.
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\{:03}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
 fn json_to_state(v: &serde_json::Value) -> Option<StateValue> {
     match v {
         serde_json::Value::Number(n) => n.as_f64().map(|f| StateValue::Scalar(f as f32)),
         serde_json::Value::String(s) => Some(StateValue::Str(Arc::from(s.as_str()))),
         serde_json::Value::Bool(b) => Some(StateValue::Bool(*b)),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn json_scalar_to_lua_number() {
+        assert_eq!(json_scalar_to_lua(&serde_json::json!(12)), "12");
+    }
+
+    #[test]
+    fn json_scalar_to_lua_bool() {
+        assert_eq!(json_scalar_to_lua(&serde_json::json!(true)), "true");
+    }
+
+    #[test]
+    fn json_scalar_to_lua_plain_string() {
+        assert_eq!(json_scalar_to_lua(&serde_json::json!("door")), "\"door\"");
+    }
+
+    #[test]
+    fn json_scalar_to_lua_escapes_quote_and_backslash() {
+        assert_eq!(
+            json_scalar_to_lua(&serde_json::json!("a\"b\\c")),
+            "\"a\\\"b\\\\c\""
+        );
+    }
+
+    #[test]
+    fn json_scalar_to_lua_escapes_newline() {
+        let out = json_scalar_to_lua(&serde_json::json!("a\nb"));
+        assert_eq!(out, "\"a\\nb\"");
+        assert!(!out.contains('\n'), "newline must be escaped, not literal");
+    }
+
+    #[test]
+    fn json_scalar_to_lua_escapes_control_char_as_decimal() {
+        // Byte 7 (bell) must become a valid-Lua decimal escape, not Rust's
+        // Debug-style `\u{7}` (which Lua does not understand). We emit the
+        // zero-padded 3-digit form `\007`.
+        let out = json_scalar_to_lua(&serde_json::json!("a\u{7}b"));
+        assert_eq!(out, "\"a\\007b\"");
+    }
+
+    #[test]
+    fn json_scalar_to_lua_control_char_is_zero_padded_against_digit_adjacency() {
+        // A control byte immediately followed by an ASCII digit must stay
+        // unambiguous: Lua reads `\ddd` as at most 3 digits, so byte 7 then
+        // '8' must be `\007` + literal '8' (i.e. `\0078`), never `\78`
+        // (which Lua would parse as char 78).
+        let out = json_scalar_to_lua(&serde_json::json!("\u{7}8"));
+        assert_eq!(out, "\"\\0078\"");
     }
 }
