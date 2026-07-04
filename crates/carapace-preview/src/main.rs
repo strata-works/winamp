@@ -160,9 +160,10 @@ fn run_engine_loop(
                     last_hash = None; // force a resend
                 }
                 EngineMsg::Client(ClientMsg::SetCanvas { w, h }) => {
-                    let (w, h) = (w.max(1), h.max(1));
-                    render_size = (w, h);
+                    // new_offscreen clamps to the GPU's max texture size; mirror the size it
+                    // actually settled on so meta/pick stay consistent with the real texture.
                     off = render::new_offscreen(&gpu.device, w, h);
+                    render_size = (off.w, off.h);
                     last_hash = None;
                     broadcast(
                         &mut clients,
