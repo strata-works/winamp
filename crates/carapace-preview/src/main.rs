@@ -165,12 +165,14 @@ fn run_engine_loop(
                     off = render::new_offscreen(&gpu.device, w, h);
                     render_size = (off.w, off.h);
                     last_hash = None;
+                    // Broadcast the CLAMPED size (render_size), not the raw request, so the
+                    // browser sizes its canvas and scales pick coordinates to the real texture.
                     broadcast(
                         &mut clients,
                         &OutMsg::Meta {
                             name: session.name.clone(),
-                            w,
-                            h,
+                            w: render_size.0,
+                            h: render_size.1,
                         },
                     );
                 }
