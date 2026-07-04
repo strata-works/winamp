@@ -29,7 +29,7 @@ A filled polygon; also emits a hotspot if `on_press` is set. Registered at `voca
 | field | type | meaning |
 |---|---|---|
 | `path` | point path (≥3 points) | polygon outline — from `rect{}`/`circle{}`/`rounded_rect{}` or a literal point list |
-| `color` | `{r,g,b,a?}` | solid fill (mutually exclusive with `gradient`); `a` defaults 255 |
+| `color` | `{r,g,b,a?}` | solid fill; supply `color` **or** `gradient` (if both are given, `gradient` wins — no error); `a` defaults 255 |
 | `gradient` | table (see [Gradients](#gradients)) | gradient fill instead of `color` |
 | `on_press` | function | optional; adds a `Hotspot` over the path's bounds |
 | `role` | `"drag"\|"passthrough"` | hotspot role (with `on_press`) |
@@ -145,7 +145,7 @@ Each `template` cell (`vocab.rs:360-396`):
 | field | type | meaning |
 |---|---|---|
 | `bind` | string | row-data key (`Row::get`, `host.rs:29-31`) |
-| `x` / `right` | number | offset from the region's left / right edge — exactly one required |
+| `x` / `right` | number | offset from the region's left / right edge — supply at least one (if both, `x` wins) |
 | `y` | number, optional | vertical offset in the row (default 0) |
 | `size` | number, optional | font size (default 16) |
 | `color` | `{r,g,b,a?}` | text color |
@@ -188,7 +188,7 @@ Static or live-bound text. Registered at `vocab.rs:464-507`.
 | `value` | string | host binding key for live text (`text_of`, `render.rs:124-129`) |
 | `x`,`y` | number | anchor position |
 | `size` | number, optional | font size (default 16) |
-| `color` | `{r,g,b,a?}` | solid color (mutually exclusive with `gradient`) |
+| `color` | `{r,g,b,a?}` | solid color (or use `gradient`; if both, `gradient` wins) |
 | `gradient` | table | gradient-painted text |
 | `font` | string, optional | bundled font; falls back to the system font |
 | `halign` | `"left"\|"center"\|"right"`, optional | default `"left"` |
@@ -242,7 +242,7 @@ region{ path = { {x=150,y=24},{x=178,y=24},{x=178,y=48},{x=150,y=48} }, on_press
 
 ### Gradients
 
-Supply `gradient = { ... }` wherever a `color =` could go (`fill{}`, `text{}`); mutually exclusive with `color` (`parse_gradient`, `vocab.rs:82-138`).
+Supply `gradient = { ... }` wherever a `color =` could go (`fill{}`, `text{}`). If a primitive is given both `color` and `gradient`, `gradient` silently wins (no error) — unlike `text{}`'s `text`/`value` pair, which is a hard either/or that *does* error. (`parse_gradient`, `vocab.rs:82-138`; precedence at `vocab.rs:140-146`.)
 
 | `type` | extra fields | meaning |
 |---|---|---|
