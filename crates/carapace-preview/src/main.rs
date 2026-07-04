@@ -296,7 +296,9 @@ fn lua_string_literal(s: &str) -> String {
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 => out.push_str(&format!("\\{}", c as u32)),
+            // Zero-pad to 3 digits: Lua reads `\ddd` as at most 3 decimal digits, so a
+            // fixed-width form stays unambiguous even when the next char is a digit.
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\{:03}", c as u32)),
             c => out.push(c),
         }
     }
@@ -349,9 +351,20 @@ mod tests {
 
     #[test]
     fn json_scalar_to_lua_escapes_control_char_as_decimal() {
-        // Byte 7 (bell) must become the valid-Lua decimal escape `\7`, not Rust's
-        // Debug-style `\u{7}` (which Lua does not understand).
+        // Byte 7 (bell) must become a valid-Lua decimal escape, not Rust's
+        // Debug-style `\u{7}` (which Lua does not understand). We emit the
+        // zero-padded 3-digit form `\007`.
         let out = json_scalar_to_lua(&serde_json::json!("a\u{7}b"));
-        assert_eq!(out, "\"a\\7b\"");
+        assert_eq!(out, "\"a\\007b\"");
+    }
+
+    #[test]
+    fn json_scalar_to_lua_control_char_is_zero_padded_against_digit_adjacency() {
+        // A control byte immediately followed by an ASCII digit must stay
+        // unambiguous: Lua reads `\ddd` as at most 3 digits, so byte 7 then
+        // '8' must be `\007` + literal '8' (i.e. `\0078`), never `\78`
+        // (which Lua would parse as char 78).
+        let out = json_scalar_to_lua(&serde_json::json!("\u{7}8"));
+        assert_eq!(out, "\"\\0078\"");
     }
 }
