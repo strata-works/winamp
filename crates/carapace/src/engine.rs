@@ -9,10 +9,19 @@ use crate::state::StateValue;
 use crate::swap::rebuild;
 use crate::vocab::VocabRegistry;
 
+/// A pointer input event fed to [`Engine::handle_pointer`] / [`Engine::handle_pointer_resolved`].
 pub enum PointerEvent {
+    /// A press (e.g. mouse-down / touch-down) at the given point.
     Press,
 }
 
+/// An opaque handle to a loaded skin: the running Lua-built [`Scene`], its layout anchors, and the
+/// [`Host`] it talks to.
+///
+/// Construct with [`Engine::new`], drive it once per frame by feeding input (`handle_pointer` /
+/// `handle_pointer_resolved` / `handle_command`) and calling [`Engine::update`], then read geometry
+/// with [`Engine::layout`] or [`Engine::scene`] to render. `Engine` is `!Send`/`!Sync` — construct,
+/// drive, and drop it on a single thread.
 pub struct Engine {
     host: Box<dyn Host>,
     registry: Rc<VocabRegistry>,
@@ -21,6 +30,8 @@ pub struct Engine {
 }
 
 impl Engine {
+    /// Construct the engine: wraps `registry` in an `Rc`, creates the command queue, and builds
+    /// the initial skin. Errors if the Lua entry script fails to load or run.
     pub fn new(
         host: Box<dyn Host>,
         registry: VocabRegistry,
@@ -37,7 +48,10 @@ impl Engine {
         })
     }
 
-    /// Phase 1 (input): resolve the hit and run the handler, which only enqueues.
+    /// Hit-test the **design** scene at `p` and fire the matched hotspot's handler.
+    ///
+    /// Phase 1 (input): resolve the hit and run the handler, which only enqueues commands (errors
+    /// are logged, not propagated).
     pub fn handle_pointer(&mut self, p: Pt, _kind: PointerEvent) {
         if let Some(id) = self.skin.scene.hit(p)
             && let Err(e) = self.skin.fire(id)
@@ -47,9 +61,12 @@ impl Engine {
         }
     }
 
-    /// Like `handle_pointer`, but hit-tests the layout-resolved scene for the given logical window
-    /// size, so anchored hotspots (frame skins) are hit where they are actually drawn rather than
-    /// at their design positions. `p` is in logical (window-point) coordinates.
+    /// Like [`handle_pointer`](Engine::handle_pointer), but hit-tests the **layout-resolved** scene
+    /// for the given logical window size, so anchored/frame hotspots are hit where they are
+    /// actually drawn rather than at their design positions. `p` is in logical (window-point)
+    /// coordinates.
+    ///
+    /// Dispatches hotspot handlers, list-row selects, and scrub seeks.
     pub fn handle_pointer_resolved(
         &mut self,
         logical_w: f32,
@@ -83,12 +100,16 @@ impl Engine {
         }
     }
 
-    /// Enqueue a meta command (the host app's Tab/H equivalents).
+    /// Enqueue a meta command (host-app-level, not from skin picking).
     pub fn handle_command(&mut self, cmd: Command) {
         self.queue.borrow_mut().push(cmd);
     }
 
-    /// Phase 2 (drain) + Phase 3 (tick).
+    /// Drain queued commands and tick the host.
+    ///
+    /// Phase 2 (drain) + Phase 3 (tick): validates each `HostAction` against the current host's
+    /// `actions()` allowlist before invoking it, applies `Swap`/`SwitchHost` transactionally, then
+    /// calls `host.tick(dt)`.
     pub fn update(&mut self, dt: Duration) {
         let cmds: Vec<Command> = std::mem::take(&mut *self.queue.borrow_mut());
         for cmd in cmds {
@@ -123,31 +144,33 @@ impl Engine {
         }
     }
 
+    /// The current **design** scene (unresolved).
     pub fn scene(&self) -> &Scene {
         &self.skin.scene
     }
 
-    /// The per-node anchors parallel to `scene().nodes`, for the layout pass.
+    /// Per-node anchors, parallel to [`scene`](Engine::scene)`().nodes`.
     pub fn scene_anchors(&self) -> &[crate::layout::Anchors] {
         &self.skin.anchors
     }
 
-    /// The per-node source origins parallel to `scene().nodes` (the design scene). For the
-    /// post-layout scene, use `layout_with_origins`.
+    /// Per-node source origins for the design scene, parallel to
+    /// [`scene`](Engine::scene)`().nodes`. For the post-layout scene, use
+    /// [`layout_with_origins`](Engine::layout_with_origins).
     pub fn scene_origins(&self) -> &[crate::scene::Origin] {
         &self.skin.origins
     }
 
-    /// Resolve the design scene to a logical scene for the given window logical size, using the
-    /// skin's per-element anchors. The result's `canvas` equals the logical size. Frame skins call
-    /// this on resize; gadget skins render the design scene directly.
+    /// Resolve the design scene to a logical scene for a window size (result `canvas` equals the
+    /// logical size); expands `List` nodes into rows.
+    ///
+    /// Frame skins call this on resize; gadget skins render [`scene`](Engine::scene) directly.
     pub fn layout(&self, logical_w: f32, logical_h: f32) -> Scene {
         self.resolve_expand(logical_w, logical_h).0
     }
 
-    /// Like `layout`, but also returns per-node source origins aligned 1:1 with the returned
-    /// `scene.nodes`. For authoring tools (the preview inspector). See `scene_origins` for the
-    /// pre-layout design origins.
+    /// Same as [`layout`](Engine::layout) but also returns origins aligned 1:1 with the resolved
+    /// nodes — for authoring tools.
     pub fn layout_with_origins(
         &self,
         logical_w: f32,
@@ -168,6 +191,7 @@ impl Engine {
         (scene, origins)
     }
 
+    /// Read a host data value by key (delegates to [`Host::get`]).
     pub fn state(&self, key: &str) -> Option<StateValue> {
         self.host.get(key)
     }

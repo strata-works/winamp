@@ -18,15 +18,27 @@ use crate::state::StateValue;
 // layout input — so vertically-different placements of identical text share one cached layout.
 type LayoutKey = (u64, u32, crate::scene::HAlign, Option<u32>, String);
 
+/// The GPU target `Renderer::draw` paints a frame into.
 pub struct RenderTarget<'a> {
+    /// The wgpu device the target's texture (and the `Renderer`) belongs to.
     pub device: &'a wgpu::Device,
+    /// The queue used to submit rendering/composite commands.
     pub queue: &'a wgpu::Queue,
+    /// The texture view to render into.
     pub view: &'a wgpu::TextureView,
+    /// Target width in physical pixels.
     pub width: u32,
+    /// Target height in physical pixels.
     pub height: u32,
+    /// Background color cleared/blended under the scene (vello's `RenderParams::base_color`).
     pub base_color: crate::scene::Color,
 }
 
+/// The per-frame painter: draws a `Scene` via vello, shapes/caches text via parley, and
+/// composites `Node::View` regions with an embedder-supplied wgpu texture.
+///
+/// Single-threaded and tied to the wgpu `Device` it was constructed with — use it only on the
+/// thread that owns that device.
 pub struct Renderer {
     inner: vello::Renderer,
     font_cx: FontContext,
@@ -129,6 +141,8 @@ fn text_of(read: &impl Fn(&str) -> Option<StateValue>, key: &str) -> String {
 }
 
 impl Renderer {
+    /// Build a renderer for `device`: sets up the vello renderer, font/text-layout context, and
+    /// the view-composite pipeline used to blit `Node::View` textures into the scene.
     pub fn new(device: &wgpu::Device) -> Self {
         let inner = vello::Renderer::new(
             device,
@@ -227,6 +241,19 @@ impl Renderer {
         self.layouts.len()
     }
 
+    /// The per-frame entry point: draws every node in `scene` into `target`.
+    ///
+    /// Scales canvas coordinates to `target`'s pixel size, draws all node kinds via vello
+    /// (resolving `ValueFill`/`Scrub`/bound `Text` through `read_value`), then composites each
+    /// `Node::View` region with the texture `view_tex` supplies for its id (premultiplied-alpha
+    /// blended over the scene already drawn).
+    ///
+    /// - `scene`: the (already-resolved, if applicable) scene to draw.
+    /// - `read_value`: resolves a bound value key to its current `StateValue` — typically wraps
+    ///   `Host::get` or `Engine::state`.
+    /// - `view_tex`: supplies the wgpu texture view for a `Node::View`'s id (e.g. cover art or a
+    ///   live host view), or `None` to leave that region undrawn this frame.
+    /// - `target`: the GPU surface/texture and its device/queue to render into.
     pub fn draw<'v>(
         &mut self,
         scene: &Scene,

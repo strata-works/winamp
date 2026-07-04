@@ -11,20 +11,31 @@ fn default_asset_dir() -> String {
     "assets".to_string()
 }
 
+/// The skin's design-resolution size, in logical pixels.
 #[derive(Debug, Deserialize, PartialEq)]
 pub struct Canvas {
+    /// Design-resolution width.
     pub width: u32,
+    /// Design-resolution height.
     pub height: u32,
 }
 
+/// The parsed, validated contents of a skin's `skin.toml`.
 #[derive(Debug, Deserialize, PartialEq)]
 pub struct Manifest {
+    /// Manifest schema version; must equal `1`.
     pub schema: u32,
+    /// Skin identifier.
     pub id: String,
+    /// Display name.
     pub name: String,
+    /// Required engine version; must equal `"^0.1"` (exact string match).
     pub engine: String,
+    /// Design-resolution size.
     pub canvas: Canvas,
+    /// Lua entry filename, relative to the skin directory.
     pub entry: String,
+    /// Assets subdirectory, relative to the skin directory; default `"assets"`.
     #[serde(default = "default_asset_dir")]
     pub asset_dir: String,
     /// Whether the skin window should be resizable (frame-skin archetype).
@@ -38,12 +49,18 @@ pub struct Manifest {
     pub max_size: Option<(u32, u32)>,
 }
 
+/// Errors from loading or validating a skin directory via [`load_dir`].
 #[derive(Debug)]
 pub enum SkinError {
+    /// Failed to read a file in the skin directory (`skin.toml`, the Lua entry, etc).
     Io(std::io::Error),
+    /// `skin.toml` failed to parse.
     Toml(toml::de::Error),
+    /// `schema` in `skin.toml` is not a version this engine supports.
     UnsupportedSchema(u32),
+    /// `engine` in `skin.toml` doesn't match the required version string.
     EngineIncompat(String),
+    /// Asset directory resolution failed.
     Asset(crate::asset::AssetError),
 }
 impl From<std::io::Error> for SkinError {
@@ -62,6 +79,12 @@ impl From<crate::asset::AssetError> for SkinError {
     }
 }
 
+/// Loads and validates `skin.toml` from a skin directory, reads the Lua entry
+/// file, resolves the asset directory, and returns `(Manifest, SkinSource)`.
+///
+/// A skin directory holds `skin.toml`, the `entry` Lua file, and an
+/// `asset_dir` (default `assets/`, recursively indexed by relative path;
+/// symlinks are skipped to prevent sandbox escape).
 pub fn load_dir(dir: &Path) -> Result<(Manifest, SkinSource), SkinError> {
     let manifest: Manifest = toml::from_str(&std::fs::read_to_string(dir.join("skin.toml"))?)?;
     if manifest.schema != SUPPORTED_SCHEMA {

@@ -1,0 +1,15 @@
+# mdBook config for the Carapace API documentation.
+# Build:  mdbook build docs      (outputs to docs/book/, gitignored)
+# Serve:  mdbook serve docs      (live-reloading local preview)
+[book]
+title = "Carapace API Documentation"
+authors = ["Carapace contributors"]
+description = "The complete reference for Carapace — a declarative skin engine rendered on wgpu/vello and embeddable via a safe C ABI."
+src = "api"
+language = "en"
+
+[output.html]
+default-theme = "navy"
+preferred-dark-theme = "navy"
+git-repository-url = "https://github.com/strata-works/winamp"
+edit-url-template = "https://github.com/strata-works/winamp/edit/main/docs/api/{path}"

@@ -1,3 +1,10 @@
+//! `carapace` is a skin engine: it loads a `skin.toml` manifest plus a Lua entry script, runs the
+//! script against a vocabulary of primitives to build a `Scene`, then lays that scene out and
+//! renders it on wgpu/vello. The engine is single-threaded — `Engine` is `!Send`/`!Sync` and must
+//! be constructed, driven, and dropped on one thread.
+//!
+//! See the guide under `docs/api/` in the repo for the full API reference and lifecycle walkthrough.
+
 pub mod asset;
 pub mod command;
 pub mod engine;
