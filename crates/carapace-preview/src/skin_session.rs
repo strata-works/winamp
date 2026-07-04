@@ -128,7 +128,13 @@ impl SkinSession {
         crate::inspector::node_info(&origins, idx, &self.source_model())
     }
 
-    pub fn apply_prop(&self, line: u32, field: &str, value: &str) -> Result<(), String> {
+    pub fn apply_prop(
+        &self,
+        line: u32,
+        field: &str,
+        sub: Option<&str>,
+        value: &str,
+    ) -> Result<(), String> {
         use crate::provenance::{FieldState, LiteralValue};
         let src = self.read_source();
         let model = crate::provenance::parse_source(&src);
@@ -142,13 +148,30 @@ impl SkinSession {
             .iter()
             .find(|f| f.name == field)
             .ok_or_else(|| format!("no field {field}"))?;
-        let FieldState::Literal {
-            value: LiteralValue::Scalar { span, .. },
-        } = &f.state
-        else {
-            return Err(format!("{field} is not an editable scalar"));
+        let span = match (&f.state, sub) {
+            (
+                FieldState::Literal {
+                    value: LiteralValue::Scalar { span, .. },
+                },
+                None,
+            ) => *span,
+            (
+                FieldState::Literal {
+                    value: LiteralValue::Table { subfields },
+                },
+                Some(sub),
+            ) => subfields
+                .iter()
+                .find(|(n, _)| n == sub)
+                .map(|(_, s)| s.span)
+                .ok_or_else(|| format!("no subfield {sub}"))?,
+            _ => {
+                return Err(format!(
+                    "{field} is not an editable scalar or color subfield"
+                ));
+            }
         };
-        let out = crate::provenance::splice(&src, *span, value);
+        let out = crate::provenance::splice(&src, span, value);
         std::fs::write(self.entry_path(), out).map_err(|e| e.to_string())
     }
 
@@ -278,9 +301,27 @@ mod tests {
             "fill{ x = 10, path = {{x=0,y=0},{x=1,y=0},{x=1,y=1}}, color = {r=1,g=2,b=3} }",
         );
         let s = SkinSession::new(dir.clone(), Default::default(), Default::default());
-        s.apply_prop(1, "x", "42").unwrap();
+        s.apply_prop(1, "x", None, "42").unwrap();
         let on_disk = std::fs::read_to_string(s.entry_path()).unwrap();
         assert!(on_disk.contains("x = 42"), "got: {on_disk}");
+    }
+
+    #[test]
+    fn apply_prop_rewrites_a_color_subfield() {
+        let dir =
+            tmp_skin("fill{ path = {{x=0,y=0},{x=100,y=0},{x=100,y=60}}, color = {r=1,g=2,b=3} }");
+        let s = SkinSession::new(dir.clone(), Default::default(), Default::default());
+        s.apply_prop(1, "color", Some("g"), "9").unwrap();
+        let on_disk = std::fs::read_to_string(s.entry_path()).unwrap();
+        assert!(on_disk.contains("g=9"), "got: {on_disk}");
+    }
+
+    #[test]
+    fn apply_prop_table_field_with_no_sub_is_an_error() {
+        let dir =
+            tmp_skin("fill{ path = {{x=0,y=0},{x=100,y=0},{x=100,y=60}}, color = {r=1,g=2,b=3} }");
+        let s = SkinSession::new(dir, Default::default(), Default::default());
+        assert!(s.apply_prop(1, "color", None, "x").is_err());
     }
 
     #[test]

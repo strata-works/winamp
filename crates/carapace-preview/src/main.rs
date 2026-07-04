@@ -183,14 +183,22 @@ fn run_engine_loop(
                             "props": info.props.iter().map(|p| serde_json::json!({
                                 "name": p.name, "editable": p.editable,
                                 "value": p.value, "reason": p.reason,
+                                "subfields": p.subfields.as_ref().map(|subs|
+                                    subs.iter().map(|s| serde_json::json!({"name": s.name, "value": s.value}))
+                                        .collect::<Vec<_>>()),
                             })).collect::<Vec<_>>(),
                         });
                         broadcast(&mut clients, &OutMsg::NodeInfo { json });
                     }
                 }
-                EngineMsg::Client(ClientMsg::SetProp { line, field, value }) => {
+                EngineMsg::Client(ClientMsg::SetProp {
+                    line,
+                    field,
+                    sub,
+                    value,
+                }) => {
                     let text = json_scalar_to_lua(&value);
-                    if let Err(e) = session.apply_prop(line, &field, &text) {
+                    if let Err(e) = session.apply_prop(line, &field, sub.as_deref(), &text) {
                         eprintln!("setProp failed: {e}");
                     }
                     // The file watcher fires a Reload; no explicit re-render here.

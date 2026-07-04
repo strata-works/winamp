@@ -30,6 +30,8 @@ pub enum ClientMsg {
     SetProp {
         line: u32,
         field: String,
+        #[serde(default)]
+        sub: Option<String>,
         value: serde_json::Value,
     },
     SetParam {
@@ -132,13 +134,25 @@ mod tests {
         let p = parse_client_msg(r#"{"type":"pick","x":5.0,"y":6.0}"#).unwrap();
         assert!(matches!(p, ClientMsg::Pick { x, y } if x == 5.0 && y == 6.0));
         let sp = parse_client_msg(r#"{"type":"setProp","line":3,"field":"x","value":12}"#).unwrap();
-        assert!(matches!(sp, ClientMsg::SetProp { line: 3, ref field, .. } if field == "x"));
+        assert!(
+            matches!(sp, ClientMsg::SetProp { line: 3, ref field, sub: None, .. } if field == "x")
+        );
         let pr =
             parse_client_msg(r#"{"type":"setParam","name":"RI","field":null,"value":90}"#).unwrap();
         assert!(matches!(pr, ClientMsg::SetParam { ref name, field: None, .. } if name == "RI"));
         let prc = parse_client_msg(r#"{"type":"setParam","name":"STONE","field":"r","value":10}"#)
             .unwrap();
         assert!(matches!(prc, ClientMsg::SetParam { field: Some(ref f), .. } if f == "r"));
+    }
+
+    #[test]
+    fn parses_setprop_with_sub_for_color_subfield() {
+        let sp =
+            parse_client_msg(r#"{"type":"setProp","line":50,"field":"color","sub":"g","value":9}"#)
+                .unwrap();
+        assert!(
+            matches!(sp, ClientMsg::SetProp { line: 50, ref field, sub: Some(ref s), .. } if field == "color" && s == "g")
+        );
     }
 
     #[test]

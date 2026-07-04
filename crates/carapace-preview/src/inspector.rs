@@ -12,24 +12,18 @@ pub struct NodeInfo {
 }
 
 #[derive(Debug, Clone)]
+pub struct SubFieldInfo {
+    pub name: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct PropInfo {
     pub name: String,
     pub editable: bool,
     pub value: Option<String>,  // literal text for editable scalar props
     pub reason: Option<String>, // why read-only
-}
-
-fn literal_display(v: &LiteralValue) -> String {
-    match v {
-        LiteralValue::Scalar { text, .. } => text.clone(),
-        LiteralValue::Table { subfields } => {
-            let inner: Vec<String> = subfields
-                .iter()
-                .map(|(n, s)| format!("{n}={}", s.text))
-                .collect();
-            format!("{{{}}}", inner.join(", "))
-        }
-    }
+    pub subfields: Option<Vec<SubFieldInfo>>, // Some for an editable table/color field
 }
 
 /// Build inspector info for the picked node. `None` if the node is engine-generated (`call: None`),
@@ -57,18 +51,46 @@ pub fn node_info(origins: &[Origin], picked: usize, model: &SourceModel) -> Opti
                 editable: false,
                 value: None,
                 reason: Some("from a loop".to_string()),
+                subfields: None,
             },
-            (FieldState::Literal { value }, false) => PropInfo {
+            (
+                FieldState::Literal {
+                    value: LiteralValue::Scalar { text, .. },
+                },
+                false,
+            ) => PropInfo {
                 name: f.name.clone(),
                 editable: true,
-                value: Some(literal_display(value)),
+                value: Some(text.clone()),
                 reason: None,
+                subfields: None,
+            },
+            (
+                FieldState::Literal {
+                    value: LiteralValue::Table { subfields },
+                },
+                false,
+            ) => PropInfo {
+                name: f.name.clone(),
+                editable: true,
+                value: None,
+                reason: None,
+                subfields: Some(
+                    subfields
+                        .iter()
+                        .map(|(n, s)| SubFieldInfo {
+                            name: n.clone(),
+                            value: s.text.clone(),
+                        })
+                        .collect(),
+                ),
             },
             (FieldState::NonLiteral { reason }, false) => PropInfo {
                 name: f.name.clone(),
                 editable: false,
                 value: None,
                 reason: Some(reason.clone()),
+                subfields: None,
             },
         })
         .collect();
@@ -103,8 +125,30 @@ mod tests {
         assert_eq!(info.prim, "fill");
         let x = info.props.iter().find(|p| p.name == "x").unwrap();
         assert!(x.editable && x.value.as_deref() == Some("10"));
+        assert!(x.subfields.is_none());
         let color = info.props.iter().find(|p| p.name == "color").unwrap();
         assert!(!color.editable && color.reason.is_some());
+        assert!(color.subfields.is_none());
+    }
+
+    #[test]
+    fn inline_color_table_field_yields_editable_subfields() {
+        let src = "fill{ color = {r=1, g=2, b=3} }\n";
+        let m = model(src);
+        let origins = vec![Origin {
+            line: Some(1),
+            call: Some(0),
+        }];
+        let info = node_info(&origins, 0, &m).unwrap();
+        let color = info.props.iter().find(|p| p.name == "color").unwrap();
+        assert!(color.editable);
+        assert!(color.value.is_none());
+        assert!(color.reason.is_none());
+        let subs = color.subfields.as_ref().expect("subfields present");
+        let names: Vec<&str> = subs.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, vec!["r", "g", "b"]);
+        let values: Vec<&str> = subs.iter().map(|s| s.value.as_str()).collect();
+        assert_eq!(values, vec!["1", "2", "3"]);
     }
 
     #[test]
