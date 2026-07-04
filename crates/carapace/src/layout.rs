@@ -14,9 +14,13 @@ pub struct Rect {
 /// Which window edges an element is pinned to (gap held constant), plus an optional stretch floor.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Anchors {
+    /// Pin the left edge's gap to the window's left edge.
     pub left: bool,
+    /// Pin the right edge's gap to the window's right edge.
     pub right: bool,
+    /// Pin the top edge's gap to the window's top edge.
     pub top: bool,
+    /// Pin the bottom edge's gap to the window's bottom edge.
     pub bottom: bool,
     /// Minimum (w, h) a stretched element collapses to. 0 on an axis = no floor.
     pub min: Option<(f32, f32)>,

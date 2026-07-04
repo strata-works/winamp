@@ -4,11 +4,16 @@ use mlua::{Function, Table};
 
 use crate::scene::{Color, ColorStop, Gradient, HandlerId, Node, Paint, Pt};
 
+/// An error a `Primitive::build` can return while turning Lua args into `Node`s.
 #[derive(Debug)]
 pub enum BuildError {
+    /// A required table field was absent.
     MissingField(&'static str),
+    /// A field was present but had the wrong shape/value (e.g. an unrecognized enum string).
     BadType(&'static str),
+    /// Reading/converting a Lua value failed.
     Lua(mlua::Error),
+    /// Resolving an asset (image/font) referenced by the primitive failed.
     Asset(crate::asset::AssetError),
 }
 
@@ -18,24 +23,43 @@ impl From<mlua::Error> for BuildError {
     }
 }
 
-/// Lets a primitive register a Lua handler (for hotspots) and receive a HandlerId.
+/// Services a `Primitive::build` uses to turn Lua args into `Node`s.
+///
+/// The engine supplies the concrete implementation; a primitive only ever sees `&mut dyn
+/// BuildContext`, so it never touches the Lua VM, asset resolver, or handler table directly.
 pub trait BuildContext {
+    /// Register a Lua callback (e.g. an `on_press` function) and return the `HandlerId` a
+    /// `Node::Hotspot` (or similar) can carry to reference it later.
     fn register_handler(&mut self, f: Function) -> HandlerId;
+    /// Register a host-action invocation (action name + args) as a handler, for primitives that
+    /// dispatch directly to `Host::invoke` rather than a Lua callback.
     fn host_action(&mut self, action: &str, args: Vec<crate::host::Value>) -> HandlerId;
+    /// Resolve an asset name to a decoded image, relative to the skin's asset directory.
     fn image(
         &mut self,
         name: &str,
     ) -> Result<Arc<crate::asset::DecodedImage>, crate::asset::AssetError>;
+    /// Resolve an asset name to loaded font data, relative to the skin's asset directory.
     fn font(&mut self, name: &str)
     -> Result<Arc<crate::scene::FontData>, crate::asset::AssetError>;
 }
 
 /// A vocabulary entry a skin can construct: `id` is the Lua constructor name.
+///
+/// A host implements this trait to add a custom Lua primitive beyond the stock set in
+/// [`VocabRegistry::base`], then registers it via [`VocabRegistry::register`].
 pub trait Primitive {
+    /// The Lua constructor name a skin calls to build this primitive (e.g. `"fill"`).
     fn id(&self) -> &str;
+    /// Turn the Lua call's argument table into zero or more scene `Node`s, using `ctx` for
+    /// handler registration and asset resolution.
     fn build(&self, args: &Table, ctx: &mut dyn BuildContext) -> Result<Vec<Node>, BuildError>;
 }
 
+/// Parses the `path` field (a Lua array of `{x, y}` point tables) into at least 3 `Pt`s.
+///
+/// Used by primitive authors to read the polygon/path argument shared by `fill`/`region`-like
+/// primitives.
 pub fn parse_path(t: &Table) -> Result<Vec<Pt>, BuildError> {
     let path: Table = t
         .get("path")
@@ -64,6 +88,7 @@ pub fn color_from_table(c: &Table) -> Result<Color, BuildError> {
     })
 }
 
+/// Reads the `color` field of `t` (a table with `r`, `g`, `b`, optional `a`) into a `Color`.
 pub fn parse_color(t: &Table) -> Result<Color, BuildError> {
     let c: Table = t
         .get("color")
@@ -506,6 +531,10 @@ impl Primitive for TextPrim {
     }
 }
 
+/// The set of Lua-constructible primitives available to a skin.
+///
+/// Built by a host and passed to `Engine::new`; typically `VocabRegistry::base()` (the stock
+/// primitives), optionally extended with custom [`Primitive`]s via [`VocabRegistry::register`].
 pub struct VocabRegistry {
     prims: Vec<Box<dyn Primitive>>,
 }
@@ -517,16 +546,20 @@ impl Default for VocabRegistry {
 }
 
 impl VocabRegistry {
+    /// An empty registry with no primitives registered.
     pub fn new() -> Self {
         Self { prims: Vec::new() }
     }
+    /// Add one primitive to the registry.
     pub fn register(&mut self, prim: Box<dyn Primitive>) {
         self.prims.push(prim);
     }
+    /// Iterate over all registered primitives.
     pub fn iter(&self) -> impl Iterator<Item = &dyn Primitive> {
         self.prims.iter().map(|b| b.as_ref())
     }
-    /// The stub base set (Phase 5 replaces with the real vocabulary).
+    /// The stock set of 9 base primitives: `fill`, `region`, `value_fill`, `image`, `frame`,
+    /// `text`, `view`, `list`, `scrub`. The typical `registry` argument to `Engine::new`.
     pub fn base() -> Self {
         let mut r = Self::new();
         r.register(Box::new(FillPrim));

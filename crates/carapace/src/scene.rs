@@ -1,37 +1,52 @@
 use hittest::{Contour, Point, Region};
 
+/// A 2D point in canvas coordinates (design space before layout, logical space after).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Pt {
+    /// Horizontal coordinate.
     pub x: f32,
+    /// Vertical coordinate.
     pub y: f32,
 }
 
+/// An 8-bit-per-channel RGBA color.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Color {
+    /// Red channel, 0..255.
     pub r: u8,
+    /// Green channel, 0..255.
     pub g: u8,
+    /// Blue channel, 0..255.
     pub b: u8,
+    /// Alpha channel, 0..255 (0 = transparent, 255 = opaque).
     pub a: u8,
 }
 
+/// One color stop in a [`Gradient`]: a position along the gradient axis and the color there.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ColorStop {
+    /// Position along the gradient, 0.0..1.0.
     pub at: f32,
+    /// The color at this stop.
     pub color: Color,
 }
 
+/// A multi-stop gradient paint, in one of three shapes.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Gradient {
+    /// Stops interpolated along the line from `from` to `to`.
     Linear {
         from: Pt,
         to: Pt,
         stops: Vec<ColorStop>,
     },
+    /// Stops interpolated radially outward from `center` to `radius`.
     Radial {
         center: Pt,
         radius: f32,
         stops: Vec<ColorStop>,
     },
+    /// Stops interpolated angularly around `center`, from `start_deg` to `end_deg`.
     Sweep {
         center: Pt,
         start_deg: f32,
@@ -40,26 +55,38 @@ pub enum Gradient {
     },
 }
 
+/// A fill style: either a flat color or a gradient.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Paint {
+    /// A single flat color.
     Solid(Color),
+    /// A multi-stop gradient.
     Gradient(Gradient),
 }
 
+/// The text a [`Node::Text`] draws: either a literal string or a value bound to host state.
 #[derive(Clone, Debug, PartialEq)]
 pub enum TextContent {
+    /// A fixed, author-supplied string.
     Static(String),
+    /// A key resolved against host/engine state at render time.
     Bound(String),
 }
 
+/// Direction a [`Node::ValueFill`] or [`Node::Scrub`] fill grows/reads from.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum FillDir {
+    /// Fills/reads left-to-right.
     Right,
+    /// Fills/reads right-to-left.
     Left,
+    /// Fills/reads bottom-to-top.
     Up,
+    /// Fills/reads top-to-bottom.
     Down,
 }
 
+/// Horizontal text alignment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum HAlign {
     Left,
@@ -67,6 +94,7 @@ pub enum HAlign {
     Right,
 }
 
+/// Vertical text alignment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum VAlign {
     Top,
@@ -74,9 +102,12 @@ pub enum VAlign {
     Bottom,
 }
 
+/// A decoded font's bytes plus a content-addressed id for cache keying.
 #[derive(Debug)]
 pub struct FontData {
+    /// The raw font file bytes (e.g. TTF/OTF).
     pub bytes: std::sync::Arc<[u8]>,
+    /// Content-addressed id (hash of `bytes`), stable across allocations.
     pub id: u64,
 }
 
@@ -94,44 +125,67 @@ impl FontData {
     }
 }
 
+/// Opaque id of a registered hotspot press handler (index into the engine's handler table).
 pub type HandlerId = usize;
 
+/// A rectangular destination in canvas coordinates: where an image/frame/view/list/scrub is drawn.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ImageDest {
+    /// Left edge.
     pub x: f32,
+    /// Top edge.
     pub y: f32,
+    /// Width.
     pub w: f32,
+    /// Height.
     pub h: f32,
 }
 
+/// 9-slice insets for a [`Node::Frame`]: the border widths kept unscaled on each edge while the
+/// center and edge segments stretch to fill `dest`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Slice {
+    /// Left border width, unscaled.
     pub left: f32,
+    /// Right border width, unscaled.
     pub right: f32,
+    /// Top border width, unscaled.
     pub top: f32,
+    /// Bottom border width, unscaled.
     pub bottom: f32,
 }
 
+/// How a [`Node::Frame`]'s center region (inside the 9-slice insets) is drawn.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum FrameCenter {
+    /// The center image segment is stretched to fill the remaining space.
     Stretch,
+    /// The center is left empty (a hole showing whatever is behind the frame).
     Hollow,
 }
 
+/// A parsed `list{}` row template: the per-row text cells to instantiate for each visible row.
 pub type RowTemplate = Vec<RowCell>;
 
 /// One text cell of a list row template, in row-relative coords. Built once at parse time.
 #[derive(Clone, Debug)]
 pub struct RowCell {
+    /// The row-data key this cell's text is bound to (looked up per row at render time).
     pub bind: String,
     /// Horizontal placement: from the region's left edge, or from its right edge. Exactly one.
     pub x_from_left: Option<f32>,
     pub x_from_right: Option<f32>,
+    /// Vertical offset from the row's top edge.
     pub y: f32,
+    /// Font size.
     pub size: f32,
+    /// Text color.
     pub color: Color,
+    /// Horizontal text alignment.
     pub halign: HAlign,
+    /// Resolved font data, if a custom font was loaded.
     pub font: Option<std::sync::Arc<FontData>>,
+    /// The custom font's asset name, if any (`None` = system default).
     pub font_name: Option<String>,
 }
 
@@ -172,37 +226,48 @@ pub enum HotspotRole {
     Passthrough,
 }
 
+/// A single drawable/interactive element of a [`Scene`]. Later nodes in `Scene::nodes` draw on
+/// top and win hit-tests. Produced by vocab primitives (`fill`, `hotspot`, `value_fill`, `image`,
+/// `frame`, `view`, `list`, `scrub`, `text`) at skin build time, then possibly reflowed by
+/// `layout::resolve_scene`.
 #[derive(Clone, Debug)]
 pub enum Node {
-    Fill {
-        path: Vec<Pt>,
-        paint: Paint,
-    },
+    /// A flat-shaded or gradient-shaded polygon.
+    Fill { path: Vec<Pt>, paint: Paint },
+    /// An invisible polygon that dispatches `on_press`'s handler when clicked; `role` tells the
+    /// host how to classify the region (control / drag / passthrough) via `hit_kind`.
     Hotspot {
         region: Region,
         on_press: HandlerId,
         role: HotspotRole,
     },
+    /// A polygon filled proportionally to a host scalar at `value_key` (0..1), growing/revealing
+    /// along `direction` (e.g. a VU meter or level bar).
     ValueFill {
         path: Vec<Pt>,
         value_key: String,
         color: Color,
         direction: FillDir,
     },
+    /// A decoded bitmap image drawn into `dest`.
     Image {
         image: std::sync::Arc<crate::asset::DecodedImage>,
         dest: ImageDest,
     },
+    /// A 9-slice-scaled bitmap: `image` sliced by `slice` and stretched to fill `dest`, with
+    /// `center` controlling whether the middle segment is drawn or left hollow.
     Frame {
         image: std::sync::Arc<crate::asset::DecodedImage>,
         dest: ImageDest,
         slice: Slice,
         center: FrameCenter,
     },
-    View {
-        id: String,
-        dest: ImageDest,
-    },
+    /// A host-content region: a named rectangle (`id`) the embedder fills with its own texture
+    /// (e.g. cover art or a live view), composited over the scene at `dest`.
+    View { id: String, dest: ImageDest },
+    /// A scrollable/selectable row list bound to a host `collection`. In the design scene
+    /// `count` is 0; layout expansion fills it in and appends generated row `Text`/highlight
+    /// nodes.
     List {
         collection: String,
         region: ImageDest,
@@ -216,6 +281,8 @@ pub enum Node {
         highlight: Option<Color>,
         selected: Option<String>,
     },
+    /// A draggable/clickable seek bar: reads a host scalar at `value_key` to draw its fill
+    /// (growing along `direction`), and dispatches `on_seek` with a 0..1 click fraction.
     Scrub {
         region: ImageDest,
         value_key: String,
@@ -223,6 +290,8 @@ pub enum Node {
         color: Color,
         on_seek: String,
     },
+    /// A run of shaped text: either `content`'s static string or a bound host value, drawn with
+    /// the given font/size/paint/alignment at `pos`.
     Text {
         content: TextContent,
         font: Option<std::sync::Arc<FontData>>,
@@ -249,13 +318,20 @@ pub struct Origin {
     pub call: Option<u32>,
 }
 
+/// An ordered list of drawable/interactive [`Node`]s plus the canvas they're authored (design
+/// scene) or resolved (logical scene, via `layout`/`layout_with_origins`) against. Later nodes
+/// draw on top and win hit-tests.
 #[derive(Clone, Debug)]
 pub struct Scene {
+    /// The scene's nodes, in draw order (first = bottom, last = top).
     pub nodes: Vec<Node>,
+    /// The canvas size this scene's coordinates are authored/resolved against: the skin's
+    /// declared size for a design scene, or the requested logical size for a resolved one.
     pub canvas: (u32, u32),
 }
 
-/// Build a single-contour Region from a polygon path (cached into Hotspot nodes).
+/// Build a single-contour [`Region`] from a polygon path (cached into `Hotspot` nodes) for
+/// point-in-polygon hit-testing.
 pub fn region_of(path: &[Pt]) -> Region {
     Region {
         contours: vec![Contour {
