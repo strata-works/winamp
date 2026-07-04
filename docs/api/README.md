@@ -20,6 +20,14 @@ This is the canonical, version-controlled documentation. Per-crate READMEs stay 
 - **Embedding the engine in a Rust host** → [Engine API (Rust)](./engine-api.md)
 - **Embedding in a native/C host (Swift, Flutter, …)** → [FFI / C ABI](./ffi-c-abi.md)
 
+## Generated API reference
+
+The pages above are the hand-written *guide*. The per-item **generated reference** for the `carapace` engine crate — every public type, trait, and method with its signature, built from source by rustdoc — is published alongside this site:
+
+- [`carapace` — generated rustdoc reference](./reference/carapace/index.html)
+
+Build it locally with `cargo doc --no-deps -p carapace --open`. (The C ABI has no Rust reference — its per-symbol reference is the C header `crates/carapace-ffi/include/carapace.h` plus the [FFI / C ABI](./ffi-c-abi.md) page.)
+
 ## Architecture at a glance
 
 - **Engine** (`carapace`) — loads a skin (`skin.toml` + a Lua entry script), runs the script against a registered **vocabulary** of primitives to produce a **scene**, lays the scene out for a target size, and renders it on wgpu/vello. Single-threaded by design (`Engine` is `!Send`).

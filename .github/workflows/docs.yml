@@ -1,0 +1,59 @@
+name: docs
+
+# Builds the Carapace documentation site: the mdBook guide + the generated
+# rustdoc API reference for the `carapace` engine crate, combined into one site
+# (guide at root, reference under /reference/). Pull requests get a build check;
+# pushes to main additionally deploy to GitHub Pages.
+#
+# To publish: enable Pages once in repo Settings -> Pages -> Source: "GitHub Actions".
+# Until then the build job still runs on PRs; only the main-branch deploy needs it.
+
+on:
+  push:
+    branches: [main]
+    paths: ['docs/**', 'crates/**', '.github/workflows/docs.yml']
+  pull_request:
+    paths: ['docs/**', 'crates/**', '.github/workflows/docs.yml']
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: peaceiris/actions-mdbook@v2
+        with:
+          mdbook-version: 'latest'
+
+      - name: Build the mdBook guide
+        run: mdbook build docs
+
+      - name: Build the rustdoc API reference (carapace engine crate)
+        run: cargo doc --no-deps -p carapace
+
+      - name: Combine guide + reference into one site
+        run: cp -r target/doc docs/book/reference
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/book
+
+  deploy:
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

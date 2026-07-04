@@ -2,6 +2,43 @@
 
 This walks you from nothing to a live, edited skin. If you're integrating the engine into a host app instead of authoring a skin, jump to [Engine API (Rust)](./engine-api.md) or [FFI / C ABI](./ffi-c-abi.md).
 
+## Installation
+
+Carapace is not yet published to crates.io — build it from source.
+
+**Prerequisites:**
+
+- **Rust toolchain** — a recent stable Rust (the workspace is edition 2024, built against Rust 1.96). Install via [rustup](https://rustup.rs): `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`.
+- **A GPU** — rendering uses wgpu/vello: **macOS** via Metal (nothing extra to install), **Linux** via Vulkan.
+- **Linux only** — the text layer links system `fontconfig`, so install the dev package first: `sudo apt install libfontconfig1-dev pkg-config` (Debian/Ubuntu). macOS uses Core Text and needs nothing extra.
+
+**Get the source and build:**
+
+```sh
+git clone https://github.com/strata-works/winamp.git
+cd winamp
+
+# Build the whole workspace (dependency versions are pinned via a committed Cargo.lock).
+cargo build --locked
+
+# Run the test suite (hit-test kernel, engine, headless skin/scene tests).
+cargo test --workspace
+```
+
+**Verify it works** — launch the live demo (a borderless, draggable GPU window; `Tab` cycles skins, `H` swaps hosts):
+
+```sh
+cargo run -p carapace-demo
+```
+
+The GPU render-correctness test needs a real adapter and is gated behind a feature, so it runs separately:
+
+```sh
+cargo test -p carapace --features gpu-tests --test render_offscreen
+```
+
+With the workspace building, you're ready to author a skin.
+
 ## What a skin is
 
 A Carapace skin is a directory with two required files:
