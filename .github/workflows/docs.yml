@@ -30,6 +30,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install system deps
+        # parley/fontique link system fontconfig (via yeslogic-fontconfig-sys) on Linux;
+        # `cargo doc -p carapace` compiles them, so the dev package is required.
+        run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev pkg-config
+
+      - name: Cache cargo
+        # Same key as ci.yml so this job reuses the check job's compiled dependency tree.
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
       - uses: peaceiris/actions-mdbook@v2
         with:
           mdbook-version: 'latest'
@@ -38,7 +55,7 @@ jobs:
         run: mdbook build docs
 
       - name: Build the rustdoc API reference (carapace engine crate)
-        run: cargo doc --no-deps -p carapace
+        run: cargo doc --no-deps --locked -p carapace
 
       - name: Combine guide + reference into one site
         run: cp -r target/doc docs/book/reference
