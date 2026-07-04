@@ -181,7 +181,14 @@
     title.style.fontWeight = "600";
     el.appendChild(title);
     for (const p of info.props) {
-      if (p.editable) {
+      if (Array.isArray(p.subfields) && p.subfields.length) {
+        const label = document.createElement("div"); label.textContent = p.name; label.style.color = "#999";
+        el.appendChild(label);
+        for (const s of p.subfields) {
+          el.appendChild(paramRow("· " + s.name, s.value, (v) =>
+            send({ type: "setProp", line: info.line, field: p.name, sub: s.name, value: coerce(v) })));
+        }
+      } else if (p.editable) {
         const row = document.createElement("div"); row.className = "row";
         const k = document.createElement("span"); k.textContent = p.name; k.style.flex = "1";
         const v = document.createElement("input"); v.value = p.value ?? ""; v.style.flex = "1";
