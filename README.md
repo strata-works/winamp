@@ -375,6 +375,10 @@ adapter) and runs separately:
 cargo test -p carapace --features gpu-tests --test render_offscreen
 ```
 
+## Contributing
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) to get set up, run the checks CI runs, and submit a change. Full API/authoring docs live in [`docs/api/`](docs/api/README.md).
+
 ## Roadmap
 
 The engine is built phase by phase against written specs (in `docs/superpowers/`). Phases
