@@ -3,11 +3,16 @@
 
 use crate::scene::{ImageDest, Node, Pt, Scene};
 
+/// An axis-aligned logical-space rectangle: origin `(x, y)` plus extent `(w, h)`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Rect {
+    /// Left edge, in logical units.
     pub x: f32,
+    /// Top edge, in logical units.
     pub y: f32,
+    /// Width, in logical units.
     pub w: f32,
+    /// Height, in logical units.
     pub h: f32,
 }
 

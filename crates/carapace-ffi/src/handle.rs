@@ -83,7 +83,9 @@ pub struct CarapaceCreateDesc {
     pub surface_count: u32,
     /// Optional live host content for a `view{ id = "host" }` cutout; null = none.
     pub content_surface: IOSurfaceRef,
+    /// Surface pixel width; must match every surface in `surfaces` (and `content_surface`, if set).
     pub w: u32,
+    /// Surface pixel height; must match every surface in `surfaces` (and `content_surface`, if set).
     pub h: u32,
 }
 
@@ -91,7 +93,9 @@ pub struct CarapaceCreateDesc {
 #[repr(i32)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum CarapaceTier {
+    /// CPU round-trip fallback: frames are read back from the GPU and copied into the IOSurface.
     Readback = 1,
+    /// Zero-copy GPU path: a Metal texture aliases the IOSurface directly.
     Shared = 2,
 }
 
@@ -287,10 +291,15 @@ pub unsafe extern "C" fn carapace_release_surface(
 #[repr(i32)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum CarapacePointerKind {
+    /// A pointer press (button/touch down). The only variant the engine currently models.
     Press = 0,
+    /// A pointer release (button/touch up). Plumbed through as a forward-compatible no-op today.
     Release = 1,
+    /// A pointer move. Plumbed through as a forward-compatible no-op today.
     Move = 2,
+    /// A pointer entering the surface. Plumbed through as a forward-compatible no-op today.
     Enter = 3,
+    /// A pointer leaving the surface. Plumbed through as a forward-compatible no-op today.
     Leave = 4,
 }
 

@@ -36,21 +36,31 @@ pub struct ColorStop {
 pub enum Gradient {
     /// Stops interpolated along the line from `from` to `to`.
     Linear {
+        /// Start point of the gradient axis.
         from: Pt,
+        /// End point of the gradient axis.
         to: Pt,
+        /// Color stops along the axis.
         stops: Vec<ColorStop>,
     },
     /// Stops interpolated radially outward from `center` to `radius`.
     Radial {
+        /// Center of the radial gradient.
         center: Pt,
+        /// Radius at which the last stop is reached.
         radius: f32,
+        /// Color stops from center to radius.
         stops: Vec<ColorStop>,
     },
     /// Stops interpolated angularly around `center`, from `start_deg` to `end_deg`.
     Sweep {
+        /// Center of rotation.
         center: Pt,
+        /// Starting angle, in degrees.
         start_deg: f32,
+        /// Ending angle, in degrees.
         end_deg: f32,
+        /// Color stops from `start_deg` to `end_deg`.
         stops: Vec<ColorStop>,
     },
 }
@@ -89,16 +99,22 @@ pub enum FillDir {
 /// Horizontal text alignment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum HAlign {
+    /// Text is anchored to its left edge at `pos`.
     Left,
+    /// Text is centered on `pos`.
     Center,
+    /// Text is anchored to its right edge at `pos`.
     Right,
 }
 
 /// Vertical text alignment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum VAlign {
+    /// Text is anchored to its top edge at `pos`.
     Top,
+    /// Text is centered on `pos`.
     Middle,
+    /// Text is anchored to its bottom edge at `pos`.
     Bottom,
 }
 
@@ -174,6 +190,8 @@ pub struct RowCell {
     pub bind: String,
     /// Horizontal placement: from the region's left edge, or from its right edge. Exactly one.
     pub x_from_left: Option<f32>,
+    /// Horizontal placement measured from the region's right edge. Exactly one of this and
+    /// `x_from_left` is set.
     pub x_from_right: Option<f32>,
     /// Vertical offset from the row's top edge.
     pub y: f32,
@@ -233,74 +251,117 @@ pub enum HotspotRole {
 #[derive(Clone, Debug)]
 pub enum Node {
     /// A flat-shaded or gradient-shaded polygon.
-    Fill { path: Vec<Pt>, paint: Paint },
+    Fill {
+        /// The polygon's vertices, in canvas coordinates.
+        path: Vec<Pt>,
+        /// The fill style applied to the polygon.
+        paint: Paint,
+    },
     /// An invisible polygon that dispatches `on_press`'s handler when clicked; `role` tells the
     /// host how to classify the region (control / drag / passthrough) via `hit_kind`.
     Hotspot {
+        /// The clickable polygon region.
         region: Region,
+        /// The handler to dispatch when this hotspot is clicked.
         on_press: HandlerId,
+        /// How a host should classify this region absent a fired handler.
         role: HotspotRole,
     },
     /// A polygon filled proportionally to a host scalar at `value_key` (0..1), growing/revealing
     /// along `direction` (e.g. a VU meter or level bar).
     ValueFill {
+        /// The polygon's vertices, in canvas coordinates.
         path: Vec<Pt>,
+        /// The host state key whose 0..1 scalar drives how much of the fill is shown.
         value_key: String,
+        /// The fill color.
         color: Color,
+        /// Direction the fill grows/reveals from as the value increases.
         direction: FillDir,
     },
     /// A decoded bitmap image drawn into `dest`.
     Image {
+        /// The decoded pixel data.
         image: std::sync::Arc<crate::asset::DecodedImage>,
+        /// Where to draw the image, in canvas coordinates.
         dest: ImageDest,
     },
     /// A 9-slice-scaled bitmap: `image` sliced by `slice` and stretched to fill `dest`, with
     /// `center` controlling whether the middle segment is drawn or left hollow.
     Frame {
+        /// The decoded source pixel data.
         image: std::sync::Arc<crate::asset::DecodedImage>,
+        /// Where to draw the frame, in canvas coordinates.
         dest: ImageDest,
+        /// The unscaled border insets on each edge.
         slice: Slice,
+        /// Whether the center region is stretched or left hollow.
         center: FrameCenter,
     },
     /// A host-content region: a named rectangle (`id`) the embedder fills with its own texture
     /// (e.g. cover art or a live view), composited over the scene at `dest`.
-    View { id: String, dest: ImageDest },
+    View {
+        /// The view's name, as declared in the skin (looked up by the host).
+        id: String,
+        /// Where the host's content is composited, in canvas coordinates.
+        dest: ImageDest,
+    },
     /// A scrollable/selectable row list bound to a host `collection`. In the design scene
     /// `count` is 0; layout expansion fills it in and appends generated row `Text`/highlight
     /// nodes.
     List {
+        /// The host collection name this list is bound to.
         collection: String,
+        /// The list's bounding rectangle, in canvas coordinates.
         region: ImageDest,
+        /// Height of one row, used to map a y-coordinate to a row index.
         row_height: f32,
+        /// The host action to dispatch, with the clicked row index, when a row is selected.
         on_select: Option<String>,
         /// Visible row count, set during layout expansion; 0 in the design scene.
         count: usize,
+        /// The parsed per-row cell template, instantiated for each visible row.
         template: RowTemplate,
         /// Optional selection highlight: a bar of `highlight` color drawn behind the row whose
         /// index equals the host scalar at `selected`. Both must be set for a highlight to appear.
         highlight: Option<Color>,
+        /// The host state key holding the currently selected row index.
         selected: Option<String>,
     },
     /// A draggable/clickable seek bar: reads a host scalar at `value_key` to draw its fill
     /// (growing along `direction`), and dispatches `on_seek` with a 0..1 click fraction.
     Scrub {
+        /// The scrub bar's bounding rectangle, in canvas coordinates.
         region: ImageDest,
+        /// The host state key whose 0..1 scalar drives the drawn fill fraction.
         value_key: String,
+        /// Direction the fill grows/reveals from as the value increases.
         direction: FillDir,
+        /// The fill color.
         color: Color,
+        /// The host action to dispatch, with the clicked 0..1 fraction, when the bar is clicked.
         on_seek: String,
     },
     /// A run of shaped text: either `content`'s static string or a bound host value, drawn with
     /// the given font/size/paint/alignment at `pos`.
     Text {
+        /// The text to draw: a literal string or a value bound to host state.
         content: TextContent,
+        /// Resolved custom font data, if a custom font was loaded.
         font: Option<std::sync::Arc<FontData>>,
+        /// The custom font's asset name, if any (`None` = system default).
         font_name: Option<String>,
+        /// Font size.
         size: f32,
+        /// Text color or gradient.
         paint: Paint,
+        /// Horizontal alignment relative to `pos`.
         halign: HAlign,
+        /// Vertical alignment relative to `pos`.
         valign: VAlign,
+        /// Optional wrap/truncation width; `None` means unbounded.
         max_width: Option<f32>,
+        /// Anchor position, in canvas coordinates.
         pos: Pt,
     },
 }
@@ -684,9 +745,19 @@ pub enum Hit {
     /// A polygon hotspot's registered handler.
     Handler(HandlerId),
     /// A `list{}` row: the `on_select` host action + the row index.
-    Row { action: String, index: usize },
+    Row {
+        /// The `on_select` action to dispatch.
+        action: String,
+        /// The clicked row's index.
+        index: usize,
+    },
     /// A `scrub{}` bar: the `on_seek` host action + the 0..1 click fraction.
-    Scrub { action: String, fraction: f32 },
+    Scrub {
+        /// The `on_seek` action to dispatch.
+        action: String,
+        /// The click position along the bar, 0.0..1.0.
+        fraction: f32,
+    },
 }
 
 /// Coarse interaction classification of a point for a host embedder — see [`Scene::hit_kind`].

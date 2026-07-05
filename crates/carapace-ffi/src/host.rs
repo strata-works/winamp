@@ -11,9 +11,16 @@ use carapace::state::StateValue;
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct CarapaceHostVTable {
+    /// Opaque host context, passed unchanged as the first argument to every callback below.
     pub ctx: *mut c_void,
+    /// Numeric state read: given a NUL-terminated key, write the value through `out` and return
+    /// `true` if the host has it, else return `false` and leave `out` untouched.
     pub get_num: Option<extern "C" fn(*mut c_void, *const c_char, *mut f64) -> bool>,
+    /// String state read: given a NUL-terminated key, the host writes a NUL-terminated string into
+    /// `buf` (capacity `cap`) and returns `true` if it has the key, else returns `false`.
     pub get_str: Option<extern "C" fn(*mut c_void, *const c_char, *mut c_char, usize) -> bool>,
+    /// Perform a host action identified by a NUL-terminated action name (the C mirror of
+    /// `Host::invoke`).
     pub invoke: Option<extern "C" fn(*mut c_void, *const c_char)>,
     /// v2: fired on the render thread when a frame lands in `surfaces[index]`. `frame_id` is a
     /// monotonic counter starting at 1. Must be thread-safe, non-blocking, and MUST NOT call any
@@ -36,11 +43,14 @@ const ACTIONS: &[ActionSpec] = &[
     ActionSpec { name: "close" },
 ];
 
+/// Bridges a host-supplied [`CarapaceHostVTable`] to the engine's Rust [`Host`] trait, so the
+/// render thread can drive the vtable's callbacks as if it were a native Rust host.
 pub struct FfiHost {
     vtable: CarapaceHostVTable,
 }
 
 impl FfiHost {
+    /// Wrap a host-supplied vtable as an `FfiHost`.
     pub fn new(vtable: CarapaceHostVTable) -> Self {
         Self { vtable }
     }

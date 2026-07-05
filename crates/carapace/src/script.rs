@@ -9,9 +9,14 @@ use crate::host::{Host, Value};
 use crate::scene::{HandlerId, Node, Origin, Scene};
 use crate::vocab::{BuildContext, BuildError, VocabRegistry};
 
+/// Failure modes for [`load`]: either the Lua VM rejected/errored on the skin chunk, or a
+/// primitive's build step failed while constructing the scene.
 #[derive(Debug)]
 pub enum ScriptError {
+    /// A Lua-level error: syntax error, runtime error, or a sandbox violation (e.g. calling an
+    /// unknown global or a blocked capability like `os`/`io`/`require`/`load`).
     Lua(mlua::Error),
+    /// A primitive rejected its arguments or failed to resolve an asset while building nodes.
     Build(BuildError),
 }
 impl From<mlua::Error> for ScriptError {
@@ -37,9 +42,15 @@ enum Handler {
     HostAction { action: String, args: Vec<Value> },
 }
 
+/// The result of running a skin's Lua entry once: the static scene graph plus everything
+/// needed to replay interaction without re-running the script. Held for the skin's lifetime;
+/// [`fire`](Self::fire) dispatches stored handler closures/actions by [`HandlerId`].
 pub struct LoadedSkin {
+    /// The built scene graph (nodes + canvas size) produced by the one-shot script run.
     pub scene: Scene,
+    /// Per-node layout anchors, parallel to `scene.nodes` (one entry per node).
     pub anchors: Vec<crate::layout::Anchors>,
+    /// Per-node source provenance (source line + call ordinal), parallel to `scene.nodes`.
     pub origins: Vec<Origin>,
     lua: Lua,
     handlers: Vec<Handler>,
@@ -112,6 +123,16 @@ fn parse_anchors(args: &Table) -> mlua::Result<crate::layout::Anchors> {
     Ok(a)
 }
 
+/// Build a fresh, sandboxed Lua VM for `source` and run its entry chunk once to produce a
+/// [`LoadedSkin`].
+///
+/// The sandbox environment (a custom `_ENV`, not the default globals) exposes: one constructor
+/// per primitive in `registry`, a `host` table with one enqueue-shim per `host.actions()`, the
+/// pure geometry helpers `rect`/`circle`/`rounded_rect`, and the capability-free `math` standard
+/// library. `io`, `os`, `require`, `load`, and all other base globals are absent — see
+/// `docs/api/skin-authoring.md`'s "The Lua sandbox" section. Host actions invoked during the run
+/// are pushed onto `queue` rather than calling `host` directly, and Lua handler closures are
+/// stashed in the Lua registry for later replay via [`LoadedSkin::fire`].
 pub fn load(
     source: &SkinSource,
     host: &dyn Host,
@@ -270,6 +291,10 @@ pub fn load(
 }
 
 impl LoadedSkin {
+    /// Dispatch the handler registered as `id` (a hotspot's `on_press`, a scrub's `on_seek`,
+    /// etc.). A Lua handler is called directly from the Lua registry; a host-action handler is
+    /// enqueued onto the command queue instead of invoking the host, so this never touches the
+    /// host synchronously.
     pub fn fire(&self, id: HandlerId) -> Result<(), ScriptError> {
         match &self.handlers[id] {
             Handler::Lua(key) => {

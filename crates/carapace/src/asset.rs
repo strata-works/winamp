@@ -3,17 +3,27 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+/// A decoded, ready-to-upload raster image: tightly packed 8-bit RGBA rows.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DecodedImage {
+    /// Pixel data, `width * height * 4` bytes, row-major, RGBA8 (non-premultiplied).
     pub rgba: Vec<u8>,
+    /// Width in pixels.
     pub width: u32,
+    /// Height in pixels.
     pub height: u32,
 }
 
+/// Failure modes for [`AssetResolver`] lookups and decoding.
 #[derive(Debug)]
 pub enum AssetError {
+    /// The requested name isn't in the resolver's index (missing, symlinked-away, or a `..`
+    /// traversal attempt was rejected outright).
     Unresolved(String),
+    /// The underlying file could not be read from disk.
     Io(String),
+    /// The bytes were read but failed to decode as the requested asset type (e.g. not a
+    /// valid image).
     Decode(String),
 }
 
@@ -74,6 +84,9 @@ impl AssetResolver {
         })
     }
 
+    /// Read the raw bytes of `name` (a relative path as indexed by [`resolve`](Self::resolve)),
+    /// caching the result. Rejects any name containing `..` outright (sandbox safety) before
+    /// even consulting the index.
     pub fn bytes(&self, name: &str) -> Result<Arc<[u8]>, AssetError> {
         if name.contains("..") {
             return Err(AssetError::Unresolved(name.to_string()));
@@ -93,6 +106,9 @@ impl AssetResolver {
         Ok(arc)
     }
 
+    /// Load and decode `name` as an image (PNG/JPEG/etc., via the `image` crate), caching the
+    /// decoded RGBA result. Reuses [`bytes`](Self::bytes) internally, so both the raw bytes and
+    /// the decoded image are cached independently.
     pub fn image(&self, name: &str) -> Result<Arc<DecodedImage>, AssetError> {
         if let Some(img) = self.image_cache.borrow().get(name) {
             return Ok(img.clone());
@@ -112,6 +128,8 @@ impl AssetResolver {
         Ok(decoded)
     }
 
+    /// Load `name` as font data (raw font-file bytes wrapped for the text-layout engine),
+    /// caching the result. Reuses [`bytes`](Self::bytes) internally.
     pub fn font(&self, name: &str) -> Result<Arc<crate::scene::FontData>, AssetError> {
         if let Some(f) = self.font_cache.borrow().get(name) {
             return Ok(f.clone());
