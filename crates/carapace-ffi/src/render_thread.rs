@@ -259,6 +259,24 @@ impl RenderThread {
                 }
                 *invalidated = true; // input should show a frame even when paused
             }
+            Command::SwapSkin { dir, reply } => {
+                let status = match carapace::skin::load_dir(&dir) {
+                    Ok((_m, source)) => {
+                        self.engine
+                            .handle_command(carapace::command::Command::Swap(source));
+                        let (cw, ch) = self.engine.scene().canvas;
+                        self.cw = cw;
+                        self.ch = ch;
+                        *invalidated = true; // draw the swapped-in skin immediately
+                        CarapaceStatus::Ok
+                    }
+                    Err(e) => {
+                        set_last_error(&format!("swap_skin: load failed: {e:?}"));
+                        CarapaceStatus::ErrBadSkin
+                    }
+                };
+                let _ = reply.send(status);
+            }
             #[cfg(test)]
             Command::ForcePanic => {
                 self.force_panic = true;
@@ -510,6 +528,49 @@ mod render_tests {
         assert!(
             unsafe { crate::handle::test_support::iosurface_has_nonzero_pixels(surfaces[0], w, h) },
             "rendered surface must be non-blank"
+        );
+        unsafe { crate::handle::carapace_destroy(handle) };
+    }
+
+    #[test]
+    fn swap_skin_applies_and_bad_dir_is_rejected() {
+        let (w, h) = (300u32, 140u32);
+        let vt = crate::host::CarapaceHostVTable {
+            ctx: std::ptr::null_mut(),
+            get_num: None, get_str: None, invoke: None, frame_ready: None,
+            row_count: None, get_row_str: None, get_row_num: None, invoke_arg: None,
+        };
+        let (handle, surfaces) =
+            crate::handle::test_support::create_test_handle_pool_vt(w, h, 2, vt);
+        assert_eq!(
+            unsafe { crate::handle::carapace_set_frame_rate(handle, 0) },
+            crate::guard::CarapaceStatus::Ok
+        );
+        // A valid skin dir → Ok, and a following invalidate renders a non-blank frame. The test
+        // fixture loads `skins/classic` by default, so swap to a DIFFERENT base-vocab skin
+        // (`minimal`) to prove a real content swap. Both load under `VocabRegistry::base()`.
+        let good = std::ffi::CString::new(
+            concat!(env!("CARGO_MANIFEST_DIR"), "/../carapace-demo/skins/minimal")
+        ).unwrap();
+        assert_eq!(
+            unsafe { crate::handle::carapace_swap_skin(handle, good.as_ptr()) },
+            crate::guard::CarapaceStatus::Ok
+        );
+        assert_eq!(
+            unsafe { crate::handle::carapace_invalidate(handle) },
+            crate::guard::CarapaceStatus::Ok
+        );
+        crate::handle::test_support::wait_for(std::time::Duration::from_secs(10), || {
+            unsafe { crate::handle::test_support::iosurface_has_nonzero_pixels(surfaces[0], w, h) }
+        });
+        assert!(unsafe {
+            crate::handle::test_support::iosurface_has_nonzero_pixels(surfaces[0], w, h)
+        });
+        // A bad dir → ErrBadSkin, engine intact.
+        let bad = std::ffi::CString::new("/no/such/skin/dir").unwrap();
+        assert_eq!(
+            unsafe { crate::handle::carapace_swap_skin(handle, bad.as_ptr()) },
+            crate::guard::CarapaceStatus::ErrBadSkin
         );
         unsafe { crate::handle::carapace_destroy(handle) };
     }

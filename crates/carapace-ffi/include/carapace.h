@@ -363,6 +363,20 @@ CarapaceStatus carapace_release_surface(CarapaceEngine *ptr, uint32_t index);
 
 #if (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE))
 /**
+ * Swap the running skin to the one at `skin_dir`, keeping the host, GPU, and render thread.
+ * Synchronous: blocks until the render thread has loaded + applied the new skin (~<=1 frame), so
+ * a bad skin dir is reported as `ErrBadSkin` on the caller's thread. On failure the current skin is
+ * kept. The IOSurface pool and window are unchanged — author skins to a shared design canvas.
+ *
+ * # Safety
+ * `ptr` must come from `carapace_create` and not have been passed to `carapace_destroy`;
+ * `skin_dir` must be a valid NUL-terminated UTF-8 path.
+ */
+CarapaceStatus carapace_swap_skin(CarapaceEngine *ptr, const char *skin_dir);
+#endif
+
+#if (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE))
+/**
  * Forward a pointer event, in DESIGN-CANVAS coordinates, to the render thread. Non-blocking: this
  * enqueues `Command::Pointer` and returns immediately — the render thread applies it (and renders a
  * frame) the next time it drains the queue. Thin enough it doesn't need a panic guard of its own;
