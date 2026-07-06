@@ -239,15 +239,19 @@ fn engine_passes_template_binds_to_rows_for() {
         fn invoke(&mut self, _a: &str, _args: &[Value]) {}
         fn rows_for(&self, _collection: &str, fields: &[&str]) -> Vec<Row> {
             *self.seen.borrow_mut() = fields.iter().map(|s| s.to_string()).collect();
-            vec![Row::new()
-                .set("title", StateValue::Str("t".into()))
-                .set("dur", StateValue::Str("d".into()))]
+            vec![
+                Row::new()
+                    .set("title", StateValue::Str("t".into()))
+                    .set("dur", StateValue::Str("d".into())),
+            ]
         }
     }
     const SK: &str = "list{ collection='playlist', x=0, y=0, w=100, h=40, row_height=20, \
         template={ { bind='title', x=2, y=2, size=12, color={r=1,g=2,b=3} }, \
                    { bind='dur', right=4, y=2, size=12, color={r=1,g=2,b=3} } } }";
-    let host = RecHost { seen: RefCell::new(vec![]) };
+    let host = RecHost {
+        seen: RefCell::new(vec![]),
+    };
     let engine = Engine::new(
         Box::new(host),
         VocabRegistry::base(),
@@ -262,10 +266,19 @@ fn engine_passes_template_binds_to_rows_for() {
         .nodes
         .iter()
         .filter_map(|n| match n {
-            Node::Text { content: TextContent::Static(s), .. } => Some(s.clone()),
+            Node::Text {
+                content: TextContent::Static(s),
+                ..
+            } => Some(s.clone()),
             _ => None,
         })
         .collect();
-    assert!(texts.contains(&"t".to_string()), "title cell rendered from rows_for");
-    assert!(texts.contains(&"d".to_string()), "dur cell rendered from rows_for");
+    assert!(
+        texts.contains(&"t".to_string()),
+        "title cell rendered from rows_for"
+    );
+    assert!(
+        texts.contains(&"d".to_string()),
+        "dur cell rendered from rows_for"
+    );
 }

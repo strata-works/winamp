@@ -318,7 +318,13 @@ pub unsafe extern "C" fn carapace_swap_skin(
         }
     };
     let (reply_tx, reply_rx) = std::sync::mpsc::channel::<CarapaceStatus>();
-    if e.tx.send(Command::SwapSkin { dir, reply: reply_tx }).is_err() {
+    if e.tx
+        .send(Command::SwapSkin {
+            dir,
+            reply: reply_tx,
+        })
+        .is_err()
+    {
         return e.enter_poisoned();
     }
     // The render thread always replies unless it died (dropping the sender → recv Err).

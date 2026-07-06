@@ -134,7 +134,11 @@ mod tests {
     fn swap_skin_is_preserved_in_order_and_not_coalesced() {
         let (tx, rx) = channel::<Command>();
         let (rtx, _rrx) = channel::<crate::guard::CarapaceStatus>();
-        tx.send(Command::SwapSkin { dir: "/tmp/a".into(), reply: rtx.clone() }).unwrap();
+        tx.send(Command::SwapSkin {
+            dir: "/tmp/a".into(),
+            reply: rtx.clone(),
+        })
+        .unwrap();
         tx.send(Command::Invalidate).unwrap();
         let mut out = Vec::new();
         drain_coalescing(&rx, Command::SetFrameRate(30), &mut out);

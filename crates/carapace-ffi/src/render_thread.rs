@@ -543,8 +543,14 @@ mod render_tests {
         let (w, h) = (300u32, 140u32);
         let vt = crate::host::CarapaceHostVTable {
             ctx: std::ptr::null_mut(),
-            get_num: None, get_str: None, invoke: None, frame_ready: None,
-            row_count: None, get_row_str: None, get_row_num: None, invoke_arg: None,
+            get_num: None,
+            get_str: None,
+            invoke: None,
+            frame_ready: None,
+            row_count: None,
+            get_row_str: None,
+            get_row_num: None,
+            invoke_arg: None,
         };
         let (handle, surfaces) =
             crate::handle::test_support::create_test_handle_pool_vt(w, h, 2, vt);
@@ -555,9 +561,11 @@ mod render_tests {
         // A valid skin dir → Ok, and a following invalidate renders a non-blank frame. The test
         // fixture loads `skins/classic` by default, so swap to a DIFFERENT base-vocab skin
         // (`minimal`) to prove a real content swap. Both load under `VocabRegistry::base()`.
-        let good = std::ffi::CString::new(
-            concat!(env!("CARGO_MANIFEST_DIR"), "/../carapace-demo/skins/minimal")
-        ).unwrap();
+        let good = std::ffi::CString::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../carapace-demo/skins/minimal"
+        ))
+        .unwrap();
         assert_eq!(
             unsafe { crate::handle::carapace_swap_skin(handle, good.as_ptr()) },
             crate::guard::CarapaceStatus::Ok
@@ -566,8 +574,8 @@ mod render_tests {
             unsafe { crate::handle::carapace_invalidate(handle) },
             crate::guard::CarapaceStatus::Ok
         );
-        crate::handle::test_support::wait_for(std::time::Duration::from_secs(10), || {
-            unsafe { crate::handle::test_support::iosurface_has_nonzero_pixels(surfaces[0], w, h) }
+        crate::handle::test_support::wait_for(std::time::Duration::from_secs(10), || unsafe {
+            crate::handle::test_support::iosurface_has_nonzero_pixels(surfaces[0], w, h)
         });
         assert!(unsafe {
             crate::handle::test_support::iosurface_has_nonzero_pixels(surfaces[0], w, h)
@@ -576,9 +584,11 @@ mod render_tests {
         // 300x140) to exercise the canvas-changing path the cw/ch refresh fix targets. This
         // doesn't reach into the private cw/ch fields; it just confirms the swap still renders
         // a non-blank frame when the canvas dimensions change underneath it.
-        let bigger = std::ffi::CString::new(
-            concat!(env!("CARGO_MANIFEST_DIR"), "/../carapace-demo/skins/frame")
-        ).unwrap();
+        let bigger = std::ffi::CString::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../carapace-demo/skins/frame"
+        ))
+        .unwrap();
         assert_eq!(
             unsafe { crate::handle::carapace_swap_skin(handle, bigger.as_ptr()) },
             crate::guard::CarapaceStatus::Ok
@@ -587,8 +597,8 @@ mod render_tests {
             unsafe { crate::handle::carapace_invalidate(handle) },
             crate::guard::CarapaceStatus::Ok
         );
-        crate::handle::test_support::wait_for(std::time::Duration::from_secs(10), || {
-            unsafe { crate::handle::test_support::iosurface_has_nonzero_pixels(surfaces[1], w, h) }
+        crate::handle::test_support::wait_for(std::time::Duration::from_secs(10), || unsafe {
+            crate::handle::test_support::iosurface_has_nonzero_pixels(surfaces[1], w, h)
         });
         assert!(unsafe {
             crate::handle::test_support::iosurface_has_nonzero_pixels(surfaces[1], w, h)
