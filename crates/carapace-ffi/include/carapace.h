@@ -227,7 +227,7 @@ typedef struct {
   uint32_t (*row_count)(void*, const char*);
   /**
    * v3: write row `index`'s string `field` into `buf` (cap `cap`), NUL-terminated; return
-   * `true` if present. Tried before `get_row_num` (mirrors `get`).
+   * `true` if present. Tried after `get_row_num` (mirrors `get`, which reads numeric first).
    */
   bool (*get_row_str)(void*, const char*, uint32_t, const char*, char*, uintptr_t);
   /**

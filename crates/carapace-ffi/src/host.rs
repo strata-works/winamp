@@ -29,7 +29,7 @@ pub struct CarapaceHostVTable {
     /// v3: number of rows in `collection` (NUL-terminated). Null = no collections.
     pub row_count: Option<extern "C" fn(*mut c_void, *const c_char) -> u32>,
     /// v3: write row `index`'s string `field` into `buf` (cap `cap`), NUL-terminated; return
-    /// `true` if present. Tried before `get_row_num` (mirrors `get`).
+    /// `true` if present. Tried after `get_row_num` (mirrors `get`, which reads numeric first).
     pub get_row_str:
         Option<extern "C" fn(*mut c_void, *const c_char, u32, *const c_char, *mut c_char, usize) -> bool>,
     /// v3: write row `index`'s numeric `field` through `out`; return `true` if present.
