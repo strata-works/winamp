@@ -1,151 +1,88 @@
-# Showcase: One Music Player Host, Three Complete Skins
+# Native Showcase: One Music Player Host, Three Complete Skins (macOS)
 
 **Date:** 2026-07-06
-**Status:** Design — approved, pending spec review
+**Status:** Program design — approved direction; decomposed into sub-projects (see below)
 **Origin:** Builds the static concept board (`.superpowers/brainstorm/.../music-realistic-carapace.html`)
-into a live, running macOS demo.
+into a live, **native macOS** demo.
 
 ## Goal
 
-Prove Carapace's founding thesis — **total window replacement, one host, many bodies** —
-as a live demo: three visually distinct music-player skins (Faceplate, Studio Deck, Cassette)
-that hot-swap over a single persistent `MusicPlayerHost`, on macOS, each rendering as a real
-shaped/transparent/draggable window. Playback, seek position, playlist selection, and volume
-survive every skin swap because state lives in the host, not the skin.
+Prove Carapace's founding thesis — **total window replacement, one host, many bodies** — as a
+live, **native macOS SwiftUI app**: three visually distinct music-player skins (Faceplate, Studio
+Deck, Cassette) that hot-swap over a single Swift-owned music host, each rendered by the Rust engine
+and displayed zero-copy through an **IOSurface**, in a borderless window shaped by the skin. Playback,
+seek position, playlist selection, and volume survive every skin swap.
 
-This is what the concept board only *asserts* statically; here it actually runs.
+## Chosen architecture: native Swift host + carapace-ffi + IOSurface
 
-## Context: what already exists (reused, not rebuilt)
+The delivery vehicle is a **native AppKit/SwiftUI `.app`** that embeds the Rust engine across the
+`carapace-ffi` C ABI. Roles (confirmed against `crates/carapace-ffi`):
 
-Exploration of `crates/carapace-demo` and `crates/carapace` established that the hard parts
-already ship:
+- **Swift is the host.** The FFI vtable is `{ ctx, get_num, get_str, invoke, frame_ready }`
+  (`carapace.h`). The playlist, playback (AVFoundation), and all state/actions live in **Swift**;
+  the Rust engine is a renderer + input router that calls back into Swift and lands frames in a
+  host-provided IOSurface pool.
+- **State survives skin swap for free.** Because state lives in the Swift host, not the engine, a
+  skin swap changes only what is drawn — the host is untouched.
+- **Swap is content-only.** The render thread renders the engine's design canvas *scaled into* a
+  fixed `w×h` IOSurface pool (`render_thread.rs`: surfaces are `w×h`; the engine holds `cw×ch`
+  design canvas and `handle_pointer_resolved` uses `cw,ch`). If all three skins share ONE design
+  canvas and paint their distinct shapes with transparency, a swap needs **no pool/window resize** —
+  the engine swaps the skin (`Engine::handle_command(Command::Swap(..))`) keeping the host.
+- **Shaped, draggable window.** `carapace_hit_test` already classifies a point as
+  `Passthrough | Control | Drag`; the Swift host uses it to move the borderless window and to shape
+  it (alpha from the rendered surface / a mask), realizing total window replacement.
 
-- **Hot-swap over a persistent host.** `MEDIA_SKINS` already cycle over one long-lived
-  `MusicPlayerHost` via `Command::Swap(src)` (keeps host + state) on the Tab key. `SwitchHost`
-  is only used to change hosts (the `h` sysmon toggle). The showcase reuses `Command::Swap`
-  verbatim — the state-survival proof is the existing mechanism, not new plumbing.
-- **Shaped/transparent/draggable windows, on macOS, today.** The demo window is created with
-  `.with_decorations(false).with_transparent(true)` (`main.rs:369`); the main window surface is
-  cleared with `base_color` alpha `0` (`main.rs:613`), so unpainted canvas reads through to the
-  desktop; body-press already calls `w.drag_window()` (`main.rs:343`). The `classic` skin already
-  floats as a shaped, draggable object ("rounded corners float over the desktop via the
-  transparent base"). `window-spike` proved the same transparency pipeline. **Shaped windows are
-  free — skins just author with alpha.**
-- **Rich vocab.** Native primitives cover the board's look: `fill`/`region`/`value_fill`/`image`/
-  `text`/`list`/`scrub`/`view`, with path helpers `rect{}`, `rounded_rect{x,y,w,h,radius}`,
-  `circle{cx,cy,r}` and arbitrary polygon point-lists, plus **linear/radial/sweep gradients** and
-  gradient text with custom fonts. The cassette's conic reels (`sweep`), the faceplate's radial
-  glow, and LCD text are all achievable natively.
-- **Window controls as host actions:** `host.begin_drag()`, `host.minimize()`, `host.close()`.
-- **Faux spectrum:** the host already exposes `viz_<i>` (0..1, time-driven, flat when paused) that
-  `value_fill` bars can read for a live visualizer.
+### Considered and rejected: winit standalone
 
-## What's new (the actual work)
+An earlier draft targeted the `carapace-demo` winit app (transparent/draggable window +
+`Command::Swap` already work there). Rejected because "this is a macOS app" calls for a genuinely
+native `.app` with zero-copy IOSurface display, not winit. The winit path remains a fast *interaction*
+sandbox if we ever need to prototype a skin quickly, but it is not the deliverable.
 
-Three things: a launch entry, a small host extension, and three authored skins.
+## The blocker: carapace-ffi ABI (v2.0) is too minimal for a music player
 
-### 1. Entry point — showcase launch mode
+The ABI was proven with a battery-bar spike (scalar state + one parameterless toggle). The three
+music skins need three capabilities it does not yet have (verified in source, not memory):
 
-Add a startup argument to the existing binary: `cargo run -p carapace-demo -- showcase`.
+1. **No skin hot-swap export.** `carapace.h` has create/destroy/invalidate/pointer/hit_test/… but
+   **no `carapace_swap_skin`**. Today, swapping = destroy + recreate, which tears down and rebuilds
+   wgpu + the render thread every swap. Wrong mechanism for a hot-swap demo.
+2. **No collections/rows.** `FfiHost::rows()` returns `Vec::new()` — *"collections out of scope for
+   the spike"* (`host.rs:108`). All three skins center on a playlist/queue `list{}`.
+3. **Action arguments are dropped.** The vtable `invoke(ctx, name)` carries no args and
+   `FfiHost::invoke` ignores `_args` (`host.rs:102`). So `seek(fraction)`, `set_volume(level)`, and
+   `play_index(i)` — the scrub bar, volume slider, and click-a-track — cannot convey their value.
 
-- Selects a new `SHOWCASE_SKINS = ["skins/faceplate", "skins/studio", "skins/cassette"]` list
-  over a `MusicPlayerHost`, starting at index 0.
-- Tab cycles the three skins (existing cycle logic, pointed at the new list).
-- Default launch (no arg) is **unchanged**: `MEDIA_SKINS` + the `h` sysmon toggle are untouched.
-- The `h` toggle is disabled/ignored in showcase mode (the showcase is music-only and
-  self-contained); Esc still exits.
+## Decomposition & sequencing (chosen: FFI-first)
 
-Rationale: reuses ~700 lines of winit/wgpu/event wiring with near-zero disturbance to existing
-behavior. Rejected alternatives: folding a third mode into the `h` rotation (entangles modes);
-a standalone `examples/showcase.rs` (duplicates the window/render harness, drift risk).
+Three sub-projects, built in dependency order. Each is its own spec → plan → implementation cycle.
 
-### 2. Host extension — artist + volume
+- **Sub-project A — carapace-ffi v3 (BUILD FIRST).** Extend the ABI so a host can drive a
+  multi-skin, list-and-argument-driven app: `carapace_swap_skin`, a rows/collections path in the
+  vtable, and invoke-with-argument. Additive ABI bump (MINOR where signatures are added, MAJOR only
+  if an existing signature must change). Detailed spec:
+  `2026-07-06-carapace-ffi-v3-design.md` (this is the one we plan next).
+- **Sub-project B — SwiftUI macOS host app.** The music host in Swift (playlist + AVFoundation
+  playback + state/actions over the vtable), IOSurface display (CAMetalLayer / `NSViewRepresentable`),
+  borderless shaped window driven by `carapace_hit_test`, and the hot-swap UI (Tab / buttons).
+- **Sub-project C — the three skins.** Lua skins (Faceplate, Studio Deck, Cassette) authored to ONE
+  shared design canvas, bound to the Swift host's state keys and collections. Developable alongside B
+  once A lands.
 
-Extend `MusicPlayerHost` (in `crates/carapace-demo/src/music_player_host.rs`) and the audio
-backend so the board's artist line and volume control are **real bindings**, giving a second
-live piece of state (volume) that visibly survives swaps.
+## Shared design decisions (apply across sub-projects)
 
-- **`artist`** — add an `artist` field to each playlist `Track`; `get("artist")` returns the
-  current track's artist string. Populate the reference playlist with artist names.
-- **`volume`** — add a `volume: f32` field (default e.g. `0.8`); `get("volume")` returns it as a
-  `Scalar`.
-- **`set_volume(f)`** action — clamp `f` to `0.0..=1.0`, store it, and apply it to the audio
-  backend.
-- **`AudioBackend::set_volume(&mut self, v: f32)`** — new trait method:
-  - `RodioBackend`: call the sink's `set_volume(v)` (rodio supports gain).
-  - `MockAudioBackend`: record the value in `MockAudioState` (for tests).
-  - `NullBackend`: no-op.
-- `viz_<i>`, `time`, `position`, `track_title`, `playing`, `playlist` rows: unchanged.
+- **One shared design canvas** for all three skins (e.g. a common max bound); each paints its shape
+  with transparency so the IOSurface pool + window size stay constant across swaps.
+- **Host state surface** (Swift-owned, served over the vtable): `track_title`, `artist`, `time`,
+  `position` (0..1), `playing`, `volume` (0..1), `viz_0..N`; collection `playlist` with row fields
+  `now`/`title`/`artist`/`duration`; actions `toggle_play`, `stop`, `next`, `prev`,
+  `seek(f)`, `set_volume(f)`, `play_index(i)`, plus window `begin_drag`/`minimize`/`close`.
+- **Honest limits:** no per-node rotation (cassette reels won't spin); no soft-shadow blur (layered
+  fills/gradients approximate depth); rotary knobs are decoration + a real linear volume control.
 
-### 3. The three skins
+## Out of scope (this program)
 
-New skin directories under `crates/carapace-demo/skins/`, each with `skin.lua` + `skin.toml`
-(manifest declaring canvas size + archetype). All three bind the **same** capability surface:
-
-| Binding            | Key / action                          |
-|--------------------|---------------------------------------|
-| Track title        | `text{ value="track_title" }`         |
-| Artist             | `text{ value="artist" }`              |
-| Time               | `text{ value="time" }`                |
-| Seek               | `scrub{ value="position", on_seek="seek" }` |
-| Play/pause         | `region/fill on_press → host.toggle_play()` |
-| Volume             | `scrub{ value="volume", on_seek="set_volume" }` |
-| Visualizer         | `value_fill` bars reading `viz_0..N`  |
-| Playlist           | `list{ collection="playlist", on_select="play_index" }` |
-| Window drag/min/close | `host.begin_drag()` / `host.minimize()` / `host.close()` |
-
-**A. Faceplate** — gadget archetype, fixed aspect (uniform-zoom resize), authored **alpha** so it
-floats as a shaped window. Shaped body via `rounded_rect`/polygon + radial-gradient glow; LCD panel
-(gradient text: track / artist / time); horizontal seek `scrub`; transport row of hotspots
-(prev / stop / **play** / next) plus a compact volume `scrub`; queue drawer =
-`list{ collection="playlist" }` with active-row highlight. Min/close glyphs; body drag.
-
-**B. Studio Deck** — frame archetype, **resizable** (anchor reflow), a rounded-rect floating app
-surface (alpha corners). Title bar (track/artist/time); **visualizer drawn as `value_fill` bars
-reading `viz_0..N`** — *not* a live `view{}` cutout (the board's `view{ id="visualizer" }` label was
-aspirational; the live-host-view seam is not built, so we render real reactive bars); a volume
-`scrub` styled as a slider near the deck controls, with the "knobs" rendered as value-reactive
-decoration (the vocab has no rotary-drag control); transport row → `toggle_play`; playlist list
-(and a small "Library: N tracks" affordance for flavor). Anchors: controls pinned, list stretches.
-
-**C. Cassette** — gadget archetype, authored **alpha** so the cassette silhouette floats as a
-shaped window. Cassette body (gradient), two reels via **`sweep` (conic) gradient** + hub circles,
-tape label (track_title / artist), cassette window, four keys (prev / **play** / stop / next),
-and a `position` scrub styled as tape counter/progress. Body drag; min/close.
-
-## Honest limits (matched or noted, never faked)
-
-- **No per-node rotation** — reels are static conic gradients; they won't spin. Optionally a subtle
-  `playing`-driven pulse if it reads well, otherwise left static. Documented, not faked.
-- **No soft shadow/blur primitive** — depth is approximated with layered fills + gradients.
-- **macOS borderless-window shadow** behavior (whether the OS draws a shape-following shadow around
-  the transparent window) to be verified during manual QA; not a blocker.
-- **Rotary knobs** are decoration; volume is a real linear `scrub`. Stated plainly.
-
-## Testing
-
-- **Host unit tests** (`music_player_host.rs`): `get("artist")` returns current track's artist;
-  `get("volume")` round-trips; `set_volume` clamps out-of-range input to `0..1`; `set_volume`
-  reaches the backend (assert via `MockAudioState`).
-- **Skin build tests** (`tests/skins_build.rs`): extend so `faceplate`, `studio`, `cassette` each
-  load + build against the full demo vocab registry (parity with existing skin coverage).
-- **Showcase swap test** (new or in `tests/host_switch.rs`): drive `Command::Swap` across
-  faceplate → studio → cassette and assert the host's `position`/`current_index`/`volume` are
-  unchanged by the swap (the core thesis, asserted).
-- **Manual verification** (via `/run`): launch `-- showcase`, start playback, set a distinctive
-  volume, seek partway, Tab through all three skins, and confirm playback/position/volume/selection
-  persist and each window renders shaped + draggable. Capture a screenshot per skin.
-
-## Documentation
-
-- Add a concise "Showcase: one host, three skins" section to the demo README with the launch
-  command and the Tab/Esc keys (per the per-phase README-currency rule).
-- **Out of scope** (possible follow-up): regenerating the HTML concept board to match the shipped
-  skins.
-
-## Out of scope
-
-- Live `view{}` host-view cutout for the visualizer (unbuilt seam; bars instead).
-- True rotary drag controls; reel spin animation.
-- Native Swift/IOSurface embedding path (this is the winit desktop demo).
-- Regenerating the HTML board.
+- iOS / Flutter / WidgetKit hosts (separate spikes already exist).
+- Live `view{ id="host" }` content cutout (supported by the ABI, but not needed by these skins).
+- Regenerating the HTML concept board.
