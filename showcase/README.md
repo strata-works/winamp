@@ -27,7 +27,7 @@ behavior is confirmed by a human running through this checklist:
 2. Confirm the borderless starter skin window appears and the playlist is populated.
 3. Click **play** — confirm audio starts and the transport/scrub position advances.
 4. Click a playlist row — confirm the selection and now-playing track change.
-5. Drag the volume scrub — confirm the level changes audibly.
+5. Click a point along the volume scrub — confirm the level changes audibly (scrubs are click-to-set: the engine models pointer *press*, not drag).
 6. Press **Tab** — confirm the window hot-swaps to the `alt` skin.
 7. Confirm playback, position, volume, and playlist selection all persisted across the swap.
 8. Press **Tab** again to swap back to `starter` and repeat step 7.
