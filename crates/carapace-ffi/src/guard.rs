@@ -19,15 +19,26 @@ use std::sync::Once;
 #[repr(i32)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CarapaceStatus {
+    /// Success.
     Ok = 0,
+    /// A required pointer argument was null.
     ErrNullArg = 1,
+    /// The skin path was missing, unreadable, or failed to load/parse.
     ErrBadSkin = 2,
+    /// GPU/adapter initialization failed.
     ErrGpuInit = 3,
+    /// The handle's render thread has panicked and poisoned the handle; every subsequent command
+    /// export short-circuits with this until the handle is destroyed.
     ErrPoisoned = 4,
+    /// A panic was caught during this call (e.g. inside `carapace_create` or `carapace_hit_test`)
+    /// without poisoning the handle.
     ErrPanic = 5,
 }
 
+/// ABI major version. Bumped on breaking changes; a host compares this against its own header at
+/// load time. See `carapace_abi_version`.
 pub const CARAPACE_ABI_MAJOR: u32 = 2;
+/// ABI minor version. Bumped on additive (backward-compatible) changes.
 pub const CARAPACE_ABI_MINOR: u32 = 0;
 
 thread_local! {

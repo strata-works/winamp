@@ -1,5 +1,6 @@
 //! carapace-ffi — the stable C ABI that lets a host app embed the carapace engine as custom UI.
 //! Apple (macOS/iOS) only in this version; see docs/superpowers/specs/2026-07-01-carapace-ffi-design.md.
+#![deny(missing_docs)]
 
 mod guard;
 pub mod host;

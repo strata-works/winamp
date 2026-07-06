@@ -66,6 +66,7 @@ impl std::fmt::Debug for Command {
 /// Swap/SwitchHost; the Engine drains it.
 pub type Queue = Rc<RefCell<Vec<Command>>>;
 
+/// Creates a new, empty command queue.
 pub fn new_queue() -> Queue {
     Rc::new(RefCell::new(Vec::new()))
 }

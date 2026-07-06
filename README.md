@@ -375,67 +375,15 @@ adapter) and runs separately:
 cargo test -p carapace --features gpu-tests --test render_offscreen
 ```
 
+## Contributing
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) to get set up, run the checks CI runs, and submit a change. Full API/authoring docs live in [`docs/api/`](docs/api/README.md).
+
 ## Roadmap
 
-The engine is built phase by phase against written specs (in `docs/superpowers/`). Phases
-0–1 were throwaway (spike + prototype) and have been removed; 2 onward build the real
-engine. Phase 5 was decomposed into sub-projects (5a–5e).
+The engine is built phase by phase against written specs in [`docs/superpowers/`](docs/superpowers/); that directory plus the git history is the authoritative record of what has shipped. Phases 0–6 delivered the core engine, renderer, and live host; the full skin vocabulary; skin-as-window; resizable frame skins; the live host-view (`view{}`) seam; and a working music-player demo. Since then the safe C ABI (`carapace-ffi`), the live previewer (`carapace-preview`), and the API documentation have landed.
 
-- **Phase 0 — rendering / hit-test spike.** ✅ Backend chosen: vello.
-- **Phase 1 — throwaway prototype.** ✅ Surfaced the Lua↔host boundary and swap lessons.
-- **Phase 2 — formal engine architecture spec.** ✅
-- **Phase 3 — core engine + live host.** ✅ Headless core (scene graph, hit-testing,
-  state, transactional swap, Lua scripting + capability sandbox, skin loader) then
-  direct-to-surface render and the live `winit`/`wgpu` host app. CI + a software-render
-  regression harness landed alongside.
-- **Phase 5a — asset loading + `image` primitive.** ✅ Real bitmap skins.
-- **Phase 5b — gradient fills.** ✅ `Paint` (solid + linear/radial/sweep) + color alpha.
-- **Phase 5c — text + fonts.** ✅ `text{}` primitive: parley layout, fonts via the asset
-  resolver (system fallback), value-bound strings, multi-line wrap, 2-D (halign × valign)
-  anchoring, `Paint`-filled (chrome numerals).
-- **Phase 5d — vocab ergonomics.** ✅ Shape path-helpers (`circle`/`rect`/`rounded_rect`);
-  `on_press` on drawables (a control is drawn + clickable from one declaration);
-  `value_fill` direction (right/left/up/down) + clip-to-path.
-- **Phase 5e — host-extension mechanism.** ✅ A host registers a domain primitive
-  (`VocabRegistry::register`) that binds its own actions via a Rust-side `host_action` handler —
-  no Lua glue. The demo's `transport{}` (defined in the demo crate, not the engine) proves the
-  seam. **Phase 5 is complete.**
-- **Phase 6 — skin-as-window + cross-domain validation.** ✅ The demo renders the skin *as* a
-  borderless, transparent, draggable window — vector skins self-shape into rounded silhouettes
-  (the Headspace bitmap floats as a rectangle), with skin-drawn minimize/close — and the **H** key
-  live-switches the whole window between a media player and a real `sysinfo` system monitor on one
-  engine — proving total window replacement **and** zero domain knowledge (the only engine change
-  is a transparent render base color). **Phases 0–6 complete.**
-- **Live host-view region (`view{}` primitive).** ✅ A skin declares a named rectangular
-  cutout; the embedder supplies a `wgpu::TextureView` (same device, zero-copy) and carapace
-  composites it into the rect, framing it with skin chrome. `Scene::views()` exposes the
-  rects; `Renderer::draw` accepts an embedder-provided texture lookup. The bundled `frame`
-  skin hosts a live, navigable file browser (a nested carapace engine) in its `"app"` view
-  each frame. GPU render-correctness covered by dedicated offscreen tests.
-- **Frame skins — resizable themed windows.** ✅ A second skin archetype: `resizable = true`
-  + `min_size` in the manifest switches to anchor-resolved layout. Primitives take an optional
-  `anchor` table (`"left"` / `"right"` / `"top"` / `"bottom"`; both sides of an axis →
-  stretch; default = top-left = fixed) plus an optional `min` size. The `frame{}` 9-slice
-  primitive splits a source bitmap along `slice = { left, right, top, bottom }` insets and
-  composites corners (fixed), edges (stretched), and center (`"stretch"` | `"hollow"`). The
-  engine resolves anchors to logical rects in a GPU-free layout pass; gadget skins render
-  pixel-identically (uniform scale path unchanged). The bundled `frame` demo skin hosts a
-  live, two-pane read-only file browser through the `view{}` seam — powered by the new
-  `list{}` primitive, input routing into the nested shell engine, and a `FileBrowserHost`
-  (read-only; no scroll, no selection highlight, no file opening).
-- **Headspace music player.** ✅ The Headspace gadget skin is now a functioning music
-  player. New `scrub{ x, y, w, h, value, on_seek, color, direction? }` base primitive: a
-  click-to-seek bar that renders a proportional fill from host state `value` and invokes the
-  `on_seek` host action with the click's 0..1 fraction (`Scene::hit_scrub`). Real audio
-  playback via `rodio` (behind a mockable `AudioBackend` trait; `RodioBackend` for the live
-  demo, `MockAudio` for tests, `NullAudio` fallback) drives `MusicPlayerHost`
-  (play/pause/stop/next/prev/seek/play_index, auto-advance on track end). The skin exposes
-  a clickable `list{}` playlist, a `scrub{}` seek bar, and an elapsed/total time readout.
-  Gadget skins now route through `Engine::layout()` so `list{}`/`scrub{}` work in them;
-  the uniform-scale pixel-identical guarantee is preserved (verified by
-  `gadget_path_still_uniform_scales`). Base vocab is now **nine** primitives. Limitations:
-  no volume/shuffle/repeat, click-to-seek only (no drag), no playlist scrolling; bundled
-  demo clips are generated public-domain tones, not a library scan.
+The north star remains **total window replacement** — a skin *as* the OS window — with a visual Skin Studio, more example skins, and further host-integration work ahead. To contribute, see [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## Repository layout
 
