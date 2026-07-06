@@ -102,27 +102,27 @@ CarapaceStatus carapace_swap_skin(CarapaceEngine *ptr, const char *skin_dir);
 
 ### Engine seam change (`crates/carapace`)
 
-`Host::rows` cannot currently tell the FFI host *which* fields to fetch. Change its signature to
-pass the template's bound field names (known at the call site, `engine.rs:240`). This is an internal
-trait change (4 impls: `MusicPlayerHost`, `SysmonHost`, `FileBrowserHost`, `FfiHost`, plus tests);
-not part of the C ABI.
+`Host::rows` cannot currently tell the FFI host *which* fields to fetch. Rather than change its
+signature (12 impl sites across the workspace), **add** a field-aware method with a default that
+delegates to the existing `rows`, so only the FFI host overrides it and every native/test host is
+untouched. This is an internal trait addition; not part of the C ABI.
 
 ```rust
 // carapace/src/host.rs — Host trait
-fn rows(&self, _collection: &str, _fields: &[&str]) -> Vec<Row> {
-    Vec::new()
+fn rows_for(&self, collection: &str, _fields: &[&str]) -> Vec<Row> {
+    self.rows(collection)
 }
 ```
 
-- **`engine.rs` `expand_lists`:** collect the binds and pass them:
+- **`engine.rs` `expand_lists`:** collect the binds and call the field-aware method:
 
   ```rust
   let fields: Vec<&str> = template.iter().map(|c| c.bind.as_str()).collect();
-  let rows = host.rows(&collection, &fields);
+  let rows = host.rows_for(&collection, &fields);
   ```
 
-- Native hosts (`carapace-demo`) ignore `_fields` and keep building full rows exactly as today
-  (they already populate every field). Only their method signature changes.
+- Native hosts (`carapace-demo`) keep their existing `rows()` and inherit the default `rows_for`,
+  so they are unchanged. Only `FfiHost` overrides `rows_for`.
 
 ### C ABI — three new nullable vtable callbacks
 
@@ -146,10 +146,10 @@ typedef struct {
 } CarapaceHostVTable;
 ```
 
-### Rust implementation (`host.rs` `FfiHost::rows`)
+### Rust implementation (`host.rs` `FfiHost::rows_for`)
 
 ```rust
-fn rows(&self, collection: &str, fields: &[&str]) -> Vec<Row> {
+fn rows_for(&self, collection: &str, fields: &[&str]) -> Vec<Row> {
     let (Some(count_fn), Ok(ccol)) = (self.vtable.row_count, CString::new(collection))
         else { return Vec::new() };
     let n = count_fn(self.vtable.ctx, ccol.as_ptr());
