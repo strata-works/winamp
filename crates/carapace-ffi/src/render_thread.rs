@@ -470,6 +470,10 @@ mod render_tests {
             get_str: None,
             invoke: None,
             frame_ready: Some(on_frame_ready),
+            row_count: None,
+            get_row_str: None,
+            get_row_num: None,
+            invoke_arg: None,
         };
         let (handle, surfaces) =
             crate::handle::test_support::create_test_handle_pool_vt(w, h, 2, vt);
@@ -532,6 +536,10 @@ mod pacing_tests {
             get_str: None,
             invoke: None,
             frame_ready: Some(count_ready),
+            row_count: None,
+            get_row_str: None,
+            get_row_num: None,
+            invoke_arg: None,
         };
         let (h, _s) = crate::handle::test_support::create_test_handle_pool_vt(300, 140, 3, vt);
         h

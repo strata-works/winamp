@@ -421,6 +421,10 @@ pub(crate) mod test_support {
             get_str: None,
             invoke: None,
             frame_ready: None,
+            row_count: None,
+            get_row_str: None,
+            get_row_num: None,
+            invoke_arg: None,
         }
     }
 
@@ -670,6 +674,10 @@ mod v2_pointer_poison_tests {
             get_str: None,
             invoke: Some(rec),
             frame_ready: None,
+            row_count: None,
+            get_row_str: None,
+            get_row_num: None,
+            invoke_arg: None,
         };
         let (h, _s) = test_support::create_test_handle_pool_vt(300, 140, 2, vt);
         assert_eq!(
