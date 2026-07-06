@@ -897,8 +897,10 @@ git -c user.name='Daniel Agbemava' -c user.email='danagbemava@gmail.com' \
 **Files:**
 - Create: `showcase/skins/starter/skin.toml`
 - Create: `showcase/skins/starter/skin.lua`
+- Create: `showcase/skins/alt/skin.toml`
+- Create: `showcase/skins/alt/skin.lua` (a second, minimal skin at the SAME 420×660 canvas — the hot-swap target)
 - Create: `showcase/Resources/audio/` (copy 2 CC0 tone WAVs from carapace-demo)
-- Modify: `showcase/Sources/Showcase/App.swift` (`makePlaceholderHost` → real playlist; `resolveSkinDirs` → `[starter, reference]`)
+- Modify: `showcase/Sources/Showcase/App.swift` (`makePlaceholderHost` → real playlist; `resolveSkinDirs` → `[starter, alt]`)
 - Modify: `showcase/Package.swift` (add `.copy("Resources")` to the Showcase target — convert to `.executableTarget` resources; note SwiftPM requires resources on a regular target, so add `resources: [.copy("Resources")]`)
 
 **Interfaces:**
@@ -977,6 +979,46 @@ list{ collection="playlist", x=24, y=336, w=372, h=300, row_height=34,
 ```
 (Vocab arg names verified against `crates/carapace-demo/skins/reference/skin.lua` + `vocab.rs`: `role='drag'` classifies the whole-body hotspot as Drag for `hit_test` (controls declared AFTER win as Control since the topmost hotspot wins); `value_fill`/`scrub` take `direction`/`value`/`on_seek`; `list` takes `selected`/`highlight`/`on_select`/`template`; a `RowCell` uses `x` (from left) OR `right` (from right) — not both. Build/run is the final check.)
 
+- [ ] **Step 2b: Author the `alt` swap-target skin (same 420×660 canvas)**
+
+The hot-swap target MUST share the app's design canvas (the FFI exposes no current-canvas query, so `SkinView` maps pointer coords against a fixed 420×660 — a differently-sized skin would render distorted and mis-map clicks). So `alt` is a second minimal skin at 420×660, deliberately different-looking to make the swap visible while proving state persistence.
+
+`showcase/skins/alt/skin.toml`:
+```toml
+schema = 1
+id = "alt"
+name = "Alt"
+engine = "^0.1"
+canvas = { width = 420, height = 660 }
+entry = "skin.lua"
+```
+
+`showcase/skins/alt/skin.lua` (minimal: body drag, window buttons, now-playing, seek, playlist — different palette/layout; binds the same host keys so state persists across the swap):
+```lua
+fill{ path = rounded_rect{x=0, y=0, w=420, h=660, radius=18}, color = {r=30, g=20, b=28} }
+region{ path = rounded_rect{x=0, y=0, w=420, h=660, radius=18}, role='drag',
+        on_press = function() host.begin_drag() end }
+text{ text="_", x=384, y=8, size=16, color={r=210,g=195,b=205} }
+region{ path=rect{x=380,y=8,w=16,h=18}, on_press=function() host.minimize() end }
+text{ text="x", x=402, y=8, size=16, color={r=235,g=150,b=150} }
+region{ path=rect{x=398,y=8,w=16,h=18}, on_press=function() host.close() end }
+text{ value="track_title", x=24, y=48, size=26, color={r=255,g=225,b=170} }
+text{ value="artist", x=24, y=84, size=16, color={r=200,g=150,b=175} }
+text{ value="time", x=24, y=112, size=13, color={r=150,g=120,b=140} }
+scrub{ value="position", on_seek="seek", x=24, y=140, w=372, h=12,
+       direction='horizontal', color={r=255,g=170,b=120} }
+fill{ path=rect{x=24, y=170, w=372, h=52}, color={r=255,g=170,b=120},
+      on_press=function() host.toggle_play() end }
+text{ text="play / pause", x=150, y=186, size=15, color={r=40,g=20,b=10} }
+list{ collection="playlist", x=24, y=240, w=372, h=396, row_height=36,
+      on_select="play_index", highlight={r=64,g=40,b=52}, selected="current_index",
+      template={
+        { bind='now', x=8, y=9, size=16, color={r=255,g=200,b=140} },
+        { bind='title', x=34, y=9, size=16, color={r=240,g=225,b=232} },
+        { bind='duration', right=12, y=9, size=15, color={r=180,g=150,b=165}, halign='right' },
+      } }
+```
+
 - [ ] **Step 3: Bundle audio + wire the real playlist**
 
 Copy tones: `mkdir -p showcase/Resources/audio && cp crates/carapace-demo/skins/reference/assets/audio/track-01.wav crates/carapace-demo/skins/reference/assets/audio/track-02.wav showcase/Resources/audio/`
@@ -1002,8 +1044,8 @@ extension AppDelegate {
             .deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent()
         let starter = repo.appendingPathComponent("showcase/skins/starter").path
-        let reference = repo.appendingPathComponent("crates/carapace-demo/skins/reference").path
-        return [starter, reference]
+        let alt = repo.appendingPathComponent("showcase/skins/alt").path
+        return [starter, alt]
     }
 }
 ```
@@ -1012,14 +1054,14 @@ extension AppDelegate {
 - [ ] **Step 4: Build + run + verify hot-swap keeps state**
 
 Run: `cargo build -p carapace-ffi && (cd showcase && swift build && swift run Showcase)`
-Expected: starter skin renders with title/artist/time/scrub/viz/transport/volume/playlist. Click play → audio + viz animate. Click a playlist row → that track plays (highlight moves). Drag the volume scrub → volume changes. Press Tab → swaps to `reference`; playback/position/volume/selection continue. Press Tab again → back to starter, still playing.
+Expected: starter skin renders with title/artist/time/scrub/viz/transport/volume/playlist. Click play → audio + viz animate. Click a playlist row → that track plays (highlight moves). Drag the volume scrub → volume changes. Press Tab → swaps to `alt` (visibly different skin, same 420×660 canvas); playback/position/volume/selection continue. Press Tab again → back to starter, still playing.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add showcase/skins/starter showcase/Resources showcase/Package.swift showcase/Sources/Showcase/App.swift
+git add showcase/skins/starter showcase/skins/alt showcase/Resources showcase/Package.swift showcase/Sources/Showcase/App.swift
 git -c user.name='Daniel Agbemava' -c user.email='danagbemava@gmail.com' \
-  commit -m "feat(showcase): starter skin + real playlist + Tab hot-swap (starter <-> reference)"
+  commit -m "feat(showcase): starter + alt skins, real playlist, Tab hot-swap (starter <-> alt)"
 ```
 
 ---
@@ -1046,7 +1088,7 @@ zero-copy through an IOSurface pool into a borderless, draggable window. Swift o
     cargo build -p carapace-ffi     # from repo root — produces target/debug/libcarapace_ffi.dylib
     cd showcase && swift run Showcase
 
-Press **Tab** to hot-swap skins (starter ↔ reference). Drag the body to move the window;
+Press **Tab** to hot-swap skins (starter ↔ alt). Drag the body to move the window;
 the min/close glyphs and all transport/scrub/playlist controls are the skin's own.
 
 ## Tests
@@ -1077,7 +1119,7 @@ git -c user.name='Daniel Agbemava' -c user.email='danagbemava@gmail.com' \
 ### Final verification (after all tasks)
 
 - [ ] `cargo build -p carapace-ffi && (cd showcase && swift build && swift test)` — package builds, all unit tests pass.
-- [ ] A run (agent-device or manual) confirms: borderless window renders the starter skin; audio plays; transport/scrub/volume/playlist all drive the host; Tab hot-swaps starter↔reference with state intact. Screenshots captured.
+- [ ] A run (agent-device or manual) confirms: borderless window renders the starter skin; audio plays; transport/scrub/volume/playlist all drive the host; Tab hot-swaps starter↔alt with state intact. Screenshots captured.
 - [ ] No Swift warnings in `swift build` output (pristine).
 
 ## Self-review notes (reconciled)
