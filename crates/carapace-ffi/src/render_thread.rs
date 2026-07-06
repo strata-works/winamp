@@ -226,6 +226,12 @@ impl RenderThread {
         self.held[idx] = true;
         self.next_surface = (idx + 1) % self.surfaces.len();
         self.frame_id += 1;
+        // Refresh the design canvas from the scene we just laid out, so pointer hit-testing uses
+        // the current skin's canvas even across a skin swap. The swap applies during render_frame's
+        // engine.update, so the new canvas is only observable after the frame is produced.
+        let (cw, ch) = self.engine.scene().canvas;
+        self.cw = cw;
+        self.ch = ch;
         // Do NOT fire `frame_ready` here — the caller (`render_guarded`) must publish the snapshot
         // first, then fire the callback, so a host reacting to it always sees this frame's snapshot.
         Some((scene, idx as u32, self.frame_id))
@@ -264,9 +270,9 @@ impl RenderThread {
                     Ok((_m, source)) => {
                         self.engine
                             .handle_command(carapace::command::Command::Swap(source));
-                        let (cw, ch) = self.engine.scene().canvas;
-                        self.cw = cw;
-                        self.ch = ch;
+                        // Note: handle_command only enqueues the swap; it is applied later
+                        // during engine.update() inside render_frame. cw/ch is refreshed at
+                        // the end of render_one, once the swapped-in canvas is current.
                         *invalidated = true; // draw the swapped-in skin immediately
                         CarapaceStatus::Ok
                     }
@@ -565,6 +571,27 @@ mod render_tests {
         });
         assert!(unsafe {
             crate::handle::test_support::iosurface_has_nonzero_pixels(surfaces[0], w, h)
+        });
+        // Swap to a skin with a DIFFERENT canvas size (`frame` is 480x320 vs. `minimal`'s
+        // 300x140) to exercise the canvas-changing path the cw/ch refresh fix targets. This
+        // doesn't reach into the private cw/ch fields; it just confirms the swap still renders
+        // a non-blank frame when the canvas dimensions change underneath it.
+        let bigger = std::ffi::CString::new(
+            concat!(env!("CARGO_MANIFEST_DIR"), "/../carapace-demo/skins/frame")
+        ).unwrap();
+        assert_eq!(
+            unsafe { crate::handle::carapace_swap_skin(handle, bigger.as_ptr()) },
+            crate::guard::CarapaceStatus::Ok
+        );
+        assert_eq!(
+            unsafe { crate::handle::carapace_invalidate(handle) },
+            crate::guard::CarapaceStatus::Ok
+        );
+        crate::handle::test_support::wait_for(std::time::Duration::from_secs(10), || {
+            unsafe { crate::handle::test_support::iosurface_has_nonzero_pixels(surfaces[1], w, h) }
+        });
+        assert!(unsafe {
+            crate::handle::test_support::iosurface_has_nonzero_pixels(surfaces[1], w, h)
         });
         // A bad dir → ErrBadSkin, engine intact.
         let bad = std::ffi::CString::new("/no/such/skin/dir").unwrap();
