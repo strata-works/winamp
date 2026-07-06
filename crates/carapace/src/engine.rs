@@ -237,7 +237,8 @@ fn expand_lists(scene: &mut Scene, host: &dyn Host, origins: &mut Vec<crate::sce
             call: None,
         };
 
-        let rows = host.rows(&collection);
+        let fields: Vec<&str> = template.iter().map(|c| c.bind.as_str()).collect();
+        let rows = host.rows_for(&collection, &fields);
         let visible = if row_height > 0.0 {
             (region.h / row_height).floor().max(0.0) as usize
         } else {

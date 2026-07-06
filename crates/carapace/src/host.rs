@@ -65,6 +65,12 @@ pub trait Host {
     fn rows(&self, _collection: &str) -> Vec<Row> {
         Vec::new()
     }
+    /// Field-aware variant of [`Host::rows`]: `fields` are the template `bind` names the current
+    /// `list{}` needs. Defaults to [`Host::rows`] (field-agnostic); a host that fetches cells lazily
+    /// (e.g. the FFI host) overrides this to populate only `fields`.
+    fn rows_for(&self, collection: &str, _fields: &[&str]) -> Vec<Row> {
+        self.rows(collection)
+    }
 }
 
 #[cfg(test)]
