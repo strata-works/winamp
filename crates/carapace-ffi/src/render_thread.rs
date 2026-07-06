@@ -226,6 +226,12 @@ impl RenderThread {
         self.held[idx] = true;
         self.next_surface = (idx + 1) % self.surfaces.len();
         self.frame_id += 1;
+        // Refresh the design canvas from the scene we just laid out, so pointer hit-testing uses
+        // the current skin's canvas even across a skin swap. The swap applies during render_frame's
+        // engine.update, so the new canvas is only observable after the frame is produced.
+        let (cw, ch) = self.engine.scene().canvas;
+        self.cw = cw;
+        self.ch = ch;
         // Do NOT fire `frame_ready` here — the caller (`render_guarded`) must publish the snapshot
         // first, then fire the callback, so a host reacting to it always sees this frame's snapshot.
         Some((scene, idx as u32, self.frame_id))
@@ -258,6 +264,24 @@ impl RenderThread {
                     );
                 }
                 *invalidated = true; // input should show a frame even when paused
+            }
+            Command::SwapSkin { dir, reply } => {
+                let status = match carapace::skin::load_dir(&dir) {
+                    Ok((_m, source)) => {
+                        self.engine
+                            .handle_command(carapace::command::Command::Swap(source));
+                        // Note: handle_command only enqueues the swap; it is applied later
+                        // during engine.update() inside render_frame. cw/ch is refreshed at
+                        // the end of render_one, once the swapped-in canvas is current.
+                        *invalidated = true; // draw the swapped-in skin immediately
+                        CarapaceStatus::Ok
+                    }
+                    Err(e) => {
+                        set_last_error(&format!("swap_skin: load failed: {e:?}"));
+                        CarapaceStatus::ErrBadSkin
+                    }
+                };
+                let _ = reply.send(status);
             }
             #[cfg(test)]
             Command::ForcePanic => {
@@ -470,6 +494,10 @@ mod render_tests {
             get_str: None,
             invoke: None,
             frame_ready: Some(on_frame_ready),
+            row_count: None,
+            get_row_str: None,
+            get_row_num: None,
+            invoke_arg: None,
         };
         let (handle, surfaces) =
             crate::handle::test_support::create_test_handle_pool_vt(w, h, 2, vt);
@@ -509,6 +537,80 @@ mod render_tests {
         );
         unsafe { crate::handle::carapace_destroy(handle) };
     }
+
+    #[test]
+    fn swap_skin_applies_and_bad_dir_is_rejected() {
+        let (w, h) = (300u32, 140u32);
+        let vt = crate::host::CarapaceHostVTable {
+            ctx: std::ptr::null_mut(),
+            get_num: None,
+            get_str: None,
+            invoke: None,
+            frame_ready: None,
+            row_count: None,
+            get_row_str: None,
+            get_row_num: None,
+            invoke_arg: None,
+        };
+        let (handle, surfaces) =
+            crate::handle::test_support::create_test_handle_pool_vt(w, h, 2, vt);
+        assert_eq!(
+            unsafe { crate::handle::carapace_set_frame_rate(handle, 0) },
+            crate::guard::CarapaceStatus::Ok
+        );
+        // A valid skin dir → Ok, and a following invalidate renders a non-blank frame. The test
+        // fixture loads `skins/classic` by default, so swap to a DIFFERENT base-vocab skin
+        // (`minimal`) to prove a real content swap. Both load under `VocabRegistry::base()`.
+        let good = std::ffi::CString::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../carapace-demo/skins/minimal"
+        ))
+        .unwrap();
+        assert_eq!(
+            unsafe { crate::handle::carapace_swap_skin(handle, good.as_ptr()) },
+            crate::guard::CarapaceStatus::Ok
+        );
+        assert_eq!(
+            unsafe { crate::handle::carapace_invalidate(handle) },
+            crate::guard::CarapaceStatus::Ok
+        );
+        crate::handle::test_support::wait_for(std::time::Duration::from_secs(10), || unsafe {
+            crate::handle::test_support::iosurface_has_nonzero_pixels(surfaces[0], w, h)
+        });
+        assert!(unsafe {
+            crate::handle::test_support::iosurface_has_nonzero_pixels(surfaces[0], w, h)
+        });
+        // Swap to a skin with a DIFFERENT canvas size (`frame` is 480x320 vs. `minimal`'s
+        // 300x140) to exercise the canvas-changing path the cw/ch refresh fix targets. This
+        // doesn't reach into the private cw/ch fields; it just confirms the swap still renders
+        // a non-blank frame when the canvas dimensions change underneath it.
+        let bigger = std::ffi::CString::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../carapace-demo/skins/frame"
+        ))
+        .unwrap();
+        assert_eq!(
+            unsafe { crate::handle::carapace_swap_skin(handle, bigger.as_ptr()) },
+            crate::guard::CarapaceStatus::Ok
+        );
+        assert_eq!(
+            unsafe { crate::handle::carapace_invalidate(handle) },
+            crate::guard::CarapaceStatus::Ok
+        );
+        crate::handle::test_support::wait_for(std::time::Duration::from_secs(10), || unsafe {
+            crate::handle::test_support::iosurface_has_nonzero_pixels(surfaces[1], w, h)
+        });
+        assert!(unsafe {
+            crate::handle::test_support::iosurface_has_nonzero_pixels(surfaces[1], w, h)
+        });
+        // A bad dir → ErrBadSkin, engine intact.
+        let bad = std::ffi::CString::new("/no/such/skin/dir").unwrap();
+        assert_eq!(
+            unsafe { crate::handle::carapace_swap_skin(handle, bad.as_ptr()) },
+            crate::guard::CarapaceStatus::ErrBadSkin
+        );
+        unsafe { crate::handle::carapace_destroy(handle) };
+    }
 }
 
 #[cfg(all(test, target_os = "macos"))]
@@ -532,6 +634,10 @@ mod pacing_tests {
             get_str: None,
             invoke: None,
             frame_ready: Some(count_ready),
+            row_count: None,
+            get_row_str: None,
+            get_row_num: None,
+            invoke_arg: None,
         };
         let (h, _s) = crate::handle::test_support::create_test_handle_pool_vt(300, 140, 3, vt);
         h

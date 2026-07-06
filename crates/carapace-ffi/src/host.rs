@@ -26,6 +26,19 @@ pub struct CarapaceHostVTable {
     /// monotonic counter starting at 1. Must be thread-safe, non-blocking, and MUST NOT call any
     /// `carapace_*` function (that reenters the queue/loop and can deadlock).
     pub frame_ready: Option<extern "C" fn(*mut c_void, u32, u64)>,
+    /// v3: number of rows in `collection` (NUL-terminated). Null = no collections.
+    pub row_count: Option<extern "C" fn(*mut c_void, *const c_char) -> u32>,
+    /// v3: write row `index`'s string `field` into `buf` (cap `cap`), NUL-terminated; return
+    /// `true` if present. Tried after `get_row_num` (mirrors `get`, which reads numeric first).
+    pub get_row_str: Option<
+        extern "C" fn(*mut c_void, *const c_char, u32, *const c_char, *mut c_char, usize) -> bool,
+    >,
+    /// v3: write row `index`'s numeric `field` through `out`; return `true` if present.
+    pub get_row_num:
+        Option<extern "C" fn(*mut c_void, *const c_char, u32, *const c_char, *mut f64) -> bool>,
+    /// v3: perform a host action carrying a single numeric argument (the C mirror of
+    /// `Host::invoke` with one `Value::Num`, e.g. `seek`, `set_volume`, `play_index`).
+    pub invoke_arg: Option<extern "C" fn(*mut c_void, *const c_char, f64)>,
 }
 
 const ACTIONS: &[ActionSpec] = &[
@@ -99,14 +112,64 @@ impl Host for FfiHost {
         ACTIONS
     }
 
-    fn invoke(&mut self, action: &str, _args: &[Value]) {
-        if let (Some(invoke), Ok(caction)) = (self.vtable.invoke, CString::new(action)) {
+    fn invoke(&mut self, action: &str, args: &[Value]) {
+        let Ok(caction) = CString::new(action) else {
+            return;
+        };
+        if let (Some(invoke_arg), Some(Value::Num(n))) = (self.vtable.invoke_arg, args.first()) {
+            invoke_arg(self.vtable.ctx, caction.as_ptr(), *n);
+            return;
+        }
+        if let Some(invoke) = self.vtable.invoke {
             invoke(self.vtable.ctx, caction.as_ptr());
         }
     }
 
     fn rows(&self, _collection: &str) -> Vec<Row> {
-        Vec::new() // collections out of scope for the spike
+        Vec::new() // field-agnostic path unused for FFI; see rows_for
+    }
+
+    fn rows_for(&self, collection: &str, fields: &[&str]) -> Vec<Row> {
+        let (Some(count_fn), Ok(ccol)) = (self.vtable.row_count, CString::new(collection)) else {
+            return Vec::new();
+        };
+        let n = count_fn(self.vtable.ctx, ccol.as_ptr());
+        (0..n)
+            .map(|i| {
+                let mut row = Row::new();
+                for &field in fields {
+                    let Ok(cfield) = CString::new(field) else {
+                        continue;
+                    };
+                    if let Some(gn) = self.vtable.get_row_num {
+                        let mut out = 0.0_f64;
+                        if gn(self.vtable.ctx, ccol.as_ptr(), i, cfield.as_ptr(), &mut out) {
+                            row = row.set(field, StateValue::Scalar(out as f32));
+                            continue;
+                        }
+                    }
+                    if let Some(gs) = self.vtable.get_row_str {
+                        let mut buf = vec![0_u8; 256];
+                        if gs(
+                            self.vtable.ctx,
+                            ccol.as_ptr(),
+                            i,
+                            cfield.as_ptr(),
+                            buf.as_mut_ptr() as *mut c_char,
+                            buf.len(),
+                        ) {
+                            let last = buf.len() - 1;
+                            buf[last] = 0;
+                            let s = unsafe { CStr::from_ptr(buf.as_ptr() as *const c_char) }
+                                .to_string_lossy()
+                                .into_owned();
+                            row = row.set(field, StateValue::Str(std::sync::Arc::from(s.as_str())));
+                        }
+                    }
+                }
+                row
+            })
+            .collect()
     }
 }
 
@@ -141,6 +204,10 @@ mod tests {
             get_str: None,
             invoke: Some(fake_invoke),
             frame_ready: None,
+            row_count: None,
+            get_row_str: None,
+            get_row_num: None,
+            invoke_arg: None,
         }
     }
 
@@ -152,6 +219,10 @@ mod tests {
             get_str: None,
             invoke: None,
             frame_ready: None,
+            row_count: None,
+            get_row_str: None,
+            get_row_num: None,
+            invoke_arg: None,
         };
         assert!(vt.frame_ready.is_none());
     }
@@ -170,5 +241,78 @@ mod tests {
         assert!(host.actions().iter().any(|a| a.name == "toggle"));
         host.invoke("toggle", &[]);
         assert_eq!(INVOKED.load(Ordering::SeqCst), 1);
+    }
+
+    use std::sync::atomic::{AtomicU64, Ordering as O2};
+    static LAST_ARG_BITS: AtomicU64 = AtomicU64::new(0);
+
+    extern "C" fn fake_row_count(_c: *mut c_void, coll: *const c_char) -> u32 {
+        let c = unsafe { CStr::from_ptr(coll) }.to_str().unwrap();
+        if c == "playlist" { 2 } else { 0 }
+    }
+    extern "C" fn fake_get_row_str(
+        _c: *mut c_void,
+        _coll: *const c_char,
+        index: u32,
+        field: *const c_char,
+        buf: *mut c_char,
+        cap: usize,
+    ) -> bool {
+        let f = unsafe { CStr::from_ptr(field) }.to_str().unwrap();
+        let val = match (index, f) {
+            (0, "title") => "one",
+            (1, "title") => "two",
+            (0, "dur") => "0:10",
+            (1, "dur") => "0:20",
+            _ => return false,
+        };
+        let bytes = val.as_bytes();
+        let n = bytes.len().min(cap.saturating_sub(1));
+        unsafe {
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf as *mut u8, n);
+            *buf.add(n) = 0;
+        }
+        true
+    }
+    extern "C" fn fake_invoke_arg(_c: *mut c_void, action: *const c_char, arg: f64) {
+        let a = unsafe { CStr::from_ptr(action) }.to_str().unwrap();
+        if a == "seek" {
+            LAST_ARG_BITS.store(arg.to_bits(), O2::SeqCst);
+        }
+    }
+
+    fn vtable_v3() -> CarapaceHostVTable {
+        CarapaceHostVTable {
+            ctx: std::ptr::null_mut(),
+            get_num: None,
+            get_str: None,
+            invoke: Some(fake_invoke),
+            frame_ready: None,
+            row_count: Some(fake_row_count),
+            get_row_str: Some(fake_get_row_str),
+            get_row_num: None,
+            invoke_arg: Some(fake_invoke_arg),
+        }
+    }
+
+    #[test]
+    fn rows_for_materializes_requested_fields() {
+        let host = FfiHost::new(vtable_v3());
+        let rows = host.rows_for("playlist", &["title", "dur"]);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].get("title"), Some(&StateValue::Str("one".into())));
+        assert_eq!(rows[1].get("dur"), Some(&StateValue::Str("0:20".into())));
+        assert!(host.rows_for("unknown", &["title"]).is_empty());
+    }
+
+    #[test]
+    fn invoke_forwards_numeric_arg_else_falls_back() {
+        LAST_ARG_BITS.store(0, O2::SeqCst);
+        INVOKED.store(0, O2::SeqCst);
+        let mut host = FfiHost::new(vtable_v3());
+        host.invoke("seek", &[Value::Num(0.5)]);
+        assert_eq!(f64::from_bits(LAST_ARG_BITS.load(O2::SeqCst)), 0.5);
+        host.invoke("toggle", &[]); // parameterless → plain invoke (fake_invoke bumps INVOKED)
+        assert_eq!(INVOKED.load(O2::SeqCst), 1);
     }
 }

@@ -37,10 +37,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn abi_version_is_v2() {
-        // v2.0: MAJOR=2, MINOR=0 → 2 << 16. Must match the header's CARAPACE_ABI_MAJOR/MINOR.
-        assert_eq!(carapace_abi_version(), 2 << 16);
-        assert_eq!(CARAPACE_ABI_MAJOR, 2);
+    fn abi_version_is_v3() {
+        assert_eq!(carapace_abi_version(), 3 << 16);
+        assert_eq!(CARAPACE_ABI_MAJOR, 3);
         assert_eq!(CARAPACE_ABI_MINOR, 0);
     }
 }

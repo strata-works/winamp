@@ -218,3 +218,67 @@ fn clicking_a_row_invokes_on_select_with_index() {
 
     assert_eq!(*last.borrow(), Some(("open".to_string(), 1.0)));
 }
+
+#[test]
+fn engine_passes_template_binds_to_rows_for() {
+    use std::cell::RefCell;
+    struct RecHost {
+        seen: RefCell<Vec<String>>,
+    }
+    impl Host for RecHost {
+        fn name(&self) -> &str {
+            "rec"
+        }
+        fn tick(&mut self, _dt: Duration) {}
+        fn get(&self, _k: &str) -> Option<StateValue> {
+            None
+        }
+        fn actions(&self) -> &[ActionSpec] {
+            &[]
+        }
+        fn invoke(&mut self, _a: &str, _args: &[Value]) {}
+        fn rows_for(&self, _collection: &str, fields: &[&str]) -> Vec<Row> {
+            *self.seen.borrow_mut() = fields.iter().map(|s| s.to_string()).collect();
+            vec![
+                Row::new()
+                    .set("title", StateValue::Str("t".into()))
+                    .set("dur", StateValue::Str("d".into())),
+            ]
+        }
+    }
+    const SK: &str = "list{ collection='playlist', x=0, y=0, w=100, h=40, row_height=20, \
+        template={ { bind='title', x=2, y=2, size=12, color={r=1,g=2,b=3} }, \
+                   { bind='dur', right=4, y=2, size=12, color={r=1,g=2,b=3} } } }";
+    let host = RecHost {
+        seen: RefCell::new(vec![]),
+    };
+    let engine = Engine::new(
+        Box::new(host),
+        VocabRegistry::base(),
+        SkinSource::inline(SK, (100, 100)),
+    )
+    .unwrap();
+    // The engine must have asked rows_for for exactly the two template binds; assert via the
+    // rendered text (the moved host is unreadable). `RowCell::to_node` emits `TextContent::Static`.
+    use carapace::scene::TextContent;
+    let scene = engine.layout(100.0, 100.0);
+    let texts: Vec<String> = scene
+        .nodes
+        .iter()
+        .filter_map(|n| match n {
+            Node::Text {
+                content: TextContent::Static(s),
+                ..
+            } => Some(s.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        texts.contains(&"t".to_string()),
+        "title cell rendered from rows_for"
+    );
+    assert!(
+        texts.contains(&"d".to_string()),
+        "dur cell rendered from rows_for"
+    );
+}

@@ -3,6 +3,8 @@
 
 #![allow(dead_code)]
 
+use crate::guard::CarapaceStatus;
+
 /// Pointer event kind, mirrored 1:1 by the C `CarapacePointerKind` (see `handle.rs`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PointerKind {
@@ -14,7 +16,7 @@ pub enum PointerKind {
 }
 
 /// A message from a host API call to the render thread. Additive: append new variants.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub enum Command {
     Pointer {
         x: f64,
@@ -29,6 +31,12 @@ pub enum Command {
     ReleaseSurface(u32),
     /// Stop the loop and let the thread exit (sent by `carapace_destroy`).
     Shutdown,
+    /// Load the skin at `dir` and swap it in on the render thread, keeping the host. `reply`
+    /// receives the outcome so `carapace_swap_skin` can report `ErrBadSkin` synchronously.
+    SwapSkin {
+        dir: std::path::PathBuf,
+        reply: std::sync::mpsc::Sender<CarapaceStatus>,
+    },
     /// Test-only: forces a panic inside `render_guarded`'s `catch_unwind` on the render thread, to
     /// prove the panic→poison→`ErrPoisoned` contract end-to-end. Never compiled into a shipping
     /// build (and excluded defensively in `cbindgen.toml`, which can't see `#[cfg(test)]`).
@@ -120,5 +128,22 @@ mod tests {
         assert!(matches!(out[1], Command::SetFrameRate(30)));
         assert!(matches!(out[2], Command::ReleaseSurface(1)));
         assert!(matches!(out[3], Command::Shutdown));
+    }
+
+    #[test]
+    fn swap_skin_is_preserved_in_order_and_not_coalesced() {
+        let (tx, rx) = channel::<Command>();
+        let (rtx, _rrx) = channel::<crate::guard::CarapaceStatus>();
+        tx.send(Command::SwapSkin {
+            dir: "/tmp/a".into(),
+            reply: rtx.clone(),
+        })
+        .unwrap();
+        tx.send(Command::Invalidate).unwrap();
+        let mut out = Vec::new();
+        drain_coalescing(&rx, Command::SetFrameRate(30), &mut out);
+        assert!(matches!(out[0], Command::SetFrameRate(30)));
+        assert!(matches!(out[1], Command::SwapSkin { .. }));
+        assert!(matches!(out[2], Command::Invalidate));
     }
 }

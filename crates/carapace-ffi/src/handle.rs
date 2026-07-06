@@ -287,6 +287,50 @@ pub unsafe extern "C" fn carapace_release_surface(
     CarapaceStatus::Ok
 }
 
+/// Swap the running skin to the one at `skin_dir`, keeping the host, GPU, and render thread.
+/// Synchronous: blocks until the render thread has loaded + applied the new skin (~<=1 frame), so
+/// a bad skin dir is reported as `ErrBadSkin` on the caller's thread. On failure the current skin is
+/// kept. The IOSurface pool and window are unchanged — author skins to a shared design canvas.
+///
+/// # Safety
+/// `ptr` must come from `carapace_create` and not have been passed to `carapace_destroy`;
+/// `skin_dir` must be a valid NUL-terminated UTF-8 path.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn carapace_swap_skin(
+    ptr: *mut CarapaceEngine,
+    skin_dir: *const std::os::raw::c_char,
+) -> CarapaceStatus {
+    let Some(e) = (unsafe { ptr.as_ref() }) else {
+        return CarapaceStatus::ErrNullArg;
+    };
+    if skin_dir.is_null() {
+        set_last_error("carapace_swap_skin: null skin_dir");
+        return CarapaceStatus::ErrNullArg;
+    }
+    if e.poisoned.load(std::sync::atomic::Ordering::Acquire) {
+        return e.enter_poisoned();
+    }
+    let dir = match unsafe { std::ffi::CStr::from_ptr(skin_dir) }.to_str() {
+        Ok(s) => std::path::PathBuf::from(s),
+        Err(_) => {
+            set_last_error("carapace_swap_skin: skin_dir is not valid UTF-8");
+            return CarapaceStatus::ErrNullArg;
+        }
+    };
+    let (reply_tx, reply_rx) = std::sync::mpsc::channel::<CarapaceStatus>();
+    if e.tx
+        .send(Command::SwapSkin {
+            dir,
+            reply: reply_tx,
+        })
+        .is_err()
+    {
+        return e.enter_poisoned();
+    }
+    // The render thread always replies unless it died (dropping the sender → recv Err).
+    reply_rx.recv().unwrap_or_else(|_| e.enter_poisoned())
+}
+
 /// Pointer event kind, mirrored 1:1 by the Rust `queue::PointerKind` the render thread consumes.
 #[repr(i32)]
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -421,6 +465,10 @@ pub(crate) mod test_support {
             get_str: None,
             invoke: None,
             frame_ready: None,
+            row_count: None,
+            get_row_str: None,
+            get_row_num: None,
+            invoke_arg: None,
         }
     }
 
@@ -670,6 +718,10 @@ mod v2_pointer_poison_tests {
             get_str: None,
             invoke: Some(rec),
             frame_ready: None,
+            row_count: None,
+            get_row_str: None,
+            get_row_num: None,
+            invoke_arg: None,
         };
         let (h, _s) = test_support::create_test_handle_pool_vt(300, 140, 2, vt);
         assert_eq!(

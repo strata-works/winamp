@@ -11,8 +11,15 @@
 #include <stdlib.h>
 #include <IOSurface/IOSurfaceRef.h>
 
-#define CARAPACE_ABI_MAJOR 2
+/**
+ * ABI major version. Bumped on breaking changes; a host compares this against its own header at
+ * load time. See `carapace_abi_version`.
+ */
+#define CARAPACE_ABI_MAJOR 3
 
+/**
+ * ABI minor version. Bumped on additive (backward-compatible) changes.
+ */
 #define CARAPACE_ABI_MINOR 0
 
 /**
@@ -23,11 +30,31 @@ enum CarapaceStatus
   : int32_t
 #endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
  {
+  /**
+   * Success.
+   */
   Ok = 0,
+  /**
+   * A required pointer argument was null.
+   */
   ErrNullArg = 1,
+  /**
+   * The skin path was missing, unreadable, or failed to load/parse.
+   */
   ErrBadSkin = 2,
+  /**
+   * GPU/adapter initialization failed.
+   */
   ErrGpuInit = 3,
+  /**
+   * The handle's render thread has panicked and poisoned the handle; every subsequent command
+   * export short-circuits with this until the handle is destroyed.
+   */
   ErrPoisoned = 4,
+  /**
+   * A panic was caught during this call (e.g. inside `carapace_create` or `carapace_hit_test`)
+   * without poisoning the handle.
+   */
   ErrPanic = 5,
 };
 #ifndef __cplusplus
@@ -48,18 +75,33 @@ enum CarapacePointerKind
 #endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
  {
 #if (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE))
+  /**
+   * A pointer press (button/touch down). The only variant the engine currently models.
+   */
   Press = 0,
 #endif
 #if (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE))
+  /**
+   * A pointer release (button/touch up). Plumbed through as a forward-compatible no-op today.
+   */
   Release = 1,
 #endif
 #if (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE))
+  /**
+   * A pointer move. Plumbed through as a forward-compatible no-op today.
+   */
   Move = 2,
 #endif
 #if (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE))
+  /**
+   * A pointer entering the surface. Plumbed through as a forward-compatible no-op today.
+   */
   Enter = 3,
 #endif
 #if (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE))
+  /**
+   * A pointer leaving the surface. Plumbed through as a forward-compatible no-op today.
+   */
   Leave = 4,
 #endif
 };
@@ -82,9 +124,15 @@ enum CarapaceTier
 #endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
  {
 #if (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE))
+  /**
+   * CPU round-trip fallback: frames are read back from the GPU and copied into the IOSurface.
+   */
   Readback = 1,
 #endif
 #if (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE))
+  /**
+   * Zero-copy GPU path: a Metal texture aliases the IOSurface directly.
+   */
   Shared = 2,
 #endif
 };
@@ -148,9 +196,24 @@ typedef struct CarapaceEngine CarapaceEngine;
  * C function table the Swift app registers. Swift IS the host.
  */
 typedef struct {
+  /**
+   * Opaque host context, passed unchanged as the first argument to every callback below.
+   */
   void *ctx;
+  /**
+   * Numeric state read: given a NUL-terminated key, write the value through `out` and return
+   * `true` if the host has it, else return `false` and leave `out` untouched.
+   */
   bool (*get_num)(void*, const char*, double*);
+  /**
+   * String state read: given a NUL-terminated key, the host writes a NUL-terminated string into
+   * `buf` (capacity `cap`) and returns `true` if it has the key, else returns `false`.
+   */
   bool (*get_str)(void*, const char*, char*, uintptr_t);
+  /**
+   * Perform a host action identified by a NUL-terminated action name (the C mirror of
+   * `Host::invoke`).
+   */
   void (*invoke)(void*, const char*);
   /**
    * v2: fired on the render thread when a frame lands in `surfaces[index]`. `frame_id` is a
@@ -158,6 +221,24 @@ typedef struct {
    * `carapace_*` function (that reenters the queue/loop and can deadlock).
    */
   void (*frame_ready)(void*, uint32_t, uint64_t);
+  /**
+   * v3: number of rows in `collection` (NUL-terminated). Null = no collections.
+   */
+  uint32_t (*row_count)(void*, const char*);
+  /**
+   * v3: write row `index`'s string `field` into `buf` (cap `cap`), NUL-terminated; return
+   * `true` if present. Tried after `get_row_num` (mirrors `get`, which reads numeric first).
+   */
+  bool (*get_row_str)(void*, const char*, uint32_t, const char*, char*, uintptr_t);
+  /**
+   * v3: write row `index`'s numeric `field` through `out`; return `true` if present.
+   */
+  bool (*get_row_num)(void*, const char*, uint32_t, const char*, double*);
+  /**
+   * v3: perform a host action carrying a single numeric argument (the C mirror of
+   * `Host::invoke` with one `Value::Num`, e.g. `seek`, `set_volume`, `play_index`).
+   */
+  void (*invoke_arg)(void*, const char*, double);
 } CarapaceHostVTable;
 
 #if (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE))
@@ -186,7 +267,13 @@ typedef struct {
    * Optional live host content for a `view{ id = "host" }` cutout; null = none.
    */
   IOSurfaceRef content_surface;
+  /**
+   * Surface pixel width; must match every surface in `surfaces` (and `content_surface`, if set).
+   */
   uint32_t w;
+  /**
+   * Surface pixel height; must match every surface in `surfaces` (and `content_surface`, if set).
+   */
   uint32_t h;
 } CarapaceCreateDesc;
 #endif
@@ -272,6 +359,20 @@ CarapaceStatus carapace_set_frame_rate(CarapaceEngine *ptr, uint32_t fps);
  * `ptr` must come from `carapace_create` and not have been passed to `carapace_destroy`.
  */
 CarapaceStatus carapace_release_surface(CarapaceEngine *ptr, uint32_t index);
+#endif
+
+#if (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE))
+/**
+ * Swap the running skin to the one at `skin_dir`, keeping the host, GPU, and render thread.
+ * Synchronous: blocks until the render thread has loaded + applied the new skin (~<=1 frame), so
+ * a bad skin dir is reported as `ErrBadSkin` on the caller's thread. On failure the current skin is
+ * kept. The IOSurface pool and window are unchanged — author skins to a shared design canvas.
+ *
+ * # Safety
+ * `ptr` must come from `carapace_create` and not have been passed to `carapace_destroy`;
+ * `skin_dir` must be a valid NUL-terminated UTF-8 path.
+ */
+CarapaceStatus carapace_swap_skin(CarapaceEngine *ptr, const char *skin_dir);
 #endif
 
 #if (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE))
