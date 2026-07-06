@@ -56,15 +56,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 extension AppDelegate {
     func makePlaceholderHost() -> MusicHost {
-        MusicHost(playlist: [Track(title: "Placeholder", artist: "—",
-                                   url: URL(fileURLWithPath: "/dev/null"), duration: 1)],
-                  player: RealAudioPlayer())
+        func tone(_ name: String, _ title: String, _ artist: String) -> Track? {
+            guard let url = Bundle.module.url(forResource: "audio/\(name)", withExtension: "wav") else { return nil }
+            return Track(title: title, artist: artist, url: url, duration: 4)
+        }
+        let tracks = [
+            tone("track-01", "Neon Drive", "Atlas Minor"),
+            tone("track-02", "Low Orbit", "Atlas Minor"),
+        ].compactMap { $0 }
+        return MusicHost(playlist: tracks, player: RealAudioPlayer())
     }
     func resolveSkinDirs() -> [String] {
-        // Task 6 replaces this with [starter, reference]. Temporary: one existing base-vocab skin.
-        let repo = URL(fileURLWithPath: #filePath) // .../showcase/Sources/Showcase/App.swift
-            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-            .deletingLastPathComponent() // → repo root
-        return [repo.appendingPathComponent("crates/carapace-demo/skins/reference").path]
+        let repo = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+        let starter = repo.appendingPathComponent("showcase/skins/starter").path
+        let alt = repo.appendingPathComponent("showcase/skins/alt").path
+        return [starter, alt]
     }
 }

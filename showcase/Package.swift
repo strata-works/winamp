@@ -11,6 +11,7 @@ let package = Package(
         .executableTarget(
             name: "Showcase",
             dependencies: ["CCarapace"],
+            resources: [.copy("Resources")],
             swiftSettings: [
                 .swiftLanguageMode(.v5),
                 // carapace.h gates its macOS/iOS-only API (CarapaceCreateDesc, carapace_create,

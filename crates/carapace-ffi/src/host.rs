@@ -50,6 +50,7 @@ const ACTIONS: &[ActionSpec] = &[
     ActionSpec { name: "prev" },
     ActionSpec { name: "next" },
     ActionSpec { name: "seek" },
+    ActionSpec { name: "set_volume" },
     ActionSpec { name: "play_index" },
     ActionSpec { name: "begin_drag" },
     ActionSpec { name: "minimize" },
