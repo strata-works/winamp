@@ -94,7 +94,7 @@ private func demoPlaylist() -> [Track] {
                   url: URL(fileURLWithPath: "/tmp/a.mp3"), duration: 60)
     let h = MusicHost(playlist: [t], player: FakeAudioPlayer())
     let lcdTitle = h.str("track_title")!
-    #expect(lcdTitle.count <= 26)
+    #expect(lcdTitle.count <= 24)
     #expect(lcdTitle.hasSuffix("…"))
     let lcdArtist = h.str("artist")!
     #expect(lcdArtist.count <= 24)

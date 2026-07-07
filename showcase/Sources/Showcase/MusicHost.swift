@@ -37,7 +37,7 @@ private func ellipsize(_ s: String, _ max: Int) -> String {
 /// Character caps for the dynamic strings, sized to the narrowest skin that shows each field.
 /// Wider skins simply leave slack. Tuned against the three showcase skins.
 private enum TitleCap {
-    static let nowPlaying = 26  // LCD "now playing" title (Faceplate size-22 / Studio / Cassette)
+    static let nowPlaying = 24  // LCD "now playing" title (narrowest: Studio header, title shifted right of the traffic lights)
     static let artist = 24      // LCD artist line (narrowest: Faceplate LCD)
     static let row = 20         // playlist / library row title (narrowest: Studio Library, w=168)
 }

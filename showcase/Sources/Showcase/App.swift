@@ -44,9 +44,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    /// Add the real macOS traffic-light buttons (close / minimize / zoom) to the top-left of the
-    /// skin. They render, hover, and behave natively — no baked glyphs. Skin-agnostic; they float
-    /// over whatever skin is loaded and stick to the top as the window resizes between skins.
+    private var trafficLightButtons: [NSButton] = []
+
+    /// Top-left origin (skin/top-origin coords) of the traffic-light cluster for the given skin;
+    /// the three buttons march right from here at 20pt spacing. Each skin's baked chrome reserves a
+    /// different clear spot (Faceplate bezel, Studio LCD's left, Cassette's dark top strip), so the
+    /// app repositions the cluster on every skin swap rather than using one fixed offset.
+    private func trafficLightOrigin(forDir dir: String) -> CGPoint {
+        switch (dir as NSString).lastPathComponent {
+        case "studio": return CGPoint(x: 16, y: 20)   // on the LCD bar's left (title shifted right)
+        case "cassette": return CGPoint(x: 16, y: 9)  // dark strip above the label paper
+        default: return CGPoint(x: 16, y: 12)          // faceplate bezel + fallback
+        }
+    }
+
+    /// Add the real macOS traffic-light buttons (close / minimize / zoom). They render, hover, and
+    /// behave natively — no baked glyphs. Created once; `positionTrafficLights` places them for the
+    /// current skin and is re-run on every swap.
     private func installTrafficLights() {
         let mask: NSWindow.StyleMask = [.titled, .closable, .miniaturizable, .resizable]
         let specs: [(NSWindow.ButtonType, Selector?)] = [
@@ -54,7 +68,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             (.miniaturizeButton, #selector(NSWindow.miniaturize(_:))),
             (.zoomButton, nil),  // greyed: a fixed-canvas borderless skin can't zoom
         ]
-        for (i, (type, action)) in specs.enumerated() {
+        for (type, action) in specs {
             guard let b = NSWindow.standardWindowButton(type, for: mask) else { continue }
             if let action {
                 b.target = window
@@ -62,9 +76,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             } else {
                 b.isEnabled = false
             }
-            b.setFrameOrigin(NSPoint(x: 16 + CGFloat(i) * 20, y: view.bounds.height - 26))
-            b.autoresizingMask = [.minYMargin]  // stick to the top edge across skin resizes
             view.addSubview(b)
+            trafficLightButtons.append(b)
+        }
+        positionTrafficLights(forDir: skinDirs[skinIndex])
+    }
+
+    /// Place the traffic-light cluster at the current skin's reserved spot. The view is bottom-origin
+    /// (isFlipped == false), so convert the skin-space top offset to a bottom offset.
+    private func positionTrafficLights(forDir dir: String) {
+        guard !trafficLightButtons.isEmpty else { return }  // not yet created (first applySkin)
+        let o = trafficLightOrigin(forDir: dir)
+        for (i, b) in trafficLightButtons.enumerated() {
+            b.setFrameOrigin(NSPoint(x: o.x + CGFloat(i) * 20,
+                                     y: view.bounds.height - o.y - b.frame.height))
         }
     }
 
@@ -93,6 +118,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         view.frame = NSRect(x: 0, y: 0, width: w, height: h)
         view.canvasW = Double(w)
         view.canvasH = Double(h)
+        positionTrafficLights(forDir: dir)  // re-place the cluster for this skin's chrome
 
         // 3. Build a fresh bridge/pool at the new size.
         guard let b = CarapaceBridge(skinDir: dir, width: w * scale, height: h * scale,
