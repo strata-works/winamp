@@ -1,0 +1,69 @@
+<!-- Source for skins/studio/assets/studio.png. Regenerate: headless Chrome --window-size=720,480 --force-device-scale-factor=2 --default-background-color=00000000 --screenshot. Live LCD text/viz/list/scrubs/hotspots drawn by skin.lua over this baked chrome. -->
+<style>
+  html,body{margin:0;padding:0;background:transparent;font-family:ui-sans-serif,system-ui,-apple-system,sans-serif}
+  .win{position:relative;width:720px;height:480px}
+  .panel{position:absolute;inset:0;border-radius:20px;
+    background:
+      repeating-linear-gradient(90deg,rgba(255,255,255,.016) 0 1px,transparent 1px 3px),
+      linear-gradient(160deg,#3d4351 0%,#2c313d 32%,#20242e 72%,#161922 100%);
+    box-shadow:inset 0 1.5px 0 rgba(255,255,255,.26),inset 0 0 0 1px rgba(0,0,0,.5),
+      inset 0 -8px 18px rgba(0,0,0,.45),0 20px 34px rgba(0,0,0,.5)}
+  .win-b{position:absolute;top:14px;font:600 15px ui-monospace,Menlo,monospace;color:#8b93a4}
+  .win-b.m{right:42px}.win-b.x{right:20px;color:#c98d92}
+
+  .glass{position:absolute;border-radius:9px;
+    background:linear-gradient(180deg,#05170d,#02100a 55%,#040d09);
+    box-shadow:inset 0 3px 9px rgba(0,0,0,.9),inset 0 0 0 2px #0c1f16,inset 0 0 0 3px #262b36,inset 0 0 0 4px rgba(255,255,255,.05);
+    overflow:hidden}
+  .glass .scan{position:absolute;inset:0;background:repeating-linear-gradient(180deg,rgba(0,0,0,.16) 0 2px,transparent 2px 4px);opacity:.5}
+  .lcd{left:20px;top:18px;width:656px;height:44px}
+
+  .viz{left:20px;top:74px;width:474px;height:214px}
+  /* recessed playlist well — obviously darker + inset */
+  .well{position:absolute;left:508px;top:74px;width:192px;height:266px;border-radius:11px;
+    background:#070a10;
+    box-shadow:inset 0 4px 12px rgba(0,0,0,.95),inset 0 0 0 2px rgba(0,0,0,.7),inset 0 0 0 3px rgba(255,255,255,.045),0 1px 0 rgba(255,255,255,.06)}
+  .well .div{position:absolute;left:10px;right:10px;bottom:40px;height:1px;background:rgba(255,255,255,.08)}
+  .lib{position:absolute;left:520px;top:308px;font:600 12px ui-sans-serif;color:#7c8698;letter-spacing:.03em}
+
+  .knob{position:absolute;top:308px;width:56px;height:56px;border-radius:50%;
+    background:repeating-conic-gradient(#3a4254 0 6deg,#282e3c 6deg 12deg);
+    box-shadow:inset 0 2px 0 rgba(255,255,255,.22),inset 0 -4px 8px rgba(0,0,0,.55),0 3px 5px rgba(0,0,0,.5)}
+  .knob .cap{position:absolute;inset:10px;border-radius:50%;
+    background:radial-gradient(circle at 50% 34%,#565f72,#242a35 72%);box-shadow:inset 0 1px 0 rgba(255,255,255,.28)}
+  .knob .ptr{position:absolute;left:26px;top:5px;width:4px;height:15px;border-radius:2px;background:#8effb9;box-shadow:0 0 6px rgba(80,255,150,.6)}
+  .k1{left:22px}.k2{left:90px}.k3{left:158px}
+
+  .slot{position:absolute;border-radius:999px;background:linear-gradient(180deg,#0c0f16,#161b25);
+    box-shadow:inset 0 2px 4px rgba(0,0,0,.8),inset 0 0 0 1px rgba(0,0,0,.6),0 1px 0 rgba(255,255,255,.08)}
+  .vol-l{position:absolute;left:236px;top:322px;font:600 12px ui-sans-serif;color:#7f8798}
+  .vol{left:272px;top:324px;width:214px;height:12px}
+  .seek{left:22px;top:398px;width:288px;height:12px}
+
+  .btn{position:absolute;top:392px;border-radius:11px;
+    background:radial-gradient(120% 130% at 50% 12%,#4a5165,#2a2f3b 62%,#1b1f28);
+    box-shadow:inset 0 1.5px 0 rgba(255,255,255,.30),inset 0 -3px 6px rgba(0,0,0,.5),0 3px 5px rgba(0,0,0,.45);
+    display:grid;place-items:center;color:#c7cede;font:16px ui-monospace,Menlo,monospace}
+  .btn.sq{width:56px;height:46px}
+  .prev{left:340px}.stop{left:406px}.next{left:552px}
+  .play{left:472px;width:70px;height:46px;
+    background:radial-gradient(120% 130% at 50% 10%,#8effb9,#28c46e 55%,#12833f);
+    box-shadow:inset 0 1.5px 0 rgba(255,255,255,.5),inset 0 -3px 8px rgba(0,60,25,.5),0 3px 8px rgba(20,160,80,.35),0 0 16px rgba(40,200,120,.25);color:#07351d}
+</style>
+<div class="win">
+  <div class="panel"></div>
+  <div class="win-b m">–</div><div class="win-b x">✕</div>
+  <div class="glass lcd"><div class="scan"></div></div>
+  <div class="glass viz"><div class="scan"></div></div>
+  <div class="well"><div class="div"></div></div>
+  <div class="lib">LIBRARY · 184 tracks</div>
+  <div class="knob k1"><div class="cap"></div><div class="ptr"></div></div>
+  <div class="knob k2"><div class="cap"></div><div class="ptr"></div></div>
+  <div class="knob k3"><div class="cap"></div><div class="ptr"></div></div>
+  <div class="vol-l">VOL</div><div class="slot vol"></div>
+  <div class="slot seek"></div>
+  <div class="btn sq prev">⏮</div>
+  <div class="btn sq stop">■</div>
+  <div class="btn play">▶</div>
+  <div class="btn sq next">⏭</div>
+</div>
