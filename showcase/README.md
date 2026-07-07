@@ -32,13 +32,14 @@ behavior is confirmed by a human running through this checklist:
 6. Press **⌘O** — confirm the open panel accepts audio files and folders; picked audio is appended to the playlist and current playback continues.
 7. Confirm the green **zoom** traffic-light is greyed/disabled while close + minimize work.
 8. Confirm the Faceplate and Studio clocks render an elapsed `M:SS` counter in the DSEG7 seven-segment font.
-9. Press **Tab** — confirm the window hot-swaps to Studio Deck and resizes to 720×480.
-10. Confirm playback, position, volume, and playlist selection all persisted across the swap.
-11. Press **Tab** again — confirm the window hot-swaps to Cassette and resizes to 600×400; confirm state persisted again.
-12. Press **Tab** again to cycle back to Faceplate (380×560) and repeat step 10.
+9. Press **Tab** to Studio and **play** — confirm the viz panel is a live dither field that pulses with the audio (real AVAudioPlayer metering).
+10. Press **Tab** — confirm the window hot-swaps to Studio Deck and resizes to 720×480.
+11. Confirm playback, position, volume, and playlist selection all persisted across the swap.
+12. Press **Tab** again — confirm the window hot-swaps to Cassette and resizes to 600×400; confirm state persisted again.
+13. Press **Tab** again to cycle back to Faceplate (380×560) and repeat step 10.
 
 ## Notes
 
 - Sub-project B of the "one host, three skins" showcase. The three concept skins are Sub-project C.
-- `viz_*` is a time-driven animation, not a real FFT.
+- Studio's visualizer is paper.design's **dithering** effect, host-rendered (Metal) into a `view{ id="host" }` cutout and driven by real audio level. `viz_*` is still the time-driven fallback used by Faceplate.
 - The LCD clock uses **DSEG7 Classic** (keshikan, SIL OFL 1.1 — see `skins/DSEG-OFL.txt`), copied into each clock skin's `assets/`.

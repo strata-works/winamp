@@ -17,6 +17,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var bridge: CarapaceBridge!
     private var skinDirs: [String] = []
     private var skinIndex = 0
+    private var dither: DitherRenderer?
+    private var ditherTimer: Timer?
+    private var ditherStart: TimeInterval = 0
 
     func applicationDidFinishLaunching(_ note: Notification) {
         NSApp.setActivationPolicy(.regular)
@@ -120,13 +123,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         positionTrafficLights(forDir: dir)  // re-place the cluster for this skin's chrome
 
         // 3. Build a fresh bridge/pool at the new size.
+        let content = ditherSurface(forDir: dir, width: w * scale, height: h * scale)
         guard let b = CarapaceBridge(skinDir: dir, width: w * scale, height: h * scale,
-                                     contentSurface: nil,
+                                     contentSurface: content,
                                      onFrame: { [weak self] s, i in self?.view.show(surface: s, index: i) }) else {
             print("[showcase] bridge init failed for \(dir)"); NSApp.terminate(nil); return
         }
         bridge = b
         view.bridge = b
+    }
+
+    /// Start/stop the dither loop for the given skin. Only Studio declares a view{ id="host" }
+    /// cutout, so we render (and pay GPU) only there; returns the content surface to hand the
+    /// bridge (nil for other skins).
+    private func ditherSurface(forDir dir: String, width: Int, height: Int) -> IOSurface? {
+        stopDither()
+        guard (dir as NSString).lastPathComponent == "studio",
+              let r = DitherRenderer(width: width, height: height) else { return nil }
+        dither = r
+        ditherStart = Date().timeIntervalSinceReferenceDate
+        let t = Timer(timeInterval: 1.0/60.0, repeats: true) { [weak self] _ in
+            guard let self, let r = self.dither else { return }
+            let time = Float(Date().timeIntervalSinceReferenceDate - self.ditherStart)
+            r.render(time: time, level: Float(self.host.level()))
+        }
+        RunLoop.main.add(t, forMode: .common)   // keep ticking during window drags
+        ditherTimer = t
+        return r.surface
+    }
+
+    private func stopDither() {
+        ditherTimer?.invalidate(); ditherTimer = nil; dither = nil
     }
 
     private func cycleSkin() {

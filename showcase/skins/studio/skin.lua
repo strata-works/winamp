@@ -15,15 +15,8 @@ text{ value="track_title", x=96, y=30, size=18, color={r=141,g=255,b=173} }
 text{ value="artist",      x=330, y=34, size=14, color={r=110,g=200,b=150} }
 text{ value="clock", font="DSEG7Classic-Regular.ttf", x=600, y=34, size=13, color={r=95,g=175,b=135} }
 
--- visualizer bars on the baked screen
-value_fill{ path=rect{x=44,  y=100, w=40, h=170}, value="viz_0", direction='up', color={r=77,g=160,b=240} }
-value_fill{ path=rect{x=98,  y=100, w=40, h=170}, value="viz_1", direction='up', color={r=77,g=160,b=240} }
-value_fill{ path=rect{x=152, y=100, w=40, h=170}, value="viz_2", direction='up', color={r=77,g=160,b=240} }
-value_fill{ path=rect{x=206, y=100, w=40, h=170}, value="viz_3", direction='up', color={r=77,g=160,b=240} }
-value_fill{ path=rect{x=260, y=100, w=40, h=170}, value="viz_4", direction='up', color={r=77,g=160,b=240} }
-value_fill{ path=rect{x=314, y=100, w=40, h=170}, value="viz_5", direction='up', color={r=77,g=160,b=240} }
-value_fill{ path=rect{x=368, y=100, w=40, h=170}, value="viz_6", direction='up', color={r=77,g=160,b=240} }
-value_fill{ path=rect{x=422, y=100, w=40, h=170}, value="viz_7", direction='up', color={r=77,g=160,b=240} }
+-- live music-reactive dither field (host-rendered) fills the baked viz-glass opening
+view{ id="host", x=20, y=74, w=474, h=214 }
 
 -- playlist in the recessed well
 list{ collection="playlist", x=520, y=86, w=168, h=208, row_height=32,
