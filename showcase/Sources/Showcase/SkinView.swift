@@ -2,12 +2,11 @@ import AppKit
 import IOSurface
 import CCarapace
 
-let CANVAS_W = 420
-let CANVAS_H = 660
-
 /// Layer-backed view that displays carapace IOSurface frames and routes input via hit-test.
 final class SkinView: NSView {
     var bridge: CarapaceBridge?
+    var canvasW: Double = 420
+    var canvasH: Double = 660
     private var lastShown: UInt32?
     private var dragOrigin: NSPoint?
     private var didDrag = false
@@ -36,8 +35,8 @@ final class SkinView: NSView {
 
     private func canvasPoint(_ e: NSEvent) -> (Double, Double) {
         let p = convert(e.locationInWindow, from: nil)
-        let cx = Double(p.x) * Double(CANVAS_W) / Double(bounds.width)
-        let cy = (Double(bounds.height) - Double(p.y)) * Double(CANVAS_H) / Double(bounds.height)
+        let cx = Double(p.x) * canvasW / Double(bounds.width)
+        let cy = (Double(bounds.height) - Double(p.y)) * canvasH / Double(bounds.height)
         return (cx, cy)
     }
 
