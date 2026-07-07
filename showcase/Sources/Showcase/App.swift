@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 
 @main
 struct ShowcaseApp: App {
@@ -19,6 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ note: Notification) {
         NSApp.setActivationPolicy(.regular)
+        installMainMenu()
         host = makePlaceholderHost()
         hostBox.host = host
         skinDirs = resolveSkinDirs()
@@ -100,6 +102,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func cycleSkin() {
         skinIndex = (skinIndex + 1) % skinDirs.count
         applySkin(dir: skinDirs[skinIndex]) // window resizes to the next skin; MusicHost persists
+    }
+
+    /// Minimal main menu so ⌘O (Open Music…) works and is discoverable. The skin window itself
+    /// stays borderless; this only adds the menu bar + Quit.
+    private func installMainMenu() {
+        let main = NSMenu()
+
+        let appItem = NSMenuItem()
+        let appMenu = NSMenu()
+        appMenu.addItem(withTitle: "Quit CarapaceShowcase",
+                        action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        appItem.submenu = appMenu
+        main.addItem(appItem)
+
+        let fileItem = NSMenuItem()
+        let fileMenu = NSMenu(title: "File")
+        let open = NSMenuItem(title: "Open Music…", action: #selector(openMusic(_:)), keyEquivalent: "o")
+        open.target = self
+        fileMenu.addItem(open)
+        fileItem.submenu = fileMenu
+        main.addItem(fileItem)
+
+        NSApp.mainMenu = main
+    }
+
+    /// Present an app-modal open panel (files and/or folders), import audio, and append to the
+    /// playlist. Current playback/selection/volume are preserved by MusicHost.addTracks.
+    @objc private func openMusic(_ sender: Any?) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = true
+        panel.allowedContentTypes = [.audio]
+        panel.prompt = "Add to Playlist"
+        panel.message = "Choose audio files or folders to add to the playlist"
+        guard panel.runModal() == .OK else { return }
+        let urls = panel.urls
+        Task { @MainActor in
+            let tracks = await TrackImporter.importTracks(from: urls)
+            host.addTracks(tracks)
+        }
     }
 }
 
