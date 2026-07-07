@@ -1,0 +1,6 @@
+schema = 1
+id = "faceplate"
+name = "Faceplate"
+engine = "^0.1"
+canvas = { width = 380, height = 560 }
+entry = "skin.lua"
