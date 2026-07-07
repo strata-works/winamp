@@ -49,15 +49,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// over whatever skin is loaded and stick to the top as the window resizes between skins.
     private func installTrafficLights() {
         let mask: NSWindow.StyleMask = [.titled, .closable, .miniaturizable, .resizable]
-        let specs: [(NSWindow.ButtonType, Selector)] = [
+        let specs: [(NSWindow.ButtonType, Selector?)] = [
             (.closeButton, #selector(NSWindow.performClose(_:))),
             (.miniaturizeButton, #selector(NSWindow.miniaturize(_:))),
-            (.zoomButton, #selector(NSWindow.performZoom(_:))),
+            (.zoomButton, nil),  // greyed: a fixed-canvas borderless skin can't zoom
         ]
         for (i, (type, action)) in specs.enumerated() {
             guard let b = NSWindow.standardWindowButton(type, for: mask) else { continue }
-            b.target = window
-            b.action = action
+            if let action {
+                b.target = window
+                b.action = action
+            } else {
+                b.isEnabled = false
+            }
             b.setFrameOrigin(NSPoint(x: 16 + CGFloat(i) * 20, y: view.bounds.height - 26))
             b.autoresizingMask = [.minYMargin]  // stick to the top edge across skin resizes
             view.addSubview(b)
