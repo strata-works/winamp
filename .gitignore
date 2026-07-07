@@ -1,3 +1,4 @@
 /target
 # mdBook generated site (build with `mdbook build docs`)
 /docs/book
+.superpowers/
