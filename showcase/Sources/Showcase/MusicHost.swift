@@ -27,7 +27,7 @@ private func fmtMMSS(_ t: TimeInterval) -> String {
 /// Swift-owned music host — the single source of truth exposed to the engine over the vtable.
 /// Survives skin swaps (the engine never owns this state).
 final class MusicHost {
-    private let playlist: [Track]
+    private(set) var playlist: [Track]
     private let player: AudioPlayer
     private(set) var current: Int = 0
     private(set) var playing: Bool = false
@@ -57,6 +57,12 @@ final class MusicHost {
     func play(index: Int) {
         guard playlist.indices.contains(index) else { return }
         current = index; loadCurrent(autoplay: true)
+    }
+    /// Append imported tracks to the end of the playlist. Current selection, playback state,
+    /// and volume are untouched; the engine picks up the new rows on its next pull of rowCount().
+    func addTracks(_ tracks: [Track]) {
+        guard !tracks.isEmpty else { return }
+        playlist.append(contentsOf: tracks)
     }
     func seek(_ f: Double) {
         let frac = min(max(f, 0), 1)
@@ -102,6 +108,7 @@ final class MusicHost {
         case "track_title": return playlist.indices.contains(current) ? playlist[current].title : ""
         case "artist": return playlist.indices.contains(current) ? playlist[current].artist : ""
         case "time": return timeString()
+        case "clock": return fmtMMSS(player.currentTime)  // elapsed-only, for the DSEG7 counter
         default: return nil
         }
     }

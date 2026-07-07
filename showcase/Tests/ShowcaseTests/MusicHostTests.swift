@@ -61,6 +61,33 @@ private func demoPlaylist() -> [Track] {
     #expect(h.num("nope") == nil)
 }
 
+@Test func add_tracks_appends_and_preserves_state() {
+    let h = MusicHost(playlist: demoPlaylist(), player: FakeAudioPlayer())
+    h.play(index: 1)
+    h.setVolume(0.5)
+    h.addTracks([Track(title: "Four", artist: "Delta",
+                       url: URL(fileURLWithPath: "/tmp/4.wav"), duration: 44)])
+    #expect(h.rowCount() == 4)
+    #expect(h.rowString(3, field: "title") == "Four")
+    #expect(h.current == 1)      // selection unchanged
+    #expect(h.playing == true)   // playback unchanged
+    #expect(h.volume == 0.5)     // volume unchanged
+}
+
+@Test func add_tracks_empty_is_noop() {
+    let h = MusicHost(playlist: demoPlaylist(), player: FakeAudioPlayer())
+    h.addTracks([])
+    #expect(h.rowCount() == 3)
+}
+
+@Test func clock_key_is_elapsed_only() {
+    let fake = FakeAudioPlayer()
+    let h = MusicHost(playlist: demoPlaylist(), player: fake)
+    fake.currentTime = 63
+    #expect(h.str("clock") == "1:03")
+    #expect(h.str("time")?.contains("/") == true)  // full "time" key still elapsed/total
+}
+
 final class FakeAudioPlayer: AudioPlayer {
     var isPlaying = false
     var volume: Float = 1.0
