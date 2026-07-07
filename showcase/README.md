@@ -35,7 +35,7 @@ behavior is confirmed by a human running through this checklist:
 9. Press **Tab** — confirm the window hot-swaps to Studio Deck and resizes to 720×480.
 10. Confirm playback, position, volume, and playlist selection all persisted across the swap.
 11. Press **Tab** again — confirm the window hot-swaps to Cassette and resizes to 600×400; confirm state persisted again.
-12. Press **Tab** again to cycle back to Faceplate (380×560) and repeat step 7.
+12. Press **Tab** again to cycle back to Faceplate (380×560) and repeat step 10.
 
 ## Notes
 
