@@ -52,9 +52,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// app repositions the cluster on every skin swap rather than using one fixed offset.
     private func trafficLightOrigin(forDir dir: String) -> CGPoint {
         switch (dir as NSString).lastPathComponent {
-        case "studio": return CGPoint(x: 16, y: 20)   // on the LCD bar's left (title shifted right)
-        case "cassette": return CGPoint(x: 16, y: 9)  // dark strip above the label paper
-        default: return CGPoint(x: 16, y: 12)          // faceplate bezel + fallback
+        case "studio": return CGPoint(x: 16, y: 24)  // dark control strip left of the inset LCD
+        default: return CGPoint(x: 16, y: 12)         // faceplate bezel / cassette cleared corner
         }
     }
 

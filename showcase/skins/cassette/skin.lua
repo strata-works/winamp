@@ -17,8 +17,8 @@ region{ path=rect{x=0, y=0, w=600, h=322}, role='drag', on_press=function() host
 -- window close/minimize are real macOS traffic-light buttons, added by the app
 
 -- live label text (dark ink on the cream paper label)
-text{ value="track_title", x=90, y=44, size=21, color={r=42,g=33,b=24} }
-text{ value="artist", x=90, y=72, size=14, color={r=112,g=94,b=68} }
+text{ value="track_title", x=90, y=60, size=21, color={r=42,g=33,b=24} }
+text{ value="artist", x=90, y=88, size=14, color={r=112,g=94,b=68} }
 
 -- seek scrub on the deck
 fill{ path=rounded_rect{x=40, y=346, w=520, h=8, radius=4}, color={r=30,g=23,b=16} }

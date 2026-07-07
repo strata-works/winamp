@@ -11,7 +11,7 @@ region{ path=rect{x=2, y=2, w=716, h=476}, role='drag', on_press=function() host
 -- window close/minimize are real macOS traffic-light buttons, added by the app
 
 -- LCD title bar (live text on the baked glass)
-text{ value="track_title", x=84, y=30, size=18, color={r=141,g=255,b=173} }
+text{ value="track_title", x=96, y=30, size=18, color={r=141,g=255,b=173} }
 text{ value="artist",      x=330, y=34, size=14, color={r=110,g=200,b=150} }
 text{ value="clock", font="DSEG7Classic-Regular.ttf", x=600, y=34, size=13, color={r=95,g=175,b=135} }
 
