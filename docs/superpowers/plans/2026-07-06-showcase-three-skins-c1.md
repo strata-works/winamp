@@ -496,6 +496,11 @@ text{ text="[]", x=318, y=338, size=13, color={r=58,g=40,b=27} }
 fill{ path=rounded_rect{x=360, y=326, w=54, h=40, radius=6}, color={r=210,g=180,b=140}, on_press=function() host.next() end }
 text{ text=">>", x=376, y=338, size=14, color={r=58,g=40,b=27} }
 
+-- volume (small slider upper-right, above the right reel)
+text{ text="vol", x=384, y=102, size=12, color={r=210,g=180,b=130} }
+fill{ path=rounded_rect{x=412, y=116, w=140, h=8, radius=4}, color={r=40,g=30,b=20} }
+scrub{ value="volume", on_seek="set_volume", x=412, y=116, w=140, h=8, direction='right', color={r=255,g=200,b=120} }
+
 -- slim seek
 fill{ path=rounded_rect{x=100, y=300, w=400, h=8, radius=4}, color={r=40,g=30,b=20} }
 scrub{ value="position", on_seek="seek", x=100, y=300, w=400, h=8, direction='right', color={r=255,g=170,b=120} }
