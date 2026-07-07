@@ -118,6 +118,7 @@ final class FakeAudioPlayer: AudioPlayer {
     var volume: Float = 1.0
     var currentTime: TimeInterval = 0
     var duration: TimeInterval = 0
+    var level: Float = 0
     func load(_ url: URL, duration: TimeInterval) { self.duration = duration; currentTime = 0 }
     func play() { isPlaying = true }
     func pause() { isPlaying = false }

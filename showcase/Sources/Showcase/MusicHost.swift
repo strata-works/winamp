@@ -14,6 +14,7 @@ protocol AudioPlayer: AnyObject {
     var volume: Float { get set }
     var currentTime: TimeInterval { get set }
     var duration: TimeInterval { get }
+    var level: Float { get }
     func load(_ url: URL, duration: TimeInterval)
     func play()
     func pause()
@@ -105,6 +106,7 @@ final class MusicHost {
         return d > 0 ? min(max(player.currentTime / d, 0), 1) : 0
     }
     func timeString() -> String { "\(fmtMMSS(player.currentTime)) / \(fmtMMSS(player.duration))" }
+    func level() -> Double { Double(player.level) }
     func viz(_ i: Int) -> Double {
         guard playing else { return 0.05 }
         let t = player.currentTime
