@@ -43,6 +43,12 @@ final class DitherRenderer {
         self.pipeline = ps
     }
 
+    /// Draw one dither frame into the content IOSurface. Intentionally does NOT wait on GPU
+    /// completion — the surface is overwritten continuously (~60fps) and the engine reads it by
+    /// CPU-copying always-valid IOSurface bytes on its own render thread (no shared MTLDevice, no
+    /// fence). A torn frame (pixels from N and N-1) is invisible on a soft two-color dither. This
+    /// lock-free safety holds ONLY while the engine reads via that CPU copy; if the engine ever
+    /// aliases this surface as a GPU texture (Tier-2 zero-copy), a fence would be required here.
     func render(time: Float, level: Float) {
         var u = makeDitherUniforms(time: time, level: level, width: cutoutW, height: cutoutH)
         let rp = MTLRenderPassDescriptor()

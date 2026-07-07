@@ -33,7 +33,7 @@ it non-nil while Studio is active.
 
 ```
 RealAudioPlayer (metering) --level--> MusicHost.level --\
-CVDisplayLink --time--------------------------------------> DitherRenderer (Metal)
+main-runloop Timer (~60fps) --time--------------------------------------> DitherRenderer (Metal)
                                                             |  renders dither.metal into
                                                             v  a full-canvas BGRA IOSurface
                                             content_surface (IOSurface)
@@ -52,7 +52,7 @@ CVDisplayLink --time--------------------------------------> DitherRenderer (Meta
   rather than mechanically port the ~600-line transpiled `dithering.wgsl` — same visual, far more
   maintainable, and the host is Metal (can't run WGSL directly anyway)._
 - **`DitherRenderer`** (new, Swift) — owns a full-canvas BGRA IOSurface + a Metal render pipeline;
-  `render(time:level:)` draws one frame into the IOSurface. Driven by a `CVDisplayLink`. Exposes
+  `render(time:level:)` draws one frame into the IOSurface. Driven by a main-runloop `Timer` (~60fps; CVDisplayLink not used — NSView CADisplayLink needs macOS 14, this project targets 13). Exposes
   the IOSurface for the bridge. Uniform packing (`level`/`time`/aspect/colors → the buffer) is a
   pure function, unit-tested.
 - **`RealAudioPlayer.level`** — `isMeteringEnabled = true`; `level: Float` calls `updateMeters()`
@@ -63,7 +63,7 @@ CVDisplayLink --time--------------------------------------> DitherRenderer (Meta
   `CarapaceCreateDesc.content_surface`.
 - **`AppDelegate`** — creates the `DitherRenderer` + its IOSurface sized to the current skin;
   **gates it to Studio only**: in `applySkin`, when the skin is `studio` it builds the dither
-  IOSurface (at the skin's backing-scaled size), starts the `CVDisplayLink`, and passes the surface
+  IOSurface (at the skin's backing-scaled size), starts the `Timer`, and passes the surface
   as `contentSurface`; for other skins it stops the loop and passes `nil`.
 - **`studio/skin.lua`** — drop the `value_fill{ value="viz_N" }` lines; add
   `view{ id="host", x=20, y=74, w=474, h=214 }` over the baked viz-glass panel.
@@ -88,9 +88,11 @@ in that space, so the pattern reads correctly after the stretch (no squished dit
 ## Frame sync
 
 The engine free-runs (~60 fps) and composites whatever is currently in `content_surface`; the
-`DitherRenderer` redraws on its own `CVDisplayLink`. They are intentionally unsynchronized — for a
-soft two-color dither, any tear is invisible. No locking needed on the pixel data (single writer =
-the display-link callback; the engine only reads via the aliased Metal texture).
+`DitherRenderer` redraws on its own main-runloop `Timer`. They are intentionally unsynchronized — for a
+soft two-color dither, any tear is invisible. No locking needed on the pixel data: single writer (the
+main-thread Timer callback), and the engine reads by CPU-copying always-valid IOSurface bytes on its
+render thread. This lock-free safety holds only while that read stays a CPU copy (see the note in
+`DitherRenderer.render()`); a future Tier-2 GPU-alias of the content surface would need a fence.
 
 ## Testing
 
