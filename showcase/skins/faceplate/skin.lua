@@ -7,11 +7,9 @@
 
 image{ asset="faceplate.png", x=0, y=0, w=380, h=560 }
 
--- drag both panels; window buttons (hotspots over the baked glyphs)
+-- drag both panels (window close/minimize are real macOS traffic-light buttons, added by the app)
 region{ path=rect{x=2,  y=2,   w=376, h=296}, role='drag', on_press=function() host.begin_drag() end }
 region{ path=rect{x=10, y=322, w=360, h=228}, role='drag', on_press=function() host.begin_drag() end }
-region{ path=rect{x=338, y=8, w=18, h=22}, on_press=function() host.minimize() end }
-region{ path=rect{x=360, y=8, w=18, h=22}, on_press=function() host.close() end }
 
 -- LCD live text (green phosphor) on the baked glass
 text{ value="track_title", x=44, y=62, size=22, color={r=141,g=255,b=173} }

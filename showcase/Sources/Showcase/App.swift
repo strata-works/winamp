@@ -26,8 +26,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Create the window + view once; applySkin sizes them and builds the first bridge.
         view = SkinView(frame: NSRect(x: 0, y: 0, width: 420, height: 660))
         view.onTab = { [weak self] in self?.cycleSkin() }
+        // Borderless (the skin IS the window) but keep close/miniaturize capabilities so the
+        // real native traffic-light buttons work.
         window = SkinWindow(contentRect: NSRect(x: 200, y: 200, width: 420, height: 660),
-                            styleMask: [.borderless], backing: .buffered, defer: false)
+                            styleMask: [.borderless, .closable, .miniaturizable], backing: .buffered, defer: false)
         window.isOpaque = false
         window.backgroundColor = .clear
         window.hasShadow = true
@@ -35,8 +37,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         windowBox.window = window
 
         applySkin(dir: skinDirs[skinIndex])
+        installTrafficLights()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// Add the real macOS traffic-light buttons (close / minimize / zoom) to the top-left of the
+    /// skin. They render, hover, and behave natively — no baked glyphs. Skin-agnostic; they float
+    /// over whatever skin is loaded and stick to the top as the window resizes between skins.
+    private func installTrafficLights() {
+        let mask: NSWindow.StyleMask = [.titled, .closable, .miniaturizable, .resizable]
+        let specs: [(NSWindow.ButtonType, Selector)] = [
+            (.closeButton, #selector(NSWindow.performClose(_:))),
+            (.miniaturizeButton, #selector(NSWindow.miniaturize(_:))),
+            (.zoomButton, #selector(NSWindow.performZoom(_:))),
+        ]
+        for (i, (type, action)) in specs.enumerated() {
+            guard let b = NSWindow.standardWindowButton(type, for: mask) else { continue }
+            b.target = window
+            b.action = action
+            b.setFrameOrigin(NSPoint(x: 16 + CGFloat(i) * 20, y: view.bounds.height - 26))
+            b.autoresizingMask = [.minYMargin]  // stick to the top edge across skin resizes
+            view.addSubview(b)
+        }
     }
 
     /// Point the app at `dir`: tear down the current engine, resize the window to the skin's

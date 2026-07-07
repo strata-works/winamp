@@ -14,12 +14,7 @@ fill{ path = rounded_rect{x=0, y=322, w=600, h=78, radius=20},
 -- realistic cassette body (baked image), 0..340 — overlaps the deck top
 image{ asset="cassette.png", x=0, y=0, w=600, h=340 }
 region{ path=rect{x=0, y=0, w=600, h=322}, role='drag', on_press=function() host.begin_drag() end }
-
--- window buttons (subtle, top-right over the shell)
-text{ text="_", x=556, y=6, size=15, color={r=205,g=205,b=210} }
-region{ path=rect{x=552,y=6,w=15,h=16}, on_press=function() host.minimize() end }
-text{ text="x", x=576, y=6, size=15, color={r=235,g=150,b=150} }
-region{ path=rect{x=572,y=6,w=15,h=16}, on_press=function() host.close() end }
+-- window close/minimize are real macOS traffic-light buttons, added by the app
 
 -- live label text (dark ink on the cream paper label)
 text{ value="track_title", x=90, y=44, size=21, color={r=42,g=33,b=24} }

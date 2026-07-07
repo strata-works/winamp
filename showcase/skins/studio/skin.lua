@@ -8,8 +8,7 @@
 image{ asset="studio.png", x=0, y=0, w=720, h=480 }
 
 region{ path=rect{x=2, y=2, w=716, h=476}, role='drag', on_press=function() host.begin_drag() end }
-region{ path=rect{x=674, y=10, w=18, h=22}, on_press=function() host.minimize() end }
-region{ path=rect{x=696, y=10, w=20, h=22}, on_press=function() host.close() end }
+-- window close/minimize are real macOS traffic-light buttons, added by the app
 
 -- LCD title bar (live text on the baked glass)
 text{ value="track_title", x=36, y=30, size=18, color={r=141,g=255,b=173} }
