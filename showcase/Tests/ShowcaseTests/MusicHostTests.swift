@@ -88,6 +88,31 @@ private func demoPlaylist() -> [Track] {
     #expect(h.str("time")?.contains("/") == true)  // full "time" key still elapsed/total
 }
 
+@Test func long_title_is_ellipsized_for_lcd_and_rows() {
+    let long = "Ameno Amapiano (You Wanna Bamba) (David Guetta Remix)"
+    let t = Track(title: long, artist: "A Very Long Artist Name That Overflows Too",
+                  url: URL(fileURLWithPath: "/tmp/a.mp3"), duration: 60)
+    let h = MusicHost(playlist: [t], player: FakeAudioPlayer())
+    let lcdTitle = h.str("track_title")!
+    #expect(lcdTitle.count <= 26)
+    #expect(lcdTitle.hasSuffix("…"))
+    let lcdArtist = h.str("artist")!
+    #expect(lcdArtist.count <= 24)
+    #expect(lcdArtist.hasSuffix("…"))
+    let rowTitle = h.rowString(0, field: "title")!
+    #expect(rowTitle.count <= 20)
+    #expect(rowTitle.hasSuffix("…"))
+    // The ellipsized string is a prefix of the original (plus the ellipsis).
+    #expect(long.hasPrefix(String(lcdTitle.dropLast())))
+}
+
+@Test func short_title_is_not_truncated() {
+    let h = MusicHost(playlist: demoPlaylist(), player: FakeAudioPlayer())
+    #expect(h.str("track_title") == "One")           // unchanged: no ellipsis
+    #expect(h.str("artist") == "Alpha")
+    #expect(h.rowString(2, field: "title") == "Three")
+}
+
 final class FakeAudioPlayer: AudioPlayer {
     var isPlaying = false
     var volume: Float = 1.0

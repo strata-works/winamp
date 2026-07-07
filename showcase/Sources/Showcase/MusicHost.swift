@@ -25,6 +25,23 @@ private func fmtMMSS(_ t: TimeInterval) -> String {
     return "\(s / 60):" + String(format: "%02d", s % 60)
 }
 
+/// Single-line ellipsis truncation. The engine's `text{}` primitive wraps (no ellipsis) and its
+/// list-row cells can't be width-bounded, so the host caps the dynamic strings it hands out before
+/// the engine draws them. Without this, imported tracks with long titles run off the panel and over
+/// the clock/duration. Proper skin-aware truncation is a planned engine feature.
+private func ellipsize(_ s: String, _ max: Int) -> String {
+    guard s.count > max else { return s }
+    return s.prefix(max - 1).trimmingCharacters(in: .whitespaces) + "…"
+}
+
+/// Character caps for the dynamic strings, sized to the narrowest skin that shows each field.
+/// Wider skins simply leave slack. Tuned against the three showcase skins.
+private enum TitleCap {
+    static let nowPlaying = 26  // LCD "now playing" title (Faceplate size-22 / Studio / Cassette)
+    static let artist = 24      // LCD artist line (narrowest: Faceplate LCD)
+    static let row = 20         // playlist / library row title (narrowest: Studio Library, w=168)
+}
+
 /// Swift-owned music host — the single source of truth exposed to the engine over the vtable.
 /// Survives skin swaps (the engine never owns this state).
 final class MusicHost {
@@ -103,8 +120,8 @@ final class MusicHost {
         guard let t = playlistLock.withLock({ playlist.indices.contains(i) ? playlist[i] : nil }) else { return nil }
         switch field {
         case "now": return i == current ? "▶" : ""
-        case "title": return t.title
-        case "artist": return t.artist
+        case "title": return ellipsize(t.title, TitleCap.row)
+        case "artist": return ellipsize(t.artist, TitleCap.row)
         case "duration": return fmtMMSS(t.duration)
         default: return nil
         }
@@ -113,8 +130,12 @@ final class MusicHost {
     // MARK: state keys
     func str(_ key: String) -> String? {
         switch key {
-        case "track_title": return playlistLock.withLock { playlist.indices.contains(current) ? playlist[current].title : "" }
-        case "artist": return playlistLock.withLock { playlist.indices.contains(current) ? playlist[current].artist : "" }
+        case "track_title":
+            let title = playlistLock.withLock { playlist.indices.contains(current) ? playlist[current].title : "" }
+            return ellipsize(title, TitleCap.nowPlaying)
+        case "artist":
+            let artist = playlistLock.withLock { playlist.indices.contains(current) ? playlist[current].artist : "" }
+            return ellipsize(artist, TitleCap.artist)
         case "time": return timeString()
         case "clock": return fmtMMSS(player.currentTime)  // elapsed-only, for the DSEG7 counter
         default: return nil
