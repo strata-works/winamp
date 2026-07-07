@@ -44,6 +44,8 @@ fill{ path=rounded_rect{x=100, y=380, w=90, h=44, radius=8},
 text{ text="play", x=126, y=394, size=15, color={r=8,g=30,b=18} }
 fill{ path=rounded_rect{x=200, y=380, w=70, h=44, radius=8}, color={r=48,g=58,b=78}, on_press=function() host.next() end }
 text{ text=">>", x=224, y=394, size=15, color={r=210,g=220,b=235} }
+fill{ path=rounded_rect{x=280, y=380, w=70, h=44, radius=8}, color={r=48,g=58,b=78}, on_press=function() host.stop() end }
+text{ text="[]", x=306, y=394, size=15, color={r=210,g=220,b=235} }
 
 -- playlist (right column)
 fill{ path=rounded_rect{x=380, y=80, w=320, h=380, radius=10}, color={r=11,g=18,b=30} }
