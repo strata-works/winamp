@@ -23,6 +23,14 @@ text{ value="track_title", x=40, y=62, size=22,
 text{ value="artist", x=40, y=96, size=15, color={r=110,g=200,b=150} }
 text{ value="time", x=40, y=140, size=14, color={r=90,g=175,b=125} }
 
+-- spectrum visualizer (viz_0..viz_5), tucked into the LCD's bottom-right corner
+value_fill{ path=rect{x=236, y=146, w=8, h=24}, value="viz_0", direction='up', color={r=92,g=255,b=154} }
+value_fill{ path=rect{x=256, y=146, w=8, h=24}, value="viz_1", direction='up', color={r=92,g=255,b=154} }
+value_fill{ path=rect{x=276, y=146, w=8, h=24}, value="viz_2", direction='up', color={r=92,g=255,b=154} }
+value_fill{ path=rect{x=296, y=146, w=8, h=24}, value="viz_3", direction='up', color={r=92,g=255,b=154} }
+value_fill{ path=rect{x=316, y=146, w=8, h=24}, value="viz_4", direction='up', color={r=92,g=255,b=154} }
+value_fill{ path=rect{x=336, y=146, w=8, h=24}, value="viz_5", direction='up', color={r=92,g=255,b=154} }
+
 -- seek scrub
 fill{ path=rounded_rect{x=24, y=190, w=332, h=12, radius=6}, color={r=31,g=41,b=55} }
 scrub{ value="position", on_seek="seek", x=24, y=190, w=332, h=12, direction='right', color={r=92,g=255,b=154} }
