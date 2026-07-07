@@ -9,7 +9,8 @@ zero-copy through an IOSurface pool into a borderless, draggable window. Swift o
     cargo build -p carapace-ffi     # from repo root — produces target/debug/libcarapace_ffi.dylib
     cd showcase && swift run Showcase
 
-Press **Tab** to hot-swap skins (starter ↔ alt). Drag the body to move the window;
+Press **Tab** to hot-swap Faceplate → Studio Deck → Cassette; the window resizes to each skin.
+Playback, position, volume, and selection persist across swaps. Drag the body to move the window;
 the min/close glyphs and all transport/scrub/playlist controls are the skin's own.
 
 ## Tests
@@ -24,13 +25,14 @@ targets iOS/Android simulators, not native macOS windows. Automated coverage is 
 behavior is confirmed by a human running through this checklist:
 
 1. `cargo build -p carapace-ffi && cd showcase && swift run Showcase`
-2. Confirm the borderless starter skin window appears and the playlist is populated.
+2. Confirm the borderless Faceplate skin window appears at 380×560 and the playlist is populated.
 3. Click **play** — confirm audio starts and the transport/scrub position advances.
 4. Click a playlist row — confirm the selection and now-playing track change.
 5. Click a point along the volume scrub — confirm the level changes audibly (scrubs are click-to-set: the engine models pointer *press*, not drag).
-6. Press **Tab** — confirm the window hot-swaps to the `alt` skin.
+6. Press **Tab** — confirm the window hot-swaps to Studio Deck and resizes to 720×480.
 7. Confirm playback, position, volume, and playlist selection all persisted across the swap.
-8. Press **Tab** again to swap back to `starter` and repeat step 7.
+8. Press **Tab** again — confirm the window hot-swaps to Cassette and resizes to 600×400; confirm state persisted again.
+9. Press **Tab** again to cycle back to Faceplate (380×560) and repeat step 7.
 
 ## Notes
 

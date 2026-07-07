@@ -91,10 +91,8 @@ extension AppDelegate {
         let repo = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent()
-        // TEMP (Task 6 replaces with [faceplate, studio, cassette]): two different-sized skins to
-        // exercise per-skin resize — starter (420×660) and the demo `reference` skin (342×394).
-        let starter = repo.appendingPathComponent("showcase/skins/starter").path
-        let reference = repo.appendingPathComponent("crates/carapace-demo/skins/reference").path
-        return [starter, reference]
+        return ["faceplate", "studio", "cassette"].map {
+            repo.appendingPathComponent("showcase/skins/\($0)").path
+        }
     }
 }
