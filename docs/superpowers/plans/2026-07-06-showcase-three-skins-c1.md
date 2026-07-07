@@ -476,6 +476,14 @@ fill{ path=circle{cx=430, cy=250, r=8}, color={r=15,g=23,b=42} }
 fill{ path=rounded_rect{x=250, y=150, w=100, h=40, radius=4}, color={r=7,g=20,b=13} }
 text{ value="time", x=262, y=162, size=13, color={r=141,g=255,b=173} }
 
+-- VU meter (music-reactive; binds viz_*) above the window, cassette-deck style
+value_fill{ path=rect{x=256, y=116, w=8, h=28}, value="viz_0", direction='up', color={r=255,g=200,b=120} }
+value_fill{ path=rect{x=271, y=116, w=8, h=28}, value="viz_1", direction='up', color={r=255,g=200,b=120} }
+value_fill{ path=rect{x=286, y=116, w=8, h=28}, value="viz_2", direction='up', color={r=255,g=190,b=110} }
+value_fill{ path=rect{x=301, y=116, w=8, h=28}, value="viz_3", direction='up', color={r=255,g=180,b=100} }
+value_fill{ path=rect{x=316, y=116, w=8, h=28}, value="viz_4", direction='up', color={r=255,g=170,b=90} }
+value_fill{ path=rect{x=331, y=116, w=8, h=28}, value="viz_5", direction='up', color={r=255,g=160,b=80} }
+
 -- keys (prev / play / stop / next)
 fill{ path=rounded_rect{x=180, y=326, w=54, h=40, radius=6}, color={r=210,g=180,b=140}, on_press=function() host.prev() end }
 text{ text="<<", x=196, y=338, size=14, color={r=58,g=40,b=27} }
