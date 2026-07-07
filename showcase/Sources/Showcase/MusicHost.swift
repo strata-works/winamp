@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 struct Track {
     let title: String
@@ -27,7 +28,12 @@ private func fmtMMSS(_ t: TimeInterval) -> String {
 /// Swift-owned music host — the single source of truth exposed to the engine over the vtable.
 /// Survives skin swaps (the engine never owns this state).
 final class MusicHost {
-    private(set) var playlist: [Track]
+    private var playlist: [Track]
+    /// Guards every access to the `playlist` array. The engine's render thread reads the playlist
+    /// via the row/str vtable callbacks every frame, while `addTracks` appends on the main actor;
+    /// without this lock an append could reallocate the array's buffer mid-read. Non-recursive —
+    /// never hold it across a call that also locks (see `loadCurrent` callers).
+    private let playlistLock = OSAllocatedUnfairLock()
     private let player: AudioPlayer
     private(set) var current: Int = 0
     private(set) var playing: Bool = false
@@ -42,8 +48,7 @@ final class MusicHost {
 
     // MARK: actions
     private func loadCurrent(autoplay: Bool) {
-        guard playlist.indices.contains(current) else { return }
-        let t = playlist[current]
+        guard let t = playlistLock.withLock({ playlist.indices.contains(current) ? playlist[current] : nil }) else { return }
         player.load(t.url, duration: t.duration)
         if autoplay { player.play(); playing = true }
     }
@@ -52,17 +57,21 @@ final class MusicHost {
         else { player.play(); playing = true }
     }
     func stop() { player.stop(); playing = false }
-    func next() { if current + 1 < playlist.count { current += 1; loadCurrent(autoplay: playing) } }
+    func next() {
+        let count = playlistLock.withLock { playlist.count }
+        if current + 1 < count { current += 1; loadCurrent(autoplay: playing) }
+    }
     func prev() { if current > 0 { current -= 1; loadCurrent(autoplay: playing) } }
     func play(index: Int) {
-        guard playlist.indices.contains(index) else { return }
+        let valid = playlistLock.withLock { playlist.indices.contains(index) }
+        guard valid else { return }
         current = index; loadCurrent(autoplay: true)
     }
     /// Append imported tracks to the end of the playlist. Current selection, playback state,
     /// and volume are untouched; the engine picks up the new rows on its next pull of rowCount().
     func addTracks(_ tracks: [Track]) {
         guard !tracks.isEmpty else { return }
-        playlist.append(contentsOf: tracks)
+        playlistLock.withLock { playlist.append(contentsOf: tracks) }
     }
     func seek(_ f: Double) {
         let frac = min(max(f, 0), 1)
@@ -89,10 +98,9 @@ final class MusicHost {
     }
 
     // MARK: collection
-    func rowCount() -> Int { playlist.count }
+    func rowCount() -> Int { playlistLock.withLock { playlist.count } }
     func rowString(_ i: Int, field: String) -> String? {
-        guard playlist.indices.contains(i) else { return nil }
-        let t = playlist[i]
+        guard let t = playlistLock.withLock({ playlist.indices.contains(i) ? playlist[i] : nil }) else { return nil }
         switch field {
         case "now": return i == current ? "▶" : ""
         case "title": return t.title
@@ -105,8 +113,8 @@ final class MusicHost {
     // MARK: state keys
     func str(_ key: String) -> String? {
         switch key {
-        case "track_title": return playlist.indices.contains(current) ? playlist[current].title : ""
-        case "artist": return playlist.indices.contains(current) ? playlist[current].artist : ""
+        case "track_title": return playlistLock.withLock { playlist.indices.contains(current) ? playlist[current].title : "" }
+        case "artist": return playlistLock.withLock { playlist.indices.contains(current) ? playlist[current].artist : "" }
         case "time": return timeString()
         case "clock": return fmtMMSS(player.currentTime)  // elapsed-only, for the DSEG7 counter
         default: return nil
