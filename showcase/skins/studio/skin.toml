@@ -1,0 +1,6 @@
+schema = 1
+id = "studio"
+name = "Studio Deck"
+engine = "^0.1"
+canvas = { width = 720, height = 480 }
+entry = "skin.lua"

@@ -1,0 +1,76 @@
+<style>
+  html,body{margin:0;padding:0;background:transparent;
+    font-family:ui-sans-serif,system-ui,-apple-system,sans-serif}
+  .win{position:relative;width:380px;height:560px}
+
+  /* ---------- brushed-aluminum panel mixin via classes ---------- */
+  .alu{position:absolute;border-radius:28px;
+    background:
+      repeating-linear-gradient(90deg, rgba(255,255,255,.018) 0 1px, transparent 1px 3px),
+      linear-gradient(160deg,#3c4150 0%,#2b303c 30%,#20242e 70%,#171a22 100%);
+    box-shadow:
+      inset 0 1.5px 0 rgba(255,255,255,.28),
+      inset 0 0 0 1px rgba(0,0,0,.5),
+      inset 0 -6px 14px rgba(0,0,0,.45);}
+
+  /* ---------- Component 1: body ---------- */
+  .body{top:0;left:0;width:380px;height:300px}
+  .win-b{position:absolute;top:12px;font:600 15px ui-monospace,Menlo,monospace;color:#8b93a4}
+  .win-b.m{right:36px}.win-b.x{right:16px;color:#c98d92}
+
+  /* recessed glass LCD */
+  .lcd{position:absolute;left:22px;top:40px;width:336px;height:122px;border-radius:12px;
+    background:linear-gradient(180deg,#05170d,#02100a 55%,#040d09);
+    box-shadow:
+      inset 0 3px 10px rgba(0,0,0,.9),
+      inset 0 0 0 2px #0c1f16,
+      inset 0 0 0 4px #262b36,           /* metallic bezel ring */
+      inset 0 0 0 5px rgba(255,255,255,.06),
+      0 1px 0 rgba(255,255,255,.10);
+    overflow:hidden}
+  .lcd .sheen{position:absolute;inset:0;background:linear-gradient(120deg,rgba(120,255,180,.06) 0 30%,transparent 40%)}
+  .lcd .scan{position:absolute;inset:0;background:repeating-linear-gradient(180deg,rgba(0,0,0,.18) 0 2px,transparent 2px 4px);opacity:.5}
+
+  /* recessed seek slot */
+  .slot{position:absolute;border-radius:999px;
+    background:linear-gradient(180deg,#0c0f16,#161b25);
+    box-shadow:inset 0 2px 4px rgba(0,0,0,.8),inset 0 0 0 1px rgba(0,0,0,.6),0 1px 0 rgba(255,255,255,.08)}
+  .seek{left:22px;top:174px;width:336px;height:14px}
+  .vol{left:22px;top:270px;width:300px;height:9px}
+  .vol-l{position:absolute;left:332px;top:266px;font:600 11px ui-sans-serif;color:#7f8798;letter-spacing:.06em}
+
+  /* tactile transport buttons */
+  .btn{position:absolute;top:210px;border-radius:12px;
+    background:radial-gradient(120% 130% at 50% 12%,#4a5165,#2a2f3b 62%,#1b1f28);
+    box-shadow:inset 0 1.5px 0 rgba(255,255,255,.30),inset 0 -3px 6px rgba(0,0,0,.5),0 3px 5px rgba(0,0,0,.45);
+    display:grid;place-items:center;color:#c7cede;font-size:16px}
+  .btn.sq{width:50px;height:50px}
+  .prev{left:22px}.stop{left:82px}.next{left:214px}
+  .play{left:142px;width:62px;height:50px;
+    background:radial-gradient(120% 130% at 50% 10%,#8effb9,#28c46e 55%,#12833f);
+    box-shadow:inset 0 1.5px 0 rgba(255,255,255,.5),inset 0 -3px 8px rgba(0,60,25,.5),0 3px 8px rgba(20,160,80,.35),0 0 16px rgba(40,200,120,.25);
+    color:#07351d}
+  .btn .ico{font-family:ui-monospace,Menlo,monospace}
+
+  /* ---------- Component 2: queue drawer ---------- */
+  .drawer{top:320px;left:8px;width:364px;height:232px;border-radius:18px}
+  .well{position:absolute;left:24px;top:358px;width:332px;height:180px;border-radius:12px;
+    background:linear-gradient(180deg,#0b0f18,#0a0d15);
+    box-shadow:inset 0 3px 10px rgba(0,0,0,.85),inset 0 0 0 1px rgba(0,0,0,.6),inset 0 0 0 2px rgba(255,255,255,.04)}
+  .q-lbl{position:absolute;left:26px;top:334px;font:700 11px ui-sans-serif;letter-spacing:.22em;color:#6f7a8d}
+</style>
+<div class="win">
+  <!-- body -->
+  <div class="alu body"></div>
+  <div class="lcd"><div class="scan"></div><div class="sheen"></div></div>
+  <div class="slot seek"></div>
+  <div class="btn sq prev"><span class="ico">⏮</span></div>
+  <div class="btn sq stop"><span class="ico">■</span></div>
+  <div class="btn play"><span class="ico">▶</span></div>
+  <div class="btn sq next"><span class="ico">⏭</span></div>
+  <div class="vol-l">VOL</div><div class="slot vol"></div>
+  <!-- queue drawer -->
+  <div class="alu drawer"></div>
+  <div class="q-lbl">QUEUE</div>
+  <div class="well"></div>
+</div>

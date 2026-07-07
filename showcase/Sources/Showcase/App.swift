@@ -19,38 +19,87 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ note: Notification) {
         NSApp.setActivationPolicy(.regular)
-
-        // Host (Task 6 supplies the real playlist; here a placeholder that Task 6 replaces).
         host = makePlaceholderHost()
         hostBox.host = host
-
-        let scale = Int((NSScreen.main?.backingScaleFactor ?? 2).rounded())
-        let sw = CANVAS_W * scale, sh = CANVAS_H * scale
-
-        view = SkinView(frame: NSRect(x: 0, y: 0, width: CANVAS_W, height: CANVAS_H))
         skinDirs = resolveSkinDirs()
-        guard let b = CarapaceBridge(skinDir: skinDirs[0], width: sw, height: sh,
-                                     onFrame: { [weak self] s, i in self?.view.show(surface: s, index: i) }) else {
-            print("[showcase] bridge init failed"); NSApp.terminate(nil); return
-        }
-        bridge = b
-        view.bridge = b
-        view.onTab = { [weak self] in self?.cycleSkin() }
 
-        window = SkinWindow(contentRect: NSRect(x: 200, y: 200, width: CANVAS_W, height: CANVAS_H),
-                            styleMask: [.borderless], backing: .buffered, defer: false)
+        // Create the window + view once; applySkin sizes them and builds the first bridge.
+        view = SkinView(frame: NSRect(x: 0, y: 0, width: 420, height: 660))
+        view.onTab = { [weak self] in self?.cycleSkin() }
+        // Borderless (the skin IS the window) but keep close/miniaturize capabilities so the
+        // real native traffic-light buttons work.
+        window = SkinWindow(contentRect: NSRect(x: 200, y: 200, width: 420, height: 660),
+                            styleMask: [.borderless, .closable, .miniaturizable], backing: .buffered, defer: false)
         window.isOpaque = false
         window.backgroundColor = .clear
         window.hasShadow = true
         window.contentView = view
         windowBox.window = window
+
+        applySkin(dir: skinDirs[skinIndex])
+        installTrafficLights()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    /// Add the real macOS traffic-light buttons (close / minimize / zoom) to the top-left of the
+    /// skin. They render, hover, and behave natively — no baked glyphs. Skin-agnostic; they float
+    /// over whatever skin is loaded and stick to the top as the window resizes between skins.
+    private func installTrafficLights() {
+        let mask: NSWindow.StyleMask = [.titled, .closable, .miniaturizable, .resizable]
+        let specs: [(NSWindow.ButtonType, Selector)] = [
+            (.closeButton, #selector(NSWindow.performClose(_:))),
+            (.miniaturizeButton, #selector(NSWindow.miniaturize(_:))),
+            (.zoomButton, #selector(NSWindow.performZoom(_:))),
+        ]
+        for (i, (type, action)) in specs.enumerated() {
+            guard let b = NSWindow.standardWindowButton(type, for: mask) else { continue }
+            b.target = window
+            b.action = action
+            b.setFrameOrigin(NSPoint(x: 16 + CGFloat(i) * 20, y: view.bounds.height - 26))
+            b.autoresizingMask = [.minYMargin]  // stick to the top edge across skin resizes
+            view.addSubview(b)
+        }
+    }
+
+    /// Point the app at `dir`: tear down the current engine, resize the window to the skin's
+    /// canvas, and create a fresh bridge/pool at that size. MusicHost/audio are untouched, so
+    /// playback + state persist across the swap.
+    private func applySkin(dir: String) {
+        let (w, h) = SkinManifest.canvas(atDir: dir, fallback: (420, 660))
+        let scale = Int((NSScreen.main?.backingScaleFactor ?? 2).rounded())
+
+        // 1. Destroy the current engine FIRST (its render thread joins in carapace_destroy),
+        //    so no stale frame can fire after we re-point the global frameSink. BOTH strong refs
+        //    to the old bridge must be dropped here — `view.bridge` also retains it, so nil-ing
+        //    only `bridge` would keep the old render thread alive past the new bridge's frameSink
+        //    repoint (a cross-pool race). Drop view.bridge first, then bridge → old bridge deinits
+        //    → carapace_destroy joins the old thread before we build the new one.
+        view.bridge = nil
+        bridge = nil
+
+        // 2. Resize the borderless window to the new skin's canvas, preserving the top-left corner.
+        let topY = window.frame.origin.y + window.frame.height
+        window.setContentSize(NSSize(width: w, height: h))
+        var origin = window.frame.origin
+        origin.y = topY - window.frame.height
+        window.setFrameOrigin(origin)
+        view.frame = NSRect(x: 0, y: 0, width: w, height: h)
+        view.canvasW = Double(w)
+        view.canvasH = Double(h)
+
+        // 3. Build a fresh bridge/pool at the new size.
+        guard let b = CarapaceBridge(skinDir: dir, width: w * scale, height: h * scale,
+                                     onFrame: { [weak self] s, i in self?.view.show(surface: s, index: i) }) else {
+            print("[showcase] bridge init failed for \(dir)"); NSApp.terminate(nil); return
+        }
+        bridge = b
+        view.bridge = b
+    }
+
     private func cycleSkin() {
         skinIndex = (skinIndex + 1) % skinDirs.count
-        _ = bridge.swap(skinDir: skinDirs[skinIndex]) // MusicHost state persists
+        applySkin(dir: skinDirs[skinIndex]) // window resizes to the next skin; MusicHost persists
     }
 }
 
@@ -70,8 +119,8 @@ extension AppDelegate {
         let repo = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent()
-        let starter = repo.appendingPathComponent("showcase/skins/starter").path
-        let alt = repo.appendingPathComponent("showcase/skins/alt").path
-        return [starter, alt]
+        return ["faceplate", "studio", "cassette"].map {
+            repo.appendingPathComponent("showcase/skins/\($0)").path
+        }
     }
 }

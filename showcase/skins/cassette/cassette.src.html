@@ -1,0 +1,67 @@
+<!-- Source for skins/cassette/assets/cassette.png (the realistic cassette body).
+     Regenerate (from repo root):
+       CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+       "$CHROME" --headless=new --disable-gpu --hide-scrollbars --force-device-scale-factor=2 \
+         --default-background-color=00000000 --window-size=600,340 \
+         --screenshot=showcase/skins/cassette/assets/cassette.png \
+         "file://$PWD/showcase/skins/cassette/cassette.src.html"
+     The blank paper label is intentional — track_title/artist are drawn live by the skin. -->
+<style>
+  html,body{margin:0;padding:0;background:transparent}
+  .cass{position:relative;width:600px;height:340px;border-radius:24px;
+    background:linear-gradient(180deg,#3a3d45 0%,#26282e 5%,#1b1d22 11%,#232529 89%,#121317 100%);
+    box-shadow:inset 0 2px 1px rgba(255,255,255,.18), inset 0 -3px 6px rgba(0,0,0,.6), inset 0 0 0 2px rgba(0,0,0,.35);
+    overflow:hidden}
+  .cass::before{content:"";position:absolute;inset:0;border-radius:24px;
+    background:radial-gradient(140% 80% at 22% 0%,rgba(255,255,255,.10),transparent 42%),
+      radial-gradient(120% 90% at 90% 100%,rgba(0,0,0,.35),transparent 45%)}
+  .screw{position:absolute;width:15px;height:15px;border-radius:50%;
+    background:radial-gradient(circle at 40% 35%,#0c0d10,#2a2c31 80%);
+    box-shadow:inset 0 1px 1px rgba(0,0,0,.8),0 1px 0 rgba(255,255,255,.06)}
+  .screw::after{content:"";position:absolute;inset:4px;border-radius:50%;
+    background:conic-gradient(#3a3d45,#17181c,#3a3d45,#17181c);opacity:.7}
+  .label{position:absolute;left:66px;right:66px;top:20px;height:88px;border-radius:5px;
+    background:linear-gradient(180deg,#f6efe0,#e7dcc4);
+    box-shadow:0 2px 4px rgba(0,0,0,.5),inset 0 0 0 1px rgba(0,0,0,.08);overflow:hidden}
+  .label .band{position:absolute;left:0;right:0;top:0;height:14px;background:linear-gradient(90deg,#e8843b,#f0a24d)}
+  .label .side{position:absolute;right:9px;top:20px;width:20px;height:20px;border-radius:50%;
+    border:2px solid #b06a2a;color:#b06a2a;font:700 12px ui-monospace,monospace;display:grid;place-items:center}
+  .label .rules{position:absolute;left:14px;right:40px;bottom:8px;height:24px;
+    background:repeating-linear-gradient(180deg,transparent 0 10px,rgba(120,100,70,.30) 10px 11px)}
+  .window{position:absolute;left:42px;right:42px;top:126px;height:150px;border-radius:14px;
+    background:linear-gradient(180deg,#0b0c0f,#141519);box-shadow:inset 0 3px 8px rgba(0,0,0,.85)}
+  .tape{position:absolute;left:50%;top:158px;transform:translateX(-50%);width:150px;height:36px;
+    background:linear-gradient(180deg,#4a3526,#2a1c12);border-radius:2px;box-shadow:inset 0 2px 3px rgba(0,0,0,.7)}
+  .reel{position:absolute;top:140px;width:132px;height:132px;border-radius:50%;
+    background:radial-gradient(circle at 50% 50%,#5a4a34 0 20%,#2c2013 22% 55%,#1a1109 56% 100%);
+    box-shadow:inset 0 0 0 3px rgba(0,0,0,.5),0 3px 6px rgba(0,0,0,.5)}
+  .reel.l{left:66px}.reel.r{right:66px}
+  .hub{position:absolute;inset:36px;border-radius:50%;
+    background:conic-gradient(#e9e6df 0 12deg,#b9b4a8 12deg 24deg,#e9e6df 24deg 36deg,#b9b4a8 36deg 48deg,
+      #e9e6df 48deg 60deg,#b9b4a8 60deg 72deg,#e9e6df 72deg 84deg,#b9b4a8 84deg 96deg,#e9e6df 96deg 108deg,
+      #b9b4a8 108deg 120deg,#e9e6df 120deg 132deg,#b9b4a8 132deg 144deg,#e9e6df 144deg 156deg,
+      #b9b4a8 156deg 168deg,#e9e6df 168deg 180deg,#b9b4a8 180deg 192deg,#e9e6df 192deg 204deg,
+      #b9b4a8 204deg 216deg,#e9e6df 216deg 228deg,#b9b4a8 228deg 240deg,#e9e6df 240deg 252deg,
+      #b9b4a8 252deg 264deg,#e9e6df 264deg 276deg,#b9b4a8 276deg 288deg,#e9e6df 288deg 300deg,
+      #b9b4a8 300deg 312deg,#e9e6df 312deg 324deg,#b9b4a8 324deg 336deg,#e9e6df 336deg 348deg,#b9b4a8 348deg 360deg);
+    box-shadow:inset 0 0 0 2px rgba(0,0,0,.35)}
+  .hub::after{content:"";position:absolute;inset:38%;border-radius:50%;
+    background:radial-gradient(circle,#15161a,#000);box-shadow:inset 0 1px 2px rgba(0,0,0,.9)}
+  .cutout{position:absolute;left:180px;right:180px;bottom:6px;height:24px;border-radius:6px 6px 0 0;
+    background:linear-gradient(180deg,#0a0b0e,#141519);box-shadow:inset 0 2px 5px rgba(0,0,0,.85)}
+  .felt{position:absolute;left:50%;bottom:10px;transform:translateX(-50%);width:42px;height:11px;border-radius:2px;
+    background:#111;box-shadow:inset 0 0 4px #000}
+</style>
+<div class="cass">
+  <div class="screw" style="left:16px;top:16px"></div>
+  <div class="screw" style="right:16px;top:16px"></div>
+  <div class="screw" style="left:16px;bottom:14px"></div>
+  <div class="screw" style="right:16px;bottom:14px"></div>
+  <div class="screw" style="left:50%;top:112px;margin-left:-7px"></div>
+  <div class="label"><div class="band"></div><div class="side">A</div><div class="rules"></div></div>
+  <div class="window"></div>
+  <div class="tape"></div>
+  <div class="reel l"><div class="hub"></div></div>
+  <div class="reel r"><div class="hub"></div></div>
+  <div class="cutout"></div><div class="felt"></div>
+</div>
