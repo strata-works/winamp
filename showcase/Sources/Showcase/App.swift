@@ -47,7 +47,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let scale = Int((NSScreen.main?.backingScaleFactor ?? 2).rounded())
 
         // 1. Destroy the current engine FIRST (its render thread joins in carapace_destroy),
-        //    so no stale frame can fire after we re-point the frame sink.
+        //    so no stale frame can fire after we re-point the global frameSink. BOTH strong refs
+        //    to the old bridge must be dropped here — `view.bridge` also retains it, so nil-ing
+        //    only `bridge` would keep the old render thread alive past the new bridge's frameSink
+        //    repoint (a cross-pool race). Drop view.bridge first, then bridge → old bridge deinits
+        //    → carapace_destroy joins the old thread before we build the new one.
+        view.bridge = nil
         bridge = nil
 
         // 2. Resize the borderless window to the new skin's canvas, preserving the top-left corner.
