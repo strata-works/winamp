@@ -14,7 +14,7 @@ region{ path=rect{x=10, y=322, w=360, h=228}, role='drag', on_press=function() h
 -- LCD live text (green phosphor) on the baked glass
 text{ value="track_title", x=44, y=62, size=22, color={r=141,g=255,b=173} }
 text{ value="artist",      x=44, y=98, size=15, color={r=95,g=200,b=140} }
-text{ value="time",        x=44, y=130, size=14, color={r=82,g=180,b=128} }
+text{ value="clock", font="DSEG7Classic-Regular.ttf", x=44, y=130, size=14, color={r=82,g=180,b=128} }
 value_fill{ path=rect{x=272, y=130, w=6, h=22}, value="viz_0", direction='up', color={r=141,g=255,b=173} }
 value_fill{ path=rect{x=283, y=130, w=6, h=22}, value="viz_1", direction='up', color={r=141,g=255,b=173} }
 value_fill{ path=rect{x=294, y=130, w=6, h=22}, value="viz_2", direction='up', color={r=141,g=255,b=173} }

@@ -13,7 +13,7 @@ region{ path=rect{x=2, y=2, w=716, h=476}, role='drag', on_press=function() host
 -- LCD title bar (live text on the baked glass)
 text{ value="track_title", x=36, y=30, size=18, color={r=141,g=255,b=173} }
 text{ value="artist",      x=330, y=34, size=14, color={r=110,g=200,b=150} }
-text{ value="time",        x=600, y=34, size=13, color={r=95,g=175,b=135} }
+text{ value="clock", font="DSEG7Classic-Regular.ttf", x=600, y=34, size=13, color={r=95,g=175,b=135} }
 
 -- visualizer bars on the baked screen
 value_fill{ path=rect{x=44,  y=100, w=40, h=170}, value="viz_0", direction='up', color={r=77,g=160,b=240} }

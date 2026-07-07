@@ -29,12 +29,16 @@ behavior is confirmed by a human running through this checklist:
 3. Click **play** — confirm audio starts and the transport/scrub position advances.
 4. Click a playlist row — confirm the selection and now-playing track change.
 5. Click a point along the volume scrub — confirm the level changes audibly (scrubs are click-to-set: the engine models pointer *press*, not drag).
-6. Press **Tab** — confirm the window hot-swaps to Studio Deck and resizes to 720×480.
-7. Confirm playback, position, volume, and playlist selection all persisted across the swap.
-8. Press **Tab** again — confirm the window hot-swaps to Cassette and resizes to 600×400; confirm state persisted again.
-9. Press **Tab** again to cycle back to Faceplate (380×560) and repeat step 7.
+6. Press **⌘O** — confirm the open panel accepts audio files and folders; picked audio is appended to the playlist and current playback continues.
+7. Confirm the green **zoom** traffic-light is greyed/disabled while close + minimize work.
+8. Confirm the Faceplate and Studio clocks render an elapsed `M:SS` counter in the DSEG7 seven-segment font.
+9. Press **Tab** — confirm the window hot-swaps to Studio Deck and resizes to 720×480.
+10. Confirm playback, position, volume, and playlist selection all persisted across the swap.
+11. Press **Tab** again — confirm the window hot-swaps to Cassette and resizes to 600×400; confirm state persisted again.
+12. Press **Tab** again to cycle back to Faceplate (380×560) and repeat step 7.
 
 ## Notes
 
 - Sub-project B of the "one host, three skins" showcase. The three concept skins are Sub-project C.
 - `viz_*` is a time-driven animation, not a real FFT.
+- The LCD clock uses **DSEG7 Classic** (keshikan, SIL OFL 1.1 — see `skins/DSEG-OFL.txt`), copied into each clock skin's `assets/`.
