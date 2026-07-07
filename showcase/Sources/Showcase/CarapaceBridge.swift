@@ -23,7 +23,8 @@ final class CarapaceBridge {
     let width: Int
     let height: Int
 
-    init?(skinDir: String, width: Int, height: Int, onFrame: @escaping (IOSurface, UInt32) -> Void) {
+    init?(skinDir: String, width: Int, height: Int, contentSurface: IOSurface?,
+          onFrame: @escaping (IOSurface, UInt32) -> Void) {
         self.width = width
         self.height = height
         // Pool of 3 BGRA IOSurfaces at surface pixel size.
@@ -51,7 +52,7 @@ final class CarapaceBridge {
                     vtable: vt,
                     surfaces: buf.baseAddress,
                     surface_count: UInt32(buf.count),
-                    content_surface: nil,
+                    content_surface: contentSurface.map { Unmanaged.passUnretained($0 as IOSurfaceRef) } ?? nil,
                     w: UInt32(width), h: UInt32(height)
                 )
                 var out: OpaquePointer?

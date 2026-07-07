@@ -121,6 +121,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // 3. Build a fresh bridge/pool at the new size.
         guard let b = CarapaceBridge(skinDir: dir, width: w * scale, height: h * scale,
+                                     contentSurface: nil,
                                      onFrame: { [weak self] s, i in self?.view.show(surface: s, index: i) }) else {
             print("[showcase] bridge init failed for \(dir)"); NSApp.terminate(nil); return
         }
