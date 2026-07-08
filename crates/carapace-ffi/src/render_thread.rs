@@ -14,12 +14,17 @@ use carapace::engine::{Engine, PointerEvent};
 use carapace::render::Renderer;
 use carapace::scene::{Pt, Scene};
 
+use crate::crossfade::CrossfadeBlender;
 use crate::guard::{CarapaceStatus, last_error_string, set_last_error};
 use crate::handle::ContentTex;
 use crate::host::{CarapaceHostVTable, FfiHost};
 use crate::queue::{Command, CommandRx, PointerKind, drain_coalescing};
-use crate::render::{GpuCtx, IOSurfaceRef, Present, Tier, build_content, build_present, init_gpu};
+use crate::render::{
+    GpuCtx, IOSurfaceRef, OffscreenTarget, Present, Tier, build_content, build_present, init_gpu,
+    new_offscreen,
+};
 use crate::snapshot::{SnapshotCell, SnapshotTier};
+use carapace::skin::Transition;
 
 /// The raw host-owned state that must cross onto the spawned render thread at construction: the
 /// IOSurface pool, the optional content surface, and the host vtable (fn pointers + its opaque
@@ -50,6 +55,25 @@ pub(crate) enum InitResult {
     Err(CarapaceStatus, String),
 }
 
+/// The render thread's live skin-swap phase. `Idle` is the normal single-skin path. `Warming` holds
+/// a freshly built incoming engine that has not yet been warmed (asset decode/upload happens on its
+/// first offscreen render). `Crossfading` holds the *outgoing* engine while `self.engine` is already
+/// the incoming skin; the two are blended by `elapsed/dur` progress.
+// `Warming`/`Crossfading` are constructed starting in Task 5; `swap` is always `Idle` in this task.
+#[allow(dead_code)]
+enum SwapState {
+    Idle,
+    Warming {
+        incoming: Engine,
+        transition: Transition,
+    },
+    Crossfading {
+        outgoing: Engine,
+        elapsed: Duration,
+        dur: Duration,
+    },
+}
+
 /// State owned exclusively by the render thread. The `!Send` `Engine`/`Renderer`/`GpuCtx` live here
 /// and never cross a thread boundary — they are constructed on the render thread by `build`.
 struct RenderThread {
@@ -72,6 +96,18 @@ struct RenderThread {
     /// Host callbacks, copied in at `build` time so `render_one` can fire `frame_ready` from THIS
     /// thread without touching the front-end handle.
     vtable: CarapaceHostVTable,
+    /// Live skin-swap phase (Task 4/5). `Idle` when no swap is in flight.
+    #[allow(dead_code)] // read starting in Task 5's render_one dispatch.
+    swap: SwapState,
+    /// Scratch offscreen the *incoming* skin renders into during warm/crossfade.
+    #[allow(dead_code)] // used starting in Task 5's warm/crossfade render paths.
+    tex_a: OffscreenTarget,
+    /// Scratch offscreen the *outgoing* skin renders into during crossfade.
+    #[allow(dead_code)] // used starting in Task 5's crossfade render path.
+    tex_b: OffscreenTarget,
+    /// The GPU pass that blends `tex_b` (old) and `tex_a` (new) into the present offscreen.
+    #[allow(dead_code)] // used starting in Task 5's crossfade render path.
+    blender: CrossfadeBlender,
     /// Test-only: set by `Command::ForcePanic`; checked inside `render_guarded`'s `catch_unwind` so
     /// a forced panic sets `poisoned` via the exact same path a genuine render panic would.
     #[cfg(test)]
@@ -124,6 +160,11 @@ fn build(
     }
     let content = build_content(&gpu, content_surface);
     let held = vec![false; surfaces.len()];
+    // `tex_a`/`tex_b`/`blender` borrow `gpu.device`, and `gpu` is moved into the struct literal
+    // below — build these into `let` bindings first to avoid a move-before-borrow error.
+    let tex_a = new_offscreen(&gpu.device, w, h);
+    let tex_b = new_offscreen(&gpu.device, w, h);
+    let blender = CrossfadeBlender::new(&gpu.device);
     Ok(RenderThread {
         engine,
         renderer,
@@ -142,6 +183,10 @@ fn build(
         frame_id: 0,
         last_render: Instant::now(),
         vtable,
+        swap: SwapState::Idle,
+        tex_a,
+        tex_b,
+        blender,
         #[cfg(test)]
         force_panic: false,
     })
@@ -182,6 +227,26 @@ impl RenderThread {
                 )
             };
         }
+        // swap is always Idle in this task; Task 5 replaces this call with a match on self.swap.
+        let scene = self.render_single_into_present(idx, dt);
+
+        self.held[idx] = true;
+        self.next_surface = (idx + 1) % self.surfaces.len();
+        self.frame_id += 1;
+        // Refresh the design canvas from the scene we just laid out, so pointer hit-testing uses
+        // the current skin's canvas even across a skin swap. The swap applies during render_frame's
+        // engine.update, so the new canvas is only observable after the frame is produced.
+        let (cw, ch) = self.engine.scene().canvas;
+        self.cw = cw;
+        self.ch = ch;
+        // Do NOT fire `frame_ready` here — the caller (`render_guarded`) must publish the snapshot
+        // first, then fire the callback, so a host reacting to it always sees this frame's snapshot.
+        Some((scene, idx as u32, self.frame_id))
+    }
+
+    /// Render the current `self.engine` into `presents[idx].off` and present it. This is the
+    /// unchanged single-skin path (former inline body of `render_one`).
+    fn render_single_into_present(&mut self, idx: usize, dt: Duration) -> Scene {
         // Destructure into locals (mirrors the old v1 `tick_inner` pattern) so `render_frame` can
         // borrow `engine`/`renderer` mutably while `gpu`/`presents`/`surfaces`/`content` are read
         // immutably in the same expression — the borrow checker can't see that split through
@@ -201,7 +266,7 @@ impl RenderThread {
         let host_view = content.as_ref().map(|c| ("host", &c.view));
         // `render_frame` lays out once and returns that scene; capture it so we publish the exact
         // scene we drew (no second layout pass).
-        let scene = match &presents[idx] {
+        match &presents[idx] {
             Present::Shared {
                 off,
                 iosurface_view,
@@ -222,19 +287,29 @@ impl RenderThread {
                 unsafe { crate::render::copy_into_iosurface(surfaces[idx], &rgba, w, h) };
                 scene
             }
-        };
-        self.held[idx] = true;
-        self.next_surface = (idx + 1) % self.surfaces.len();
-        self.frame_id += 1;
-        // Refresh the design canvas from the scene we just laid out, so pointer hit-testing uses
-        // the current skin's canvas even across a skin swap. The swap applies during render_frame's
-        // engine.update, so the new canvas is only observable after the frame is produced.
-        let (cw, ch) = self.engine.scene().canvas;
-        self.cw = cw;
-        self.ch = ch;
-        // Do NOT fire `frame_ready` here — the caller (`render_guarded`) must publish the snapshot
-        // first, then fire the callback, so a host reacting to it always sees this frame's snapshot.
-        Some((scene, idx as u32, self.frame_id))
+        }
+    }
+
+    /// Present offscreen `presents[idx].off` into pooled `surfaces[idx]` (Tier-2 blit / Tier-1
+    /// readback). Assumes the offscreen already holds this frame's pixels.
+    #[allow(dead_code)] // wired up by Task 5's crossfade path; remove this attribute there.
+    fn present_offscreen(&self, idx: usize) {
+        match &self.presents[idx] {
+            Present::Shared {
+                off,
+                iosurface_view,
+                blitter,
+                ..
+            } => {
+                crate::render::blit(&self.gpu, blitter, &off.view, iosurface_view);
+            }
+            Present::Readback { off } => {
+                let rgba = crate::render::readback_rgba(&self.gpu, &off.tex, self.w, self.h);
+                unsafe {
+                    crate::render::copy_into_iosurface(self.surfaces[idx], &rgba, self.w, self.h)
+                };
+            }
+        }
     }
 
     /// Apply one drained command to render-thread state. Returns `false` on `Shutdown` (the loop
