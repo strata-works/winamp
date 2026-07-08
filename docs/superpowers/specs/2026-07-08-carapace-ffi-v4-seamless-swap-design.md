@@ -204,6 +204,35 @@ loop tick (Crossfading)
   if t >= 1.0 { drop outgoing; swap = Idle }
 ```
 
+## Component 4 — Showcase integration (proving ground)
+
+The native SwiftUI showcase is where "seamless" is actually judged. Today it **does not use the
+live-swap API at all**: `applySkin`/`cycleSkin` (`App.swift:107–161`) fully **destroy + recreate** the
+engine on every skin change — `carapace_destroy` (joins the render thread), resize the borderless
+window to the new skin's canvas, then a fresh `CarapaceBridge`/`carapace_create` at the new size. The
+`CarapaceBridge.swap()` wrapper around `carapace_swap_skin` exists but is unused.
+
+v4 rewires the showcase to exercise (and demonstrate) the live swap:
+
+- **`cycleSkin` calls `bridge.swap(nextDir)`** instead of tearing down and rebuilding. The crossfade
+  runs inside the **current** surface pool/window size — the incoming skin scales into it — so the
+  transition is genuinely seamless (no engine/thread teardown, no pool rebuild mid-blend).
+- **Window resizes *after* the fade.** The three skins have different canvas sizes; the window
+  animates to the incoming skin's canvas once the crossfade completes. The host schedules this by
+  reading `transition.duration_ms` from the incoming `skin.toml` — `SkinManifest.swift` already
+  scans the manifest host-side for canvas w/h; it gains a tiny `duration_ms` parse (regex, no TOML
+  dep, no ABI change). During the brief window animation the fixed-size IOSurface simply scales in
+  the view; the new skin is already fully shown, so this reads as a settle, not a hitch.
+- **`MusicHost` and the dither content surface persist** across the swap (they already do; the swap
+  keeps the same handle, so no host-state rebuild).
+- **Pool re-fit at the exact new size is deferred.** If per-skin pixel-exact crispness after the
+  resize proves necessary, a one-time pool rebuild *after* the transition (or a future
+  `carapace_resize` export) can follow — out of scope for v4, and separate from the seamless moment.
+
+This makes the flagship app the living verification of v4, and the manual check is: cycle skins and
+confirm the old skin keeps animating, dissolves smoothly into the new one, and the window settles to
+the new size afterward — no freeze, no pop.
+
 ## What does NOT change
 
 - **C ABI symbols & signatures** — `carapace_swap_skin(handle, skin_dir)` identical. No new exports.
@@ -260,6 +289,12 @@ loop tick (Crossfading)
 inject the clock (a `Fn() -> Instant` or an accumulated-`dt` seam on the render thread) so a test can
 step `t` from 0 → 1 without wall-clock sleeps.
 
+**Showcase (manual, the real judgment):**
+- Rewire `cycleSkin` to `bridge.swap()` and cycle through the three skins. Confirm: the old skin
+  keeps animating during load, dissolves smoothly into the new skin over its declared duration, and
+  the window settles to the new canvas size afterward — no freeze, no pop, `MusicHost`/dither persist.
+- `SkinManifest.parseCanvas` gains a `duration_ms` companion (unit-testable in `ShowcaseTests`).
+
 ## Definition of done
 
 - `carapace_abi_version()` returns `3<<16 | 1`; header regenerated; `tests/header.rs` green.
@@ -268,7 +303,10 @@ step `t` from 0 → 1 without wall-clock sleeps.
   the new skin dissolves in over its declared duration; `cut` promotes instantly.
 - Crossfade blend proven by the gpu-tests above (completes, mid-blend is a real mix, `cut` path).
 - Pointer/hit-test canvas switches to the new skin at crossfade start; snapshot consistent.
-- `cargo test --workspace` + `clippy -D warnings` + the `gpu-tests` lane all pass.
+- Showcase cycles skins via `bridge.swap()` (live-swap, no destroy+recreate); manual check confirms
+  a seamless dissolve with the window settling to the new size after the fade.
+- `cargo test --workspace` + `clippy -D warnings` + the `gpu-tests` lane all pass; `swift build` +
+  `ShowcaseTests` green.
 - README + `docs/api` updated for the `[transition]` manifest capability and the seamless-swap
   behavior (per the "keep README/docs current per phase" convention).
 
@@ -276,5 +314,7 @@ step `t` from 0 → 1 without wall-clock sleeps.
 
 - Background-worker preload (fully removing disk I/O from the render thread).
 - Transition kinds beyond crossfade (slide/wipe/etc.) and host-overridable transitions.
+- A `carapace_resize` export / live pool re-fit at a new surface size (showcase scales the fixed
+  surface during the post-fade window animation instead).
 - Cross-platform (Windows/Linux/Android) — unchanged from prior versions.
 - Engine self-scheduling animation clock (`next_wake()`/`is_animating()`).
