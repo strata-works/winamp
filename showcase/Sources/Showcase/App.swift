@@ -156,9 +156,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ditherTimer?.invalidate(); ditherTimer = nil; dither = nil
     }
 
+    /// Live-swap to `dir`: the engine crossfades the incoming skin in over its declared duration
+    /// while the old skin keeps animating (no teardown of the bridge/pool). After the fade,
+    /// animate the borderless window to the new skin's canvas size (top-left corner fixed, same
+    /// as `applySkin`'s resize) so the settle reads as a deliberate follow-through, not a snap.
+    private func swapSkin(dir: String) {
+        guard bridge.swap(skinDir: dir) else {
+            // Live swap rejected (e.g. incompatible pool) — fall back to the full rebuild.
+            applySkin(dir: dir)
+            return
+        }
+        positionTrafficLights(forDir: dir)  // re-place chrome for the incoming skin now
+        let ms = SkinManifest.durationMs(atDir: dir)
+        let (w, h) = SkinManifest.canvas(atDir: dir, fallback: (420, 660))
+        // Resize AFTER the crossfade completes so the seamless dissolve isn't disturbed; the
+        // fixed IOSurface pool scales to fit during the brief settle (pool re-fit at the exact
+        // new size is deferred).
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(ms)) { [weak self] in
+            guard let self else { return }
+            let window = self.window!
+            let topY = window.frame.origin.y + window.frame.height
+            var frame = window.frame
+            frame.size = NSSize(width: w, height: h)
+            frame.origin.y = topY - CGFloat(h)
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.15
+                window.animator().setFrame(frame, display: true)
+            }
+            self.view.canvasW = Double(w)
+            self.view.canvasH = Double(h)
+        }
+    }
+
     private func cycleSkin() {
         skinIndex = (skinIndex + 1) % skinDirs.count
-        applySkin(dir: skinDirs[skinIndex]) // window resizes to the next skin; MusicHost persists
+        swapSkin(dir: skinDirs[skinIndex]) // live crossfade; window settles to new size after the fade
     }
 
     /// Minimal main menu so ⌘O (Open Music…) works and is discoverable. The skin window itself
