@@ -2,13 +2,8 @@
 //! alpha `t` into a target view (`out = mix(old, new, t)`). Used by the render thread's crossfade
 //! swap; contains no engine or IOSurface knowledge, so it is unit-testable in isolation.
 //!
-//! Built and unit-tested in isolation by design (this task); the render thread wires it into the
-//! live crossfade swap in a follow-up task, so `CrossfadeBlender` has no non-test caller yet.
+//! The render thread wires it into the live crossfade swap (see `render_thread::render_crossfade`).
 #![cfg(any(target_os = "macos", target_os = "ios"))]
-#![allow(
-    dead_code,
-    reason = "consumed by the render-thread crossfade wiring in a later task"
-)]
 
 use crate::render::GpuCtx;
 

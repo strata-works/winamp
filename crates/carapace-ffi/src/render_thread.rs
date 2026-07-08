@@ -59,8 +59,6 @@ pub(crate) enum InitResult {
 /// a freshly built incoming engine that has not yet been warmed (asset decode/upload happens on its
 /// first offscreen render). `Crossfading` holds the *outgoing* engine while `self.engine` is already
 /// the incoming skin; the two are blended by `elapsed/dur` progress.
-// `Warming`/`Crossfading` are constructed starting in Task 5; `swap` is always `Idle` in this task.
-#[allow(dead_code)]
 enum SwapState {
     Idle,
     Warming {
@@ -96,17 +94,13 @@ struct RenderThread {
     /// Host callbacks, copied in at `build` time so `render_one` can fire `frame_ready` from THIS
     /// thread without touching the front-end handle.
     vtable: CarapaceHostVTable,
-    /// Live skin-swap phase (Task 4/5). `Idle` when no swap is in flight.
-    #[allow(dead_code)] // read starting in Task 5's render_one dispatch.
+    /// Live skin-swap phase. `Idle` when no swap is in flight.
     swap: SwapState,
     /// Scratch offscreen the *incoming* skin renders into during warm/crossfade.
-    #[allow(dead_code)] // used starting in Task 5's warm/crossfade render paths.
     tex_a: OffscreenTarget,
     /// Scratch offscreen the *outgoing* skin renders into during crossfade.
-    #[allow(dead_code)] // used starting in Task 5's crossfade render path.
     tex_b: OffscreenTarget,
     /// The GPU pass that blends `tex_b` (old) and `tex_a` (new) into the present offscreen.
-    #[allow(dead_code)] // used starting in Task 5's crossfade render path.
     blender: CrossfadeBlender,
     /// Test-only: set by `Command::ForcePanic`; checked inside `render_guarded`'s `catch_unwind` so
     /// a forced panic sets `poisoned` via the exact same path a genuine render panic would.
@@ -227,8 +221,56 @@ impl RenderThread {
                 )
             };
         }
-        // swap is always Idle in this task; Task 5 replaces this call with a match on self.swap.
-        let scene = self.render_single_into_present(idx, dt);
+        let scene = match std::mem::replace(&mut self.swap, SwapState::Idle) {
+            SwapState::Idle => self.render_single_into_present(idx, dt),
+
+            SwapState::Warming {
+                mut incoming,
+                transition,
+            } => {
+                // 1. Old skin keeps presenting this frame.
+                let scene = self.render_single_into_present(idx, dt);
+                // 2. Warm the incoming engine: one offscreen render forces asset decode + upload.
+                self.warm_incoming(&mut incoming, dt);
+                // 3. Transition. On entering Crossfading, `self.engine` becomes the incoming skin,
+                //    so the render_one tail's `cw/ch = self.engine.scene().canvas` flips hit-testing
+                //    to the new skin from the first crossfade frame.
+                match transition.kind {
+                    carapace::skin::TransitionKind::Cut => {
+                        self.engine = incoming; // promote; swap stays Idle (already replaced)
+                    }
+                    carapace::skin::TransitionKind::Crossfade => {
+                        let outgoing = std::mem::replace(&mut self.engine, incoming);
+                        self.swap = SwapState::Crossfading {
+                            outgoing,
+                            elapsed: Duration::ZERO,
+                            dur: Duration::from_millis(transition.duration_ms as u64),
+                        };
+                    }
+                }
+                scene
+            }
+
+            SwapState::Crossfading {
+                mut outgoing,
+                elapsed,
+                dur,
+            } => {
+                let elapsed = elapsed + dt;
+                let t = crossfade_t(elapsed, dur);
+                let scene = self.render_crossfade(idx, &mut outgoing, dt, t);
+                // t < 1 → stay crossfading (carry the advanced elapsed); t >= 1 → drop `outgoing`,
+                // swap is already `Idle` from the mem::replace above.
+                if t < 1.0 {
+                    self.swap = SwapState::Crossfading {
+                        outgoing,
+                        elapsed,
+                        dur,
+                    };
+                }
+                scene
+            }
+        };
 
         self.held[idx] = true;
         self.next_surface = (idx + 1) % self.surfaces.len();
@@ -290,9 +332,106 @@ impl RenderThread {
         }
     }
 
+    /// Render the incoming engine once into scratch `tex_a` purely to force its lazy asset decode
+    /// and GPU texture upload (the cost we hide behind the still-animating old skin). The result is
+    /// discarded — the old skin's frame is the one presented this iteration.
+    fn warm_incoming(&mut self, incoming: &mut Engine, dt: Duration) {
+        let RenderThread {
+            renderer,
+            gpu,
+            tex_a,
+            content,
+            w,
+            h,
+            ..
+        } = self;
+        let host_view = content.as_ref().map(|c| ("host", &c.view));
+        let _ = crate::render::render_frame(
+            incoming,
+            renderer,
+            gpu,
+            &tex_a.view,
+            *w,
+            *h,
+            dt,
+            false,
+            host_view,
+        );
+    }
+
+    /// Render `self.engine` (incoming) into `tex_a` and `outgoing` into `tex_b`, blend by `t` into
+    /// `presents[idx].off`, then present. Returns the incoming engine's laid-out scene (what the
+    /// snapshot publishes — hit-testing already targets the incoming skin).
+    fn render_crossfade(
+        &mut self,
+        idx: usize,
+        outgoing: &mut Engine,
+        dt: Duration,
+        t: f32,
+    ) -> Scene {
+        // Render incoming (self.engine) -> tex_a; capture its scene for the snapshot.
+        let scene = {
+            let RenderThread {
+                engine,
+                renderer,
+                gpu,
+                tex_a,
+                content,
+                w,
+                h,
+                ..
+            } = self;
+            let host_view = content.as_ref().map(|c| ("host", &c.view));
+            crate::render::render_frame(
+                engine,
+                renderer,
+                gpu,
+                &tex_a.view,
+                *w,
+                *h,
+                dt,
+                false,
+                host_view,
+            )
+        };
+        // Render outgoing -> tex_b.
+        {
+            let RenderThread {
+                renderer,
+                gpu,
+                tex_b,
+                content,
+                w,
+                h,
+                ..
+            } = self;
+            let host_view = content.as_ref().map(|c| ("host", &c.view));
+            let _ = crate::render::render_frame(
+                outgoing,
+                renderer,
+                gpu,
+                &tex_b.view,
+                *w,
+                *h,
+                dt,
+                false,
+                host_view,
+            );
+        }
+        // Blend tex_b (old) over/into tex_a (new) into the present offscreen (`off.view` is the same
+        // for both tiers), then present it via the shared blit/readback path.
+        let off_view = match &self.presents[idx] {
+            Present::Shared { off, .. } => &off.view,
+            Present::Readback { off } => &off.view,
+        };
+        self.blender
+            .draw(&self.gpu, &self.tex_b.view, &self.tex_a.view, off_view, t);
+        self.present_offscreen(idx);
+        scene
+    }
+
     /// Present offscreen `presents[idx].off` into pooled `surfaces[idx]` (Tier-2 blit / Tier-1
     /// readback). Assumes the offscreen already holds this frame's pixels.
-    #[allow(dead_code)] // wired up by Task 5's crossfade path; remove this attribute there.
     fn present_offscreen(&self, idx: usize) {
         match &self.presents[idx] {
             Present::Shared {
@@ -342,14 +481,26 @@ impl RenderThread {
             }
             Command::SwapSkin { dir, reply } => {
                 let status = match carapace::skin::load_dir(&dir) {
-                    Ok((_m, source)) => {
-                        self.engine
-                            .handle_command(carapace::command::Command::Swap(source));
-                        // Note: handle_command only enqueues the swap; it is applied later
-                        // during engine.update() inside render_frame. cw/ch is refreshed at
-                        // the end of render_one, once the swapped-in canvas is current.
-                        *invalidated = true; // draw the swapped-in skin immediately
-                        CarapaceStatus::Ok
+                    Ok((manifest, source)) => {
+                        match Engine::new(
+                            Box::new(FfiHost::new(self.vtable)),
+                            carapace::vocab::VocabRegistry::base(),
+                            source,
+                        ) {
+                            Ok(incoming) => {
+                                // Last-writer-wins: a swap already in flight is replaced.
+                                self.swap = SwapState::Warming {
+                                    incoming,
+                                    transition: manifest.transition,
+                                };
+                                *invalidated = true; // drive the warm/blend immediately
+                                CarapaceStatus::Ok
+                            }
+                            Err(e) => {
+                                set_last_error(&format!("swap_skin: engine init failed: {e:?}"));
+                                CarapaceStatus::ErrBadSkin
+                            }
+                        }
                     }
                     Err(e) => {
                         set_last_error(&format!("swap_skin: load failed: {e:?}"));
@@ -422,7 +573,6 @@ fn frame_interval(fps: u32) -> Duration {
 /// Eased crossfade progress in `[0, 1]`: linear ratio `elapsed/dur`, clamped, then smoothstep for a
 /// natural dissolve. A zero duration completes instantly (`1.0`), so a `duration_ms = 0` skin never
 /// wedges the loop in a blend.
-#[allow(dead_code)]
 fn crossfade_t(elapsed: Duration, dur: Duration) -> f32 {
     if dur.is_zero() {
         return 1.0;
@@ -447,8 +597,10 @@ fn run_loop(
     rt.last_render = Instant::now();
     let mut pending: Vec<Command> = Vec::new();
     loop {
-        // Decide how long to wait: running → until the frame deadline OR a command; paused → block.
-        let wait = if rt.fps > 0 {
+        // Decide how long to wait: running (or a swap in flight) → until the frame deadline OR a
+        // command; paused with no swap → block.
+        let animating = rt.fps > 0 || !matches!(rt.swap, SwapState::Idle);
+        let wait = if animating {
             frame_interval(rt.fps).saturating_sub(rt.last_render.elapsed())
         } else {
             Duration::from_secs(3600) // effectively "block until a command"
@@ -470,7 +622,7 @@ fn run_loop(
             }
             // Frame deadline reached while running: render one paced frame.
             Err(RecvTimeoutError::Timeout) => {
-                if rt.fps > 0 {
+                if rt.fps > 0 || !matches!(rt.swap, SwapState::Idle) {
                     render_guarded(rt, cell, poisoned, poison_msg);
                 }
             }
@@ -798,6 +950,104 @@ mod pacing_tests {
         });
         std::thread::sleep(std::time::Duration::from_millis(50));
         assert_eq!(count.load(Ordering::SeqCst), 1);
+        unsafe { crate::handle::carapace_destroy(h) };
+    }
+
+    #[test]
+    fn crossfade_auto_advances_while_paused() {
+        let count: &'static AtomicU32 = Box::leak(Box::new(AtomicU32::new(0)));
+        let h = make(count); // default fps
+        unsafe {
+            assert_eq!(
+                crate::handle::carapace_set_frame_rate(h, 0),
+                crate::guard::CarapaceStatus::Ok
+            )
+        };
+        // Let any startup frames settle, then zero the baseline so we count only swap-driven frames.
+        std::thread::sleep(std::time::Duration::from_millis(80));
+        for i in 0..3 {
+            unsafe {
+                let _ = crate::handle::carapace_release_surface(h, i);
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(40));
+        count.store(0, Ordering::SeqCst);
+
+        // Swap classic -> minimal: absent [transition] → default crossfade (250 ms).
+        let dir = std::ffi::CString::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../carapace-demo/skins/minimal"
+        ))
+        .unwrap();
+        unsafe {
+            assert_eq!(
+                crate::handle::carapace_swap_skin(h, dir.as_ptr()),
+                crate::guard::CarapaceStatus::Ok
+            )
+        };
+
+        // Release surfaces continuously so the auto-advancing crossfade never backpressures.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while std::time::Instant::now() < deadline && count.load(Ordering::SeqCst) < 3 {
+            for i in 0..3 {
+                unsafe {
+                    let _ = crate::handle::carapace_release_surface(h, i);
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(8));
+        }
+        let n = count.load(Ordering::SeqCst);
+        assert!(
+            n >= 3,
+            "crossfade should auto-produce frames while paused (old skin keeps animating), got {n}"
+        );
+        unsafe { crate::handle::carapace_destroy(h) };
+    }
+
+    #[test]
+    fn cut_swap_promotes_without_crossfade_burst() {
+        let count: &'static AtomicU32 = Box::leak(Box::new(AtomicU32::new(0)));
+        let h = make(count);
+        unsafe {
+            assert_eq!(
+                crate::handle::carapace_set_frame_rate(h, 0),
+                crate::guard::CarapaceStatus::Ok
+            )
+        };
+        std::thread::sleep(std::time::Duration::from_millis(80));
+        for i in 0..3 {
+            unsafe {
+                let _ = crate::handle::carapace_release_surface(h, i);
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(40));
+        count.store(0, Ordering::SeqCst);
+
+        // Swap to the `cut` fixture: promotes in one warming frame, no crossfade.
+        let dir = std::ffi::CString::new(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/skins/cut"))
+            .unwrap();
+        unsafe {
+            assert_eq!(
+                crate::handle::carapace_swap_skin(h, dir.as_ptr()),
+                crate::guard::CarapaceStatus::Ok
+            )
+        };
+
+        // Keep releasing for well past a crossfade's worth of time; a cut must NOT spawn a burst.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
+        while std::time::Instant::now() < deadline {
+            for i in 0..3 {
+                unsafe {
+                    let _ = crate::handle::carapace_release_surface(h, i);
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(8));
+        }
+        let n = count.load(Ordering::SeqCst);
+        assert!(
+            n <= 2,
+            "cut swap promotes in one frame — no crossfade burst; got {n}"
+        );
         unsafe { crate::handle::carapace_destroy(h) };
     }
 }
