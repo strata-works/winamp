@@ -162,13 +162,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func swapSkin(dir: String) {
         let (cw, ch) = SkinManifest.canvas(atDir: dir, fallback: (420, 660))
         let scale = Int((NSScreen.main?.backingScaleFactor ?? 2).rounded())
+        // The engine's render thread CPU-copies the content (dither) IOSurface every frame via a raw,
+        // non-retained pointer. `ditherSurface` below tears down the previous dither renderer, which
+        // owns the sole strong ref to the OUTGOING skin's surface — releasing it unmaps the surface's
+        // pages. Unlike `applySkin` (which destroys the engine, JOINING the render thread, before
+        // freeing), `swapResized` keeps the render thread running, so freeing the old surface before
+        // the engine has switched off it is a use-after-free. Pin the outgoing dither across the swap;
+        // `swapResized` blocks until the render thread has adopted the new content, after which the
+        // old surface is safe to unmap. See docs/superpowers/specs/2026-07-08-…-swap-design.md.
+        let outgoingDither = dither
         let content = ditherSurface(forDir: dir, width: cw * scale, height: ch * scale)
         guard let b = bridge,
               b.swapResized(skinDir: dir, width: cw * scale, height: ch * scale, contentSurface: content)
         else {
+            // Swap rejected → the engine kept the OLD content surface and its render thread is still
+            // running. `applySkin` destroys the engine (joining the render thread) before it frees;
+            // keep the outgoing dither mapped until AFTER that join.
             applySkin(dir: dir) // fall back to full rebuild if the resized swap is rejected
+            withExtendedLifetime(outgoingDither) {}
             return
         }
+        // swapResized returned Ok → the render thread has switched off the outgoing content surface,
+        // so releasing the outgoing dither now unmaps it strictly AFTER the engine stopped reading it.
+        withExtendedLifetime(outgoingDither) {}
         // Resize the borderless window to the new native size at swap start (top-left anchored); the
         // new pool is already native size, so the incoming skin is pixel-native as it fades in.
         let window = self.window!
