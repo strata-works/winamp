@@ -82,6 +82,14 @@ CarapaceStatus carapace_set_content_surface(
 - Attach/replace builds the new `ContentTex` (imports the IOSurface into a wgpu texture via the existing `build_content` path, generalized to take a surface + dims) before dropping any prior entry for that id, then swaps it in.
 - Clear removes the entry (drops its `ContentTex`, freeing the wgpu wrapper) before the blocking reply is sent — so the host's subsequent free of the IOSurface cannot race the render thread.
 
+### Portability (cross-platform seam)
+
+`IOSurface` is Apple-only. The entire carapace-ffi content/render path is already gated behind `#[cfg(any(target_os = "macos", target_os = "ios"))]`, so Windows/Linux/Android support is deferred at the crate level (per the roadmap) — this spec generalizes an already-Apple-only surface, it does not add new Apple coupling. To keep the door open so the future port is a localized change rather than an API break:
+
+- **The new export takes an opaque handle**, `const void* surface`, *not* an `IOSurfaceRef` — matching `carapace_swap_skin_resized`'s existing `const void*` style (and unlike `CarapaceCreateDesc.content_surface`, which is typed `IOSurfaceRef`). On Apple the pointer is an `IOSurfaceRef`; on Windows it would be a DXGI/D3D11 shared-texture handle, on Linux a dmabuf fd / EGLImage / Vulkan external-memory handle. The **signature stays stable** across platforms.
+- **The only platform-specific code is the import + per-frame upload** — `build_content` and `upload_iosurface_to_texture`. That is the single abstraction seam a future port replaces (e.g. a `PlatformSurface` trait or per-`cfg` import fn). The content registry (`HashMap<String, ContentTex>`), the `SetContent` command, the blocking contract, `render_frame`'s map feed, and the renderer's composite loop are all platform-neutral and unchanged by a port.
+- **Cross-platform implementation itself is out of scope here** (it stays Apple-gated, matching the crate). This note only ensures the API shape and seam don't have to change when it lands.
+
 ## Showcase changes
 
 Rework the showcase to drive content through the new API (one code path), and add a second region to prove multi-region:
