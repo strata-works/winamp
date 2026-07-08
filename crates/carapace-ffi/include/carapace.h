@@ -20,7 +20,7 @@
 /**
  * ABI minor version. Bumped on additive (backward-compatible) changes.
  */
-#define CARAPACE_ABI_MINOR 0
+#define CARAPACE_ABI_MINOR 1
 
 /**
  * Result of every fallible export. Additive: append new variants, never reorder.
