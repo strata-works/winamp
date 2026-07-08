@@ -306,7 +306,8 @@ impl RenderThread {
                         self.tex_b = new_offscreen(&self.gpu.device, tb_w, tb_h);
                         let mut outgoing = std::mem::replace(&mut self.engine, incoming);
                         let fit = transition.fit;
-                        let scene = self.render_crossfade(idx, &mut outgoing, dt, 0.0, out_aspect, fit);
+                        let scene =
+                            self.render_crossfade(idx, &mut outgoing, dt, 0.0, out_aspect, fit);
                         self.swap = SwapState::Crossfading {
                             outgoing,
                             elapsed: Duration::ZERO,
@@ -502,8 +503,14 @@ impl RenderThread {
             Present::Shared { off, .. } => &off.view,
             Present::Readback { off } => &off.view,
         };
-        self.blender
-            .draw(&self.gpu, &self.tex_b.view, &self.tex_a.view, off_view, t, old_uv);
+        self.blender.draw(
+            &self.gpu,
+            &self.tex_b.view,
+            &self.tex_a.view,
+            off_view,
+            t,
+            old_uv,
+        );
         self.present_offscreen(idx);
         scene
     }

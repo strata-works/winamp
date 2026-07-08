@@ -319,6 +319,10 @@ mod tests {
         // Bottom bar (y=h-1): incoming blue.
         assert_eq!(at(0, h - 1), [0, 0, 255], "bottom bar shows incoming");
         // Central band (y=h/2): t=0 → outgoing red.
-        assert_eq!(at(0, h / 2), [255, 0, 0], "central band shows outgoing at t=0");
+        assert_eq!(
+            at(0, h / 2),
+            [255, 0, 0],
+            "central band shows outgoing at t=0"
+        );
     }
 }
