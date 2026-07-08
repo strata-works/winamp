@@ -169,7 +169,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             applySkin(dir: dir) // fall back to full rebuild if the resized swap is rejected
             return
         }
-        positionTrafficLights(forDir: dir)
         // Resize the borderless window to the new native size at swap start (top-left anchored); the
         // new pool is already native size, so the incoming skin is pixel-native as it fades in.
         let window = self.window!
@@ -181,6 +180,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         view.frame = NSRect(x: 0, y: 0, width: cw, height: ch)
         view.canvasW = Double(cw)
         view.canvasH = Double(ch)
+        // Re-place the traffic lights AFTER the view resizes: their y is derived from
+        // `view.bounds.height`, so positioning before the resize uses the OLD skin's height and drops
+        // them onto the wrong spot (matches `applySkin`'s ordering).
+        positionTrafficLights(forDir: dir)
     }
 
     private func cycleSkin() {
