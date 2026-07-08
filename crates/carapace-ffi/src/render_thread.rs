@@ -344,6 +344,18 @@ fn frame_interval(fps: u32) -> Duration {
     Duration::from_secs_f64(1.0 / effective as f64)
 }
 
+/// Eased crossfade progress in `[0, 1]`: linear ratio `elapsed/dur`, clamped, then smoothstep for a
+/// natural dissolve. A zero duration completes instantly (`1.0`), so a `duration_ms = 0` skin never
+/// wedges the loop in a blend.
+#[allow(dead_code)]
+fn crossfade_t(elapsed: Duration, dur: Duration) -> f32 {
+    if dur.is_zero() {
+        return 1.0;
+    }
+    let x = (elapsed.as_secs_f32() / dur.as_secs_f32()).clamp(0.0, 1.0);
+    x * x * (3.0 - 2.0 * x)
+}
+
 /// Free-run pacing loop. Running (`fps > 0`): wake at the next frame deadline OR on a command;
 /// paused (`fps == 0`): effectively block on commands and render only on Invalidate/Pointer.
 /// A panic in the render body poisons the handle and exits the thread (never abort).
@@ -468,6 +480,20 @@ mod tests {
     fn send_surfaces_is_send() {
         fn assert_send<T: Send>() {}
         assert_send::<SendSurfaces>();
+    }
+
+    #[test]
+    fn crossfade_t_endpoints_and_midpoint() {
+        use std::time::Duration;
+        let dur = Duration::from_millis(200);
+        assert_eq!(super::crossfade_t(Duration::ZERO, dur), 0.0);
+        assert_eq!(super::crossfade_t(Duration::from_millis(200), dur), 1.0);
+        assert_eq!(super::crossfade_t(Duration::from_millis(400), dur), 1.0); // clamped past end
+        // smoothstep(0.5) == 0.5
+        let mid = super::crossfade_t(Duration::from_millis(100), dur);
+        assert!((mid - 0.5).abs() < 1e-6, "mid was {mid}");
+        // zero duration completes instantly
+        assert_eq!(super::crossfade_t(Duration::ZERO, Duration::ZERO), 1.0);
     }
 }
 
