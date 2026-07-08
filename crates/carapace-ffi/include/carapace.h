@@ -20,7 +20,7 @@
 /**
  * ABI minor version. Bumped on additive (backward-compatible) changes.
  */
-#define CARAPACE_ABI_MINOR 1
+#define CARAPACE_ABI_MINOR 2
 
 /**
  * Result of every fallible export. Additive: append new variants, never reorder.
@@ -373,6 +373,29 @@ CarapaceStatus carapace_release_surface(CarapaceEngine *ptr, uint32_t index);
  * `skin_dir` must be a valid NUL-terminated UTF-8 path.
  */
 CarapaceStatus carapace_swap_skin(CarapaceEngine *ptr, const char *skin_dir);
+#endif
+
+#if (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE))
+/**
+ * Swap the running skin to the one at `skin_dir` AND replace the surface pool with a new one at
+ * `width`×`height` (the incoming skin's native size). The incoming skin renders at native size; the
+ * outgoing skin is scaled into the new pool while it crossfades out. Synchronous: blocks until the
+ * render thread has built the new skin + pool and begun the transition, so a bad skin dir is
+ * reported as `ErrBadSkin` with the current skin + pool left intact. On `Ok`, the caller may free
+ * the OLD surfaces and must keep the NEW ones alive until the next swap or `carapace_destroy`.
+ *
+ * # Safety
+ * `ptr` must come from `carapace_create` and not have been destroyed. `skin_dir` must be a valid
+ * NUL-terminated UTF-8 path. `surfaces` must point to `surface_count` (>= 1) live `width`×`height`
+ * BGRA IOSurfaces that outlive the engine until the next swap/destroy. `content_surface` may be null.
+ */
+CarapaceStatus carapace_swap_skin_resized(CarapaceEngine *ptr,
+                                          const char *skin_dir,
+                                          const void *const *surfaces,
+                                          uint32_t surface_count,
+                                          uint32_t width,
+                                          uint32_t height,
+                                          const void *content_surface);
 #endif
 
 #if (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE))

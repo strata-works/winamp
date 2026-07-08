@@ -39,7 +39,7 @@ pub enum CarapaceStatus {
 /// load time. See `carapace_abi_version`.
 pub const CARAPACE_ABI_MAJOR: u32 = 3;
 /// ABI minor version. Bumped on additive (backward-compatible) changes.
-pub const CARAPACE_ABI_MINOR: u32 = 1;
+pub const CARAPACE_ABI_MINOR: u32 = 2;
 
 thread_local! {
     static LAST_ERROR: RefCell<String> = const { RefCell::new(String::new()) };
