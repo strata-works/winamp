@@ -69,7 +69,34 @@ enum SwapState {
         outgoing: Engine,
         elapsed: Duration,
         dur: Duration,
+        /// Aspect ratio (w/h) of the OUTGOING skin's design canvas. The outgoing skin is rendered
+        /// at this aspect (into `tex_b`) and letterbox-fit into the new-size target by the blender,
+        /// so a landscape→portrait (or reverse) swap never squishes the outgoing skin.
+        out_aspect: f32,
     },
+}
+
+/// Pixel size for the outgoing skin's scratch texture: the destination height, widened/narrowed to
+/// the outgoing skin's own aspect so it renders undistorted before being letterbox-composited.
+fn outgoing_tex_size(dst_h: u32, out_aspect: f32) -> (u32, u32) {
+    let h = dst_h.max(1);
+    let w = ((h as f32) * out_aspect).round().max(1.0) as u32;
+    (w, h)
+}
+
+/// The `(scale_u, scale_v, offset_u, offset_v)` transform that aspect-FITS (letterboxes) a source of
+/// aspect `src` into a destination of aspect `dst` when applied as `src_uv = dst_uv * scale + offset`.
+/// A wider-than-dst source gets top/bottom bars (scale_v > 1); a taller source gets side bars.
+fn fit_uv(src_aspect: f32, dst_aspect: f32) -> [f32; 4] {
+    let r = src_aspect / dst_aspect.max(f32::EPSILON);
+    if r >= 1.0 {
+        // Source wider than dest: full width, letterbox top & bottom.
+        [1.0, r, 0.0, -(r - 1.0) * 0.5]
+    } else {
+        // Source taller than dest: full height, pillarbox left & right.
+        let ir = 1.0 / r;
+        [ir, 1.0, -(ir - 1.0) * 0.5, 0.0]
+    }
 }
 
 /// State owned exclusively by the render thread. The `!Send` `Engine`/`Renderer`/`GpuCtx` live here
@@ -228,37 +255,50 @@ impl RenderThread {
                 mut incoming,
                 transition,
             } => {
-                // 1. Old skin keeps presenting this frame.
-                let scene = self.render_single_into_present(idx, dt);
-                // 2. Warm the incoming engine: one offscreen render forces asset decode + upload.
-                self.warm_incoming(&mut incoming, dt);
-                // 3. Transition. On entering Crossfading, `self.engine` becomes the incoming skin,
-                //    so the render_one tail's `cw/ch = self.engine.scene().canvas` flips hit-testing
-                //    to the new skin from the first crossfade frame.
                 match transition.kind {
                     carapace::skin::TransitionKind::Cut => {
+                        // Old skin keeps presenting while we warm the incoming (asset decode +
+                        // upload), then promote. A cut has no blend, so nothing is aspect-fit.
+                        let scene = self.render_single_into_present(idx, dt);
+                        self.warm_incoming(&mut incoming, dt);
                         self.engine = incoming; // promote; swap stays Idle (already replaced)
+                        scene
                     }
                     carapace::skin::TransitionKind::Crossfade => {
-                        let outgoing = std::mem::replace(&mut self.engine, incoming);
+                        // Promote to the incoming skin and present a `t = 0` aspect-correct blend on
+                        // THIS frame: the outgoing skin at full opacity, rendered at its own aspect
+                        // and letterbox-fit into the new-size target (no squish). `render_crossfade`'s
+                        // own incoming render doubles as the asset warm, so we skip `warm_incoming`.
+                        // `self.engine` becomes the incoming skin here, so the render_one tail's
+                        // `cw/ch = self.engine.scene().canvas` flips hit-testing to the new skin.
+                        let out_aspect = {
+                            let (cw, ch) = self.engine.scene().canvas;
+                            cw as f32 / (ch.max(1) as f32)
+                        };
+                        let (tb_w, tb_h) = outgoing_tex_size(self.h, out_aspect);
+                        self.tex_b = new_offscreen(&self.gpu.device, tb_w, tb_h);
+                        let mut outgoing = std::mem::replace(&mut self.engine, incoming);
+                        let scene = self.render_crossfade(idx, &mut outgoing, dt, 0.0, out_aspect);
                         self.swap = SwapState::Crossfading {
                             outgoing,
                             elapsed: Duration::ZERO,
                             dur: Duration::from_millis(transition.duration_ms as u64),
+                            out_aspect,
                         };
+                        scene
                     }
                 }
-                scene
             }
 
             SwapState::Crossfading {
                 mut outgoing,
                 elapsed,
                 dur,
+                out_aspect,
             } => {
                 let elapsed = elapsed + dt;
                 let t = crossfade_t(elapsed, dur);
-                let scene = self.render_crossfade(idx, &mut outgoing, dt, t);
+                let scene = self.render_crossfade(idx, &mut outgoing, dt, t, out_aspect);
                 // t < 1 → stay crossfading (carry the advanced elapsed); t >= 1 → drop `outgoing`,
                 // swap is already `Idle` from the mem::replace above.
                 if t < 1.0 {
@@ -266,6 +306,7 @@ impl RenderThread {
                         outgoing,
                         elapsed,
                         dur,
+                        out_aspect,
                     };
                 }
                 scene
@@ -359,17 +400,20 @@ impl RenderThread {
         );
     }
 
-    /// Render `self.engine` (incoming) into `tex_a` and `outgoing` into `tex_b`, blend by `t` into
-    /// `presents[idx].off`, then present. Returns the incoming engine's laid-out scene (what the
-    /// snapshot publishes — hit-testing already targets the incoming skin).
+    /// Render `self.engine` (incoming) into `tex_a` at the destination size, render `outgoing` into
+    /// `tex_b` at ITS OWN aspect (`out_aspect`), then blend by `t` into `presents[idx].off` with the
+    /// outgoing letterbox-fit into the destination (no squish), and present. Returns the incoming
+    /// engine's laid-out scene (what the snapshot publishes — hit-testing already targets it).
     fn render_crossfade(
         &mut self,
         idx: usize,
         outgoing: &mut Engine,
         dt: Duration,
         t: f32,
+        out_aspect: f32,
     ) -> Scene {
-        // Render incoming (self.engine) -> tex_a; capture its scene for the snapshot.
+        // Render incoming (self.engine) -> tex_a at the destination size (native, fills the target);
+        // capture its scene for the snapshot.
         let scene = {
             let RenderThread {
                 engine,
@@ -394,15 +438,15 @@ impl RenderThread {
                 host_view,
             )
         };
-        // Render outgoing -> tex_b.
+        // Render outgoing -> tex_b at the OUTGOING skin's own aspect, so it isn't distorted into the
+        // (differently shaped) destination. `tex_b` was sized to `outgoing_tex_size` at swap start.
+        let (tb_w, tb_h) = outgoing_tex_size(self.h, out_aspect);
         {
             let RenderThread {
                 renderer,
                 gpu,
                 tex_b,
                 content,
-                w,
-                h,
                 ..
             } = self;
             let host_view = content.as_ref().map(|c| ("host", &c.view));
@@ -411,21 +455,23 @@ impl RenderThread {
                 renderer,
                 gpu,
                 &tex_b.view,
-                *w,
-                *h,
+                tb_w,
+                tb_h,
                 dt,
                 false,
                 host_view,
             );
         }
         // Blend tex_b (old) over/into tex_a (new) into the present offscreen (`off.view` is the same
-        // for both tiers), then present it via the shared blit/readback path.
+        // for both tiers), letterbox-fitting the outgoing into the destination aspect; then present.
+        let dst_aspect = self.w as f32 / (self.h.max(1) as f32);
+        let old_uv = fit_uv(out_aspect, dst_aspect);
         let off_view = match &self.presents[idx] {
             Present::Shared { off, .. } => &off.view,
             Present::Readback { off } => &off.view,
         };
         self.blender
-            .draw(&self.gpu, &self.tex_b.view, &self.tex_a.view, off_view, t);
+            .draw(&self.gpu, &self.tex_b.view, &self.tex_a.view, off_view, t, old_uv);
         self.present_offscreen(idx);
         scene
     }

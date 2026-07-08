@@ -2,18 +2,29 @@
 //! alpha `t` into a target view (`out = mix(old, new, t)`). Used by the render thread's crossfade
 //! swap; contains no engine or IOSurface knowledge, so it is unit-testable in isolation.
 //!
+//! The `t_new` texture is assumed to already match the destination's aspect (it is the incoming
+//! skin rendered at the destination's native size). The `t_old` texture is the OUTGOING skin
+//! rendered at ITS OWN aspect, so it is sampled through an `old_uv` transform that letterbox-fits
+//! it into the destination WITHOUT stretching — the fix for the swap "squish" where a landscape
+//! skin was distorted into a portrait target (and vice versa). In the letterbox bars (where the
+//! outgoing skin does not reach) the incoming skin shows through, so a bar is never transparent.
+//!
 //! The render thread wires it into the live crossfade swap (see `render_thread::render_crossfade`).
 #![cfg(any(target_os = "macos", target_os = "ios"))]
 
 use crate::render::GpuCtx;
 
-/// The WGSL for the blend: a fullscreen triangle whose fragment shader outputs
-/// `mix(old, new, t)`. `t` arrives in `u.x` of a `vec4<f32>` uniform (padded for 16-byte alignment).
+/// The WGSL for the blend: a fullscreen triangle whose fragment shader outputs `mix(old, new, t)`
+/// inside the outgoing skin's letterbox rect, and the incoming skin alone in the bars. The uniform
+/// packs `params.x = t` and `old_uv = (scale_u, scale_v, offset_u, offset_v)` — the aspect-fit
+/// transform applied to the outgoing texture's UVs. Identity `old_uv = (1, 1, 0, 0)` reproduces the
+/// original full-frame `mix(old, new, t)` everywhere (same-size swaps take that path).
 const SHADER: &str = r#"
 @group(0) @binding(0) var t_old: texture_2d<f32>;
 @group(0) @binding(1) var t_new: texture_2d<f32>;
 @group(0) @binding(2) var samp: sampler;
-@group(0) @binding(3) var<uniform> u: vec4<f32>;
+struct U { params: vec4<f32>, old_uv: vec4<f32> };
+@group(0) @binding(3) var<uniform> u: U;
 
 struct VsOut { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> };
 
@@ -29,9 +40,12 @@ fn vs(@builtin(vertex_index) i: u32) -> VsOut {
 
 @fragment
 fn fs(in: VsOut) -> @location(0) vec4<f32> {
-    let a = textureSample(t_old, samp, in.uv);
+    let ouv = in.uv * u.old_uv.xy + u.old_uv.zw;
     let b = textureSample(t_new, samp, in.uv);
-    return mix(a, b, u.x);
+    // Outside the outgoing skin's aspect-fit rect → show the incoming skin alone (letterbox bar).
+    let in_rect = all(ouv >= vec2(0.0)) && all(ouv <= vec2(1.0));
+    let a = textureSample(t_old, samp, clamp(ouv, vec2(0.0), vec2(1.0)));
+    return select(b, mix(a, b, u.params.x), in_rect);
 }
 "#;
 
@@ -131,7 +145,7 @@ impl CrossfadeBlender {
         });
         let uniform = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("crossfade-u"),
-            size: 16,
+            size: 32, // two vec4<f32>: params (t) + old_uv aspect-fit transform
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -143,8 +157,11 @@ impl CrossfadeBlender {
         }
     }
 
-    /// Render `mix(old, new, t)` into `dst_view`. Submits its own encoder; ordering with the
-    /// downstream present (blit/readback of `dst`) is guaranteed by same-queue submission order.
+    /// Blend the outgoing (`old_view`) and incoming (`new_view`) textures into `dst_view` by alpha
+    /// `t`, sampling the outgoing texture through `old_uv = (scale_u, scale_v, offset_u, offset_v)`
+    /// so it aspect-fits without stretching. Pass identity `(1.0, 1.0, 0.0, 0.0)` for a same-aspect
+    /// blend. Submits its own encoder; ordering with the downstream present (blit/readback of `dst`)
+    /// is guaranteed by same-queue submission order.
     pub fn draw(
         &self,
         gpu: &GpuCtx,
@@ -152,10 +169,15 @@ impl CrossfadeBlender {
         new_view: &wgpu::TextureView,
         dst_view: &wgpu::TextureView,
         t: f32,
+        old_uv: [f32; 4],
     ) {
-        // Uniform is a padded vec4; only .x is read by the shader.
-        let mut bytes = [0u8; 16];
+        // Uniform: params (t in .x, rest padding) then old_uv (aspect-fit transform).
+        let mut bytes = [0u8; 32];
         bytes[0..4].copy_from_slice(&t.to_le_bytes());
+        for (i, v) in old_uv.iter().enumerate() {
+            let off = 16 + i * 4;
+            bytes[off..off + 4].copy_from_slice(&v.to_le_bytes());
+        }
         gpu.queue.write_buffer(&self.uniform, 0, &bytes);
 
         let bind = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -264,12 +286,39 @@ mod tests {
         let dst = crate::render::new_offscreen(&gpu.device, w, h);
 
         let blender = CrossfadeBlender::new(&gpu.device);
-        blender.draw(&gpu, &red, &blue, &dst.view, 0.5);
+        blender.draw(&gpu, &red, &blue, &dst.view, 0.5, [1.0, 1.0, 0.0, 0.0]);
 
         let px = crate::render::readback_rgba(&gpu, &dst.tex, w, h);
         // mix(red, blue, 0.5) ≈ (128, 0, 128). Allow rounding slack.
         assert!((px[0] as i32 - 128).abs() <= 4, "R was {}", px[0]);
         assert_eq!(px[1], 0, "G");
         assert!((px[2] as i32 - 128).abs() <= 4, "B was {}", px[2]);
+    }
+
+    #[test]
+    fn letterbox_bar_shows_incoming_only() {
+        // A `old_uv` that fits the old texture into the central 50% of height (bars top & bottom):
+        // scale_v = 2, offset_v = -0.5 → rows near y=0 and y=h map outside [0,1] (bars). Those rows
+        // must show the INCOMING (blue) alone regardless of `t`; the central band blends.
+        let gpu = init_gpu().expect("gpu");
+        let (w, h) = (4u32, 8u32);
+        let (_r, red) = solid(&gpu, w, h, [255, 0, 0, 255]); // outgoing
+        let (_b, blue) = solid(&gpu, w, h, [0, 0, 255, 255]); // incoming
+        let dst = crate::render::new_offscreen(&gpu.device, w, h);
+
+        let blender = CrossfadeBlender::new(&gpu.device);
+        // t = 0 → central band = old (red); bars = incoming (blue) even though t=0.
+        blender.draw(&gpu, &red, &blue, &dst.view, 0.0, [1.0, 2.0, 0.0, -0.5]);
+        let px = crate::render::readback_rgba(&gpu, &dst.tex, w, h);
+        let at = |x: u32, y: u32| {
+            let i = ((y * w + x) * 4) as usize;
+            [px[i], px[i + 1], px[i + 2]]
+        };
+        // Top bar (y=0): incoming blue, not the outgoing red.
+        assert_eq!(at(0, 0), [0, 0, 255], "top bar shows incoming");
+        // Bottom bar (y=h-1): incoming blue.
+        assert_eq!(at(0, h - 1), [0, 0, 255], "bottom bar shows incoming");
+        // Central band (y=h/2): t=0 → outgoing red.
+        assert_eq!(at(0, h / 2), [255, 0, 0], "central band shows outgoing at t=0");
     }
 }
