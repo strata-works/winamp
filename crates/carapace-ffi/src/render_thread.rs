@@ -24,7 +24,7 @@ use crate::render::{
     new_offscreen,
 };
 use crate::snapshot::{SnapshotCell, SnapshotTier};
-use carapace::skin::Transition;
+use carapace::skin::{Transition, TransitionFit};
 
 /// The raw host-owned state that must cross onto the spawned render thread at construction: the
 /// IOSurface pool, the optional content surface, and the host vtable (fn pointers + its opaque
@@ -70,9 +70,12 @@ enum SwapState {
         elapsed: Duration,
         dur: Duration,
         /// Aspect ratio (w/h) of the OUTGOING skin's design canvas. The outgoing skin is rendered
-        /// at this aspect (into `tex_b`) and letterbox-fit into the new-size target by the blender,
-        /// so a landscape→portrait (or reverse) swap never squishes the outgoing skin.
+        /// at this aspect (into `tex_b`) and fit into the new-size target by the blender, so a
+        /// landscape→portrait (or reverse) swap never squishes the outgoing skin.
         out_aspect: f32,
+        /// Letterbox (`Contain`) vs. crop-to-fill (`Cover`) for the outgoing skin — the incoming
+        /// skin's declared `[transition] fit`.
+        fit: TransitionFit,
     },
 }
 
@@ -96,6 +99,30 @@ fn fit_uv(src_aspect: f32, dst_aspect: f32) -> [f32; 4] {
         // Source taller than dest: full height, pillarbox left & right.
         let ir = 1.0 / r;
         [ir, 1.0, -(ir - 1.0) * 0.5, 0.0]
+    }
+}
+
+/// The `(scale_u, scale_v, offset_u, offset_v)` transform that aspect-COVERS (crops-to-fill) a source
+/// of aspect `src` into a destination of aspect `dst`. The sampled UVs stay within `[0, 1]`, so the
+/// blender produces no bars and the whole frame cross-dissolves uniformly (the source's overflow is
+/// cropped). The inverse of `fit_uv`'s crop direction.
+fn cover_uv(src_aspect: f32, dst_aspect: f32) -> [f32; 4] {
+    let r = src_aspect / dst_aspect.max(f32::EPSILON);
+    if r >= 1.0 {
+        // Source wider than dest: full height, crop left & right.
+        let s = 1.0 / r;
+        [s, 1.0, (1.0 - s) * 0.5, 0.0]
+    } else {
+        // Source taller than dest: full width, crop top & bottom.
+        [1.0, r, 0.0, (1.0 - r) * 0.5]
+    }
+}
+
+/// Pick the outgoing-skin UV transform for the requested fit mode.
+fn transition_uv(fit: TransitionFit, src_aspect: f32, dst_aspect: f32) -> [f32; 4] {
+    match fit {
+        TransitionFit::Contain => fit_uv(src_aspect, dst_aspect),
+        TransitionFit::Cover => cover_uv(src_aspect, dst_aspect),
     }
 }
 
@@ -278,12 +305,14 @@ impl RenderThread {
                         let (tb_w, tb_h) = outgoing_tex_size(self.h, out_aspect);
                         self.tex_b = new_offscreen(&self.gpu.device, tb_w, tb_h);
                         let mut outgoing = std::mem::replace(&mut self.engine, incoming);
-                        let scene = self.render_crossfade(idx, &mut outgoing, dt, 0.0, out_aspect);
+                        let fit = transition.fit;
+                        let scene = self.render_crossfade(idx, &mut outgoing, dt, 0.0, out_aspect, fit);
                         self.swap = SwapState::Crossfading {
                             outgoing,
                             elapsed: Duration::ZERO,
                             dur: Duration::from_millis(transition.duration_ms as u64),
                             out_aspect,
+                            fit,
                         };
                         scene
                     }
@@ -295,10 +324,11 @@ impl RenderThread {
                 elapsed,
                 dur,
                 out_aspect,
+                fit,
             } => {
                 let elapsed = elapsed + dt;
                 let t = crossfade_t(elapsed, dur);
-                let scene = self.render_crossfade(idx, &mut outgoing, dt, t, out_aspect);
+                let scene = self.render_crossfade(idx, &mut outgoing, dt, t, out_aspect, fit);
                 // t < 1 → stay crossfading (carry the advanced elapsed); t >= 1 → drop `outgoing`,
                 // swap is already `Idle` from the mem::replace above.
                 if t < 1.0 {
@@ -307,6 +337,7 @@ impl RenderThread {
                         elapsed,
                         dur,
                         out_aspect,
+                        fit,
                     };
                 }
                 scene
@@ -411,6 +442,7 @@ impl RenderThread {
         dt: Duration,
         t: f32,
         out_aspect: f32,
+        fit: TransitionFit,
     ) -> Scene {
         // Render incoming (self.engine) -> tex_a at the destination size (native, fills the target);
         // capture its scene for the snapshot.
@@ -465,7 +497,7 @@ impl RenderThread {
         // Blend tex_b (old) over/into tex_a (new) into the present offscreen (`off.view` is the same
         // for both tiers), letterbox-fitting the outgoing into the destination aspect; then present.
         let dst_aspect = self.w as f32 / (self.h.max(1) as f32);
-        let old_uv = fit_uv(out_aspect, dst_aspect);
+        let old_uv = transition_uv(fit, out_aspect, dst_aspect);
         let off_view = match &self.presents[idx] {
             Present::Shared { off, .. } => &off.view,
             Present::Readback { off } => &off.view,

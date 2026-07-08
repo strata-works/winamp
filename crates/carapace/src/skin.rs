@@ -18,6 +18,9 @@ fn default_transition_kind() -> TransitionKind {
 fn default_transition_ms() -> u32 {
     250
 }
+fn default_transition_fit() -> TransitionFit {
+    TransitionFit::Contain
+}
 
 /// How a skin dissolves in when another skin is swapped to it. Declared by the *incoming* skin's
 /// `skin.toml` `[transition]` table. Absent table → [`Transition::default`].
@@ -30,8 +33,21 @@ pub enum TransitionKind {
     Crossfade,
 }
 
+/// How the OUTGOING skin is fit into the (possibly different-aspect) incoming target during a
+/// crossfade, so it is never stretched. Only matters when the two skins' aspect ratios differ.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransitionFit {
+    /// Letterbox: show the whole outgoing skin, with bars (filled by the incoming skin) where it
+    /// doesn't cover the target. The full outgoing skin stays visible.
+    Contain,
+    /// Cover: scale the outgoing skin to fill the target, cropping its overflow. No bars, so the
+    /// whole frame cross-dissolves uniformly (no popping bars) at the cost of clipping its edges.
+    Cover,
+}
+
 /// The incoming skin's swap transition. An absent `[transition]` table yields the default
-/// (`Crossfade`, 250 ms). `duration_ms` is clamped to a sane ceiling by [`load_dir`].
+/// (`Crossfade`, 250 ms, `Contain`). `duration_ms` is clamped to a sane ceiling by [`load_dir`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 pub struct Transition {
     /// The dissolve style.
@@ -40,6 +56,9 @@ pub struct Transition {
     /// Dissolve duration in milliseconds (clamped to 5000 on load).
     #[serde(default = "default_transition_ms")]
     pub duration_ms: u32,
+    /// How the outgoing skin is fit into a different-aspect target (letterbox vs. crop-to-fill).
+    #[serde(default = "default_transition_fit")]
+    pub fit: TransitionFit,
 }
 
 impl Default for Transition {
@@ -47,6 +66,7 @@ impl Default for Transition {
         Self {
             kind: default_transition_kind(),
             duration_ms: default_transition_ms(),
+            fit: default_transition_fit(),
         }
     }
 }
@@ -196,6 +216,19 @@ mod tests {
         let (m, _) = load_dir(&skins_dir().join("ok")).unwrap();
         assert_eq!(m.transition.kind, TransitionKind::Crossfade);
         assert_eq!(m.transition.duration_ms, 250);
+        assert_eq!(m.transition.fit, TransitionFit::Contain);
+    }
+
+    #[test]
+    fn transition_parses_fit_cover() {
+        let dir = tempdir_with(
+            "schema=1\nid='x'\nname='x'\nengine='^0.1'\ncanvas={width=1,height=1}\nentry='s.lua'\n\
+             [transition]\nfit='cover'",
+            "return {}",
+        );
+        let (m, _) = load_dir(dir.path()).unwrap();
+        assert_eq!(m.transition.fit, TransitionFit::Cover);
+        assert_eq!(m.transition.kind, TransitionKind::Crossfade); // other fields keep defaults
     }
 
     #[test]

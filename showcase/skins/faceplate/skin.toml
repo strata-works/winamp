@@ -4,3 +4,10 @@ name = "Faceplate"
 engine = "^0.1"
 canvas = { width = 380, height = 560 }
 entry = "skin.lua"
+
+# Swaps INTO Faceplate (from the landscape Studio/Cassette skins) crop-to-fill the outgoing skin
+# instead of letterboxing it, so the whole frame cross-dissolves uniformly with no popping bars.
+# Studio/Cassette declare no [transition], so swaps into THEM keep the default letterbox (`contain`)
+# — cycle the skins to A/B the two fits. Remove this table (or set fit = "contain") to letterbox.
+[transition]
+fit = "cover"
