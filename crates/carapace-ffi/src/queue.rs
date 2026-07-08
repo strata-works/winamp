@@ -3,7 +3,22 @@
 
 #![allow(dead_code)]
 
+use std::ffi::c_void;
+use std::path::PathBuf;
+
 use crate::guard::CarapaceStatus;
+
+/// A host-owned surface pool crossing to the render thread for a resized swap. Same Send contract
+/// as `render_thread::SendSurfaces`: the pointers are caller-owned, valid for their `w`×`h` size,
+/// and outlive the engine until the next swap/destroy. Only the render thread touches them.
+pub struct SendPool {
+    /// The new pooled BGRA IOSurfaces (raw, caller-owned).
+    pub surfaces: Vec<*const c_void>,
+    /// The new content IOSurface for a `view{}` cutout, or null.
+    pub content: *const c_void,
+}
+// SAFETY: opaque host memory only touched by the render thread after the move; see contract above.
+unsafe impl Send for SendPool {}
 
 /// Pointer event kind, mirrored 1:1 by the C `CarapacePointerKind` (see `handle.rs`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -16,7 +31,6 @@ pub enum PointerKind {
 }
 
 /// A message from a host API call to the render thread. Additive: append new variants.
-#[derive(Clone, Debug)]
 pub enum Command {
     Pointer {
         x: f64,
@@ -35,6 +49,20 @@ pub enum Command {
     /// receives the outcome so `carapace_swap_skin` can report `ErrBadSkin` synchronously.
     SwapSkin {
         dir: std::path::PathBuf,
+        reply: std::sync::mpsc::Sender<CarapaceStatus>,
+    },
+    /// Load the skin at `dir` and swap it in on the render thread, replacing the surface pool with
+    /// `pool` at the new `w`×`h` size (native-size swap). `reply` reports `ErrBadSkin` synchronously.
+    SwapSkinResized {
+        /// The incoming skin's directory.
+        dir: PathBuf,
+        /// The new host-owned surface pool, at `w`×`h` size.
+        pool: SendPool,
+        /// The new pool's width.
+        w: u32,
+        /// The new pool's height.
+        h: u32,
+        /// Reports the outcome synchronously to the calling `carapace_swap_skin_resized`.
         reply: std::sync::mpsc::Sender<CarapaceStatus>,
     },
     /// Test-only: forces a panic inside `render_guarded`'s `catch_unwind` on the render thread, to

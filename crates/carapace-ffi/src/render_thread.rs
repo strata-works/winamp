@@ -14,12 +14,17 @@ use carapace::engine::{Engine, PointerEvent};
 use carapace::render::Renderer;
 use carapace::scene::{Pt, Scene};
 
+use crate::crossfade::CrossfadeBlender;
 use crate::guard::{CarapaceStatus, last_error_string, set_last_error};
 use crate::handle::ContentTex;
 use crate::host::{CarapaceHostVTable, FfiHost};
 use crate::queue::{Command, CommandRx, PointerKind, drain_coalescing};
-use crate::render::{GpuCtx, IOSurfaceRef, Present, Tier, build_content, build_present, init_gpu};
+use crate::render::{
+    GpuCtx, IOSurfaceRef, OffscreenTarget, Present, Tier, build_content, build_present, init_gpu,
+    new_offscreen,
+};
 use crate::snapshot::{SnapshotCell, SnapshotTier};
+use carapace::skin::{Transition, TransitionFit};
 
 /// The raw host-owned state that must cross onto the spawned render thread at construction: the
 /// IOSurface pool, the optional content surface, and the host vtable (fn pointers + its opaque
@@ -50,6 +55,77 @@ pub(crate) enum InitResult {
     Err(CarapaceStatus, String),
 }
 
+/// The render thread's live skin-swap phase. `Idle` is the normal single-skin path. `Warming` holds
+/// a freshly built incoming engine that has not yet been warmed (asset decode/upload happens on its
+/// first offscreen render). `Crossfading` holds the *outgoing* engine while `self.engine` is already
+/// the incoming skin; the two are blended by `elapsed/dur` progress.
+enum SwapState {
+    Idle,
+    Warming {
+        incoming: Engine,
+        transition: Transition,
+    },
+    Crossfading {
+        outgoing: Engine,
+        elapsed: Duration,
+        dur: Duration,
+        /// Aspect ratio (w/h) of the OUTGOING skin's design canvas. The outgoing skin is rendered
+        /// at this aspect (into `tex_b`) and fit into the new-size target by the blender, so a
+        /// landscape→portrait (or reverse) swap never squishes the outgoing skin.
+        out_aspect: f32,
+        /// Letterbox (`Contain`) vs. crop-to-fill (`Cover`) for the outgoing skin — the incoming
+        /// skin's declared `[transition] fit`.
+        fit: TransitionFit,
+    },
+}
+
+/// Pixel size for the outgoing skin's scratch texture: the destination height, widened/narrowed to
+/// the outgoing skin's own aspect so it renders undistorted before being letterbox-composited.
+fn outgoing_tex_size(dst_h: u32, out_aspect: f32) -> (u32, u32) {
+    let h = dst_h.max(1);
+    let w = ((h as f32) * out_aspect).round().max(1.0) as u32;
+    (w, h)
+}
+
+/// The `(scale_u, scale_v, offset_u, offset_v)` transform that aspect-FITS (letterboxes) a source of
+/// aspect `src` into a destination of aspect `dst` when applied as `src_uv = dst_uv * scale + offset`.
+/// A wider-than-dst source gets top/bottom bars (scale_v > 1); a taller source gets side bars.
+fn fit_uv(src_aspect: f32, dst_aspect: f32) -> [f32; 4] {
+    let r = src_aspect / dst_aspect.max(f32::EPSILON);
+    if r >= 1.0 {
+        // Source wider than dest: full width, letterbox top & bottom.
+        [1.0, r, 0.0, -(r - 1.0) * 0.5]
+    } else {
+        // Source taller than dest: full height, pillarbox left & right.
+        let ir = 1.0 / r;
+        [ir, 1.0, -(ir - 1.0) * 0.5, 0.0]
+    }
+}
+
+/// The `(scale_u, scale_v, offset_u, offset_v)` transform that aspect-COVERS (crops-to-fill) a source
+/// of aspect `src` into a destination of aspect `dst`. The sampled UVs stay within `[0, 1]`, so the
+/// blender produces no bars and the whole frame cross-dissolves uniformly (the source's overflow is
+/// cropped). The inverse of `fit_uv`'s crop direction.
+fn cover_uv(src_aspect: f32, dst_aspect: f32) -> [f32; 4] {
+    let r = src_aspect / dst_aspect.max(f32::EPSILON);
+    if r >= 1.0 {
+        // Source wider than dest: full height, crop left & right.
+        let s = 1.0 / r;
+        [s, 1.0, (1.0 - s) * 0.5, 0.0]
+    } else {
+        // Source taller than dest: full width, crop top & bottom.
+        [1.0, r, 0.0, (1.0 - r) * 0.5]
+    }
+}
+
+/// Pick the outgoing-skin UV transform for the requested fit mode.
+fn transition_uv(fit: TransitionFit, src_aspect: f32, dst_aspect: f32) -> [f32; 4] {
+    match fit {
+        TransitionFit::Contain => fit_uv(src_aspect, dst_aspect),
+        TransitionFit::Cover => cover_uv(src_aspect, dst_aspect),
+    }
+}
+
 /// State owned exclusively by the render thread. The `!Send` `Engine`/`Renderer`/`GpuCtx` live here
 /// and never cross a thread boundary — they are constructed on the render thread by `build`.
 struct RenderThread {
@@ -72,6 +148,14 @@ struct RenderThread {
     /// Host callbacks, copied in at `build` time so `render_one` can fire `frame_ready` from THIS
     /// thread without touching the front-end handle.
     vtable: CarapaceHostVTable,
+    /// Live skin-swap phase. `Idle` when no swap is in flight.
+    swap: SwapState,
+    /// Scratch offscreen the *incoming* skin renders into during warm/crossfade.
+    tex_a: OffscreenTarget,
+    /// Scratch offscreen the *outgoing* skin renders into during crossfade.
+    tex_b: OffscreenTarget,
+    /// The GPU pass that blends `tex_b` (old) and `tex_a` (new) into the present offscreen.
+    blender: CrossfadeBlender,
     /// Test-only: set by `Command::ForcePanic`; checked inside `render_guarded`'s `catch_unwind` so
     /// a forced panic sets `poisoned` via the exact same path a genuine render panic would.
     #[cfg(test)]
@@ -124,6 +208,11 @@ fn build(
     }
     let content = build_content(&gpu, content_surface);
     let held = vec![false; surfaces.len()];
+    // `tex_a`/`tex_b`/`blender` borrow `gpu.device`, and `gpu` is moved into the struct literal
+    // below — build these into `let` bindings first to avoid a move-before-borrow error.
+    let tex_a = new_offscreen(&gpu.device, w, h);
+    let tex_b = new_offscreen(&gpu.device, w, h);
+    let blender = CrossfadeBlender::new(&gpu.device);
     Ok(RenderThread {
         engine,
         renderer,
@@ -142,6 +231,10 @@ fn build(
         frame_id: 0,
         last_render: Instant::now(),
         vtable,
+        swap: SwapState::Idle,
+        tex_a,
+        tex_b,
+        blender,
         #[cfg(test)]
         force_panic: false,
     })
@@ -182,6 +275,93 @@ impl RenderThread {
                 )
             };
         }
+        let scene = match std::mem::replace(&mut self.swap, SwapState::Idle) {
+            SwapState::Idle => self.render_single_into_present(idx, dt),
+
+            SwapState::Warming {
+                mut incoming,
+                transition,
+            } => {
+                match transition.kind {
+                    carapace::skin::TransitionKind::Cut => {
+                        // Old skin keeps presenting while we warm the incoming (asset decode +
+                        // upload), then promote. A cut has no blend, so nothing is aspect-fit.
+                        let scene = self.render_single_into_present(idx, dt);
+                        self.warm_incoming(&mut incoming, dt);
+                        self.engine = incoming; // promote; swap stays Idle (already replaced)
+                        scene
+                    }
+                    carapace::skin::TransitionKind::Crossfade => {
+                        // Promote to the incoming skin and present a `t = 0` aspect-correct blend on
+                        // THIS frame: the outgoing skin at full opacity, rendered at its own aspect
+                        // and letterbox-fit into the new-size target (no squish). `render_crossfade`'s
+                        // own incoming render doubles as the asset warm, so we skip `warm_incoming`.
+                        // `self.engine` becomes the incoming skin here, so the render_one tail's
+                        // `cw/ch = self.engine.scene().canvas` flips hit-testing to the new skin.
+                        let out_aspect = {
+                            let (cw, ch) = self.engine.scene().canvas;
+                            cw as f32 / (ch.max(1) as f32)
+                        };
+                        let (tb_w, tb_h) = outgoing_tex_size(self.h, out_aspect);
+                        self.tex_b = new_offscreen(&self.gpu.device, tb_w, tb_h);
+                        let mut outgoing = std::mem::replace(&mut self.engine, incoming);
+                        let fit = transition.fit;
+                        let scene =
+                            self.render_crossfade(idx, &mut outgoing, dt, 0.0, out_aspect, fit);
+                        self.swap = SwapState::Crossfading {
+                            outgoing,
+                            elapsed: Duration::ZERO,
+                            dur: Duration::from_millis(transition.duration_ms as u64),
+                            out_aspect,
+                            fit,
+                        };
+                        scene
+                    }
+                }
+            }
+
+            SwapState::Crossfading {
+                mut outgoing,
+                elapsed,
+                dur,
+                out_aspect,
+                fit,
+            } => {
+                let elapsed = elapsed + dt;
+                let t = crossfade_t(elapsed, dur);
+                let scene = self.render_crossfade(idx, &mut outgoing, dt, t, out_aspect, fit);
+                // t < 1 → stay crossfading (carry the advanced elapsed); t >= 1 → drop `outgoing`,
+                // swap is already `Idle` from the mem::replace above.
+                if t < 1.0 {
+                    self.swap = SwapState::Crossfading {
+                        outgoing,
+                        elapsed,
+                        dur,
+                        out_aspect,
+                        fit,
+                    };
+                }
+                scene
+            }
+        };
+
+        self.held[idx] = true;
+        self.next_surface = (idx + 1) % self.surfaces.len();
+        self.frame_id += 1;
+        // Refresh the design canvas from the scene we just laid out, so pointer hit-testing uses
+        // the current skin's canvas even across a skin swap. The swap applies during render_frame's
+        // engine.update, so the new canvas is only observable after the frame is produced.
+        let (cw, ch) = self.engine.scene().canvas;
+        self.cw = cw;
+        self.ch = ch;
+        // Do NOT fire `frame_ready` here — the caller (`render_guarded`) must publish the snapshot
+        // first, then fire the callback, so a host reacting to it always sees this frame's snapshot.
+        Some((scene, idx as u32, self.frame_id))
+    }
+
+    /// Render the current `self.engine` into `presents[idx].off` and present it. This is the
+    /// unchanged single-skin path (former inline body of `render_one`).
+    fn render_single_into_present(&mut self, idx: usize, dt: Duration) -> Scene {
         // Destructure into locals (mirrors the old v1 `tick_inner` pattern) so `render_frame` can
         // borrow `engine`/`renderer` mutably while `gpu`/`presents`/`surfaces`/`content` are read
         // immutably in the same expression — the borrow checker can't see that split through
@@ -201,7 +381,7 @@ impl RenderThread {
         let host_view = content.as_ref().map(|c| ("host", &c.view));
         // `render_frame` lays out once and returns that scene; capture it so we publish the exact
         // scene we drew (no second layout pass).
-        let scene = match &presents[idx] {
+        match &presents[idx] {
             Present::Shared {
                 off,
                 iosurface_view,
@@ -222,19 +402,138 @@ impl RenderThread {
                 unsafe { crate::render::copy_into_iosurface(surfaces[idx], &rgba, w, h) };
                 scene
             }
+        }
+    }
+
+    /// Render the incoming engine once into scratch `tex_a` purely to force its lazy asset decode
+    /// and GPU texture upload (the cost we hide behind the still-animating old skin). The result is
+    /// discarded — the old skin's frame is the one presented this iteration.
+    fn warm_incoming(&mut self, incoming: &mut Engine, dt: Duration) {
+        let RenderThread {
+            renderer,
+            gpu,
+            tex_a,
+            content,
+            w,
+            h,
+            ..
+        } = self;
+        let host_view = content.as_ref().map(|c| ("host", &c.view));
+        let _ = crate::render::render_frame(
+            incoming,
+            renderer,
+            gpu,
+            &tex_a.view,
+            *w,
+            *h,
+            dt,
+            false,
+            host_view,
+        );
+    }
+
+    /// Render `self.engine` (incoming) into `tex_a` at the destination size, render `outgoing` into
+    /// `tex_b` at ITS OWN aspect (`out_aspect`), then blend by `t` into `presents[idx].off` with the
+    /// outgoing letterbox-fit into the destination (no squish), and present. Returns the incoming
+    /// engine's laid-out scene (what the snapshot publishes — hit-testing already targets it).
+    fn render_crossfade(
+        &mut self,
+        idx: usize,
+        outgoing: &mut Engine,
+        dt: Duration,
+        t: f32,
+        out_aspect: f32,
+        fit: TransitionFit,
+    ) -> Scene {
+        // Render incoming (self.engine) -> tex_a at the destination size (native, fills the target);
+        // capture its scene for the snapshot.
+        let scene = {
+            let RenderThread {
+                engine,
+                renderer,
+                gpu,
+                tex_a,
+                content,
+                w,
+                h,
+                ..
+            } = self;
+            let host_view = content.as_ref().map(|c| ("host", &c.view));
+            crate::render::render_frame(
+                engine,
+                renderer,
+                gpu,
+                &tex_a.view,
+                *w,
+                *h,
+                dt,
+                false,
+                host_view,
+            )
         };
-        self.held[idx] = true;
-        self.next_surface = (idx + 1) % self.surfaces.len();
-        self.frame_id += 1;
-        // Refresh the design canvas from the scene we just laid out, so pointer hit-testing uses
-        // the current skin's canvas even across a skin swap. The swap applies during render_frame's
-        // engine.update, so the new canvas is only observable after the frame is produced.
-        let (cw, ch) = self.engine.scene().canvas;
-        self.cw = cw;
-        self.ch = ch;
-        // Do NOT fire `frame_ready` here — the caller (`render_guarded`) must publish the snapshot
-        // first, then fire the callback, so a host reacting to it always sees this frame's snapshot.
-        Some((scene, idx as u32, self.frame_id))
+        // Render outgoing -> tex_b at the OUTGOING skin's own aspect, so it isn't distorted into the
+        // (differently shaped) destination. `tex_b` was sized to `outgoing_tex_size` at swap start.
+        let (tb_w, tb_h) = outgoing_tex_size(self.h, out_aspect);
+        {
+            let RenderThread {
+                renderer,
+                gpu,
+                tex_b,
+                content,
+                ..
+            } = self;
+            let host_view = content.as_ref().map(|c| ("host", &c.view));
+            let _ = crate::render::render_frame(
+                outgoing,
+                renderer,
+                gpu,
+                &tex_b.view,
+                tb_w,
+                tb_h,
+                dt,
+                false,
+                host_view,
+            );
+        }
+        // Blend tex_b (old) over/into tex_a (new) into the present offscreen (`off.view` is the same
+        // for both tiers), letterbox-fitting the outgoing into the destination aspect; then present.
+        let dst_aspect = self.w as f32 / (self.h.max(1) as f32);
+        let old_uv = transition_uv(fit, out_aspect, dst_aspect);
+        let off_view = match &self.presents[idx] {
+            Present::Shared { off, .. } => &off.view,
+            Present::Readback { off } => &off.view,
+        };
+        self.blender.draw(
+            &self.gpu,
+            &self.tex_b.view,
+            &self.tex_a.view,
+            off_view,
+            t,
+            old_uv,
+        );
+        self.present_offscreen(idx);
+        scene
+    }
+
+    /// Present offscreen `presents[idx].off` into pooled `surfaces[idx]` (Tier-2 blit / Tier-1
+    /// readback). Assumes the offscreen already holds this frame's pixels.
+    fn present_offscreen(&self, idx: usize) {
+        match &self.presents[idx] {
+            Present::Shared {
+                off,
+                iosurface_view,
+                blitter,
+                ..
+            } => {
+                crate::render::blit(&self.gpu, blitter, &off.view, iosurface_view);
+            }
+            Present::Readback { off } => {
+                let rgba = crate::render::readback_rgba(&self.gpu, &off.tex, self.w, self.h);
+                unsafe {
+                    crate::render::copy_into_iosurface(self.surfaces[idx], &rgba, self.w, self.h)
+                };
+            }
+        }
     }
 
     /// Apply one drained command to render-thread state. Returns `false` on `Shutdown` (the loop
@@ -267,17 +566,97 @@ impl RenderThread {
             }
             Command::SwapSkin { dir, reply } => {
                 let status = match carapace::skin::load_dir(&dir) {
-                    Ok((_m, source)) => {
-                        self.engine
-                            .handle_command(carapace::command::Command::Swap(source));
-                        // Note: handle_command only enqueues the swap; it is applied later
-                        // during engine.update() inside render_frame. cw/ch is refreshed at
-                        // the end of render_one, once the swapped-in canvas is current.
-                        *invalidated = true; // draw the swapped-in skin immediately
-                        CarapaceStatus::Ok
+                    Ok((manifest, source)) => {
+                        match Engine::new(
+                            Box::new(FfiHost::new(self.vtable)),
+                            carapace::vocab::VocabRegistry::base(),
+                            source,
+                        ) {
+                            Ok(incoming) => {
+                                // Last-writer-wins: a swap already in flight is replaced.
+                                self.swap = SwapState::Warming {
+                                    incoming,
+                                    transition: manifest.transition,
+                                };
+                                *invalidated = true; // drive the warm/blend immediately
+                                CarapaceStatus::Ok
+                            }
+                            Err(e) => {
+                                set_last_error(&format!("swap_skin: engine init failed: {e:?}"));
+                                CarapaceStatus::ErrBadSkin
+                            }
+                        }
                     }
                     Err(e) => {
                         set_last_error(&format!("swap_skin: load failed: {e:?}"));
+                        CarapaceStatus::ErrBadSkin
+                    }
+                };
+                let _ = reply.send(status);
+            }
+            Command::SwapSkinResized {
+                dir,
+                pool,
+                w,
+                h,
+                reply,
+            } => {
+                let status = match carapace::skin::load_dir(&dir) {
+                    Ok((manifest, source)) => {
+                        match Engine::new(
+                            Box::new(FfiHost::new(self.vtable)),
+                            carapace::vocab::VocabRegistry::base(),
+                            source,
+                        ) {
+                            Ok(incoming) => {
+                                // Rebuild the present pool at the new size from the host's surfaces.
+                                let new_surfaces: Vec<IOSurfaceRef> = pool
+                                    .surfaces
+                                    .into_iter()
+                                    .map(|p| p as IOSurfaceRef)
+                                    .collect();
+                                let mut new_presents = Vec::with_capacity(new_surfaces.len());
+                                let mut tier = Tier::Shared;
+                                for &s in &new_surfaces {
+                                    let (p, t) = build_present(&self.gpu, s, w, h);
+                                    if t == Tier::Readback {
+                                        tier = Tier::Readback;
+                                    }
+                                    new_presents.push(p);
+                                }
+                                let new_content =
+                                    build_content(&self.gpu, pool.content as IOSurfaceRef);
+                                let n = new_surfaces.len();
+                                // Atomic switch: old Presents drop (our wgpu wrappers freed); the host
+                                // owns + frees the old IOSurfaces after this call returns.
+                                self.surfaces = new_surfaces;
+                                self.presents = new_presents;
+                                self.held = vec![false; n];
+                                self.content = new_content;
+                                self.tier = tier;
+                                self.w = w;
+                                self.h = h;
+                                self.tex_a = new_offscreen(&self.gpu.device, w, h);
+                                self.tex_b = new_offscreen(&self.gpu.device, w, h);
+                                self.next_surface = 0;
+                                // Warm the incoming skin, then crossfade — now in the new pool.
+                                self.swap = SwapState::Warming {
+                                    incoming,
+                                    transition: manifest.transition,
+                                };
+                                *invalidated = true;
+                                CarapaceStatus::Ok
+                            }
+                            Err(e) => {
+                                set_last_error(&format!(
+                                    "swap_skin_resized: engine init failed: {e:?}"
+                                ));
+                                CarapaceStatus::ErrBadSkin
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        set_last_error(&format!("swap_skin_resized: load failed: {e:?}"));
                         CarapaceStatus::ErrBadSkin
                     }
                 };
@@ -344,6 +723,17 @@ fn frame_interval(fps: u32) -> Duration {
     Duration::from_secs_f64(1.0 / effective as f64)
 }
 
+/// Eased crossfade progress in `[0, 1]`: linear ratio `elapsed/dur`, clamped, then smoothstep for a
+/// natural dissolve. A zero duration completes instantly (`1.0`), so a `duration_ms = 0` skin never
+/// wedges the loop in a blend.
+fn crossfade_t(elapsed: Duration, dur: Duration) -> f32 {
+    if dur.is_zero() {
+        return 1.0;
+    }
+    let x = (elapsed.as_secs_f32() / dur.as_secs_f32()).clamp(0.0, 1.0);
+    x * x * (3.0 - 2.0 * x)
+}
+
 /// Free-run pacing loop. Running (`fps > 0`): wake at the next frame deadline OR on a command;
 /// paused (`fps == 0`): effectively block on commands and render only on Invalidate/Pointer.
 /// A panic in the render body poisons the handle and exits the thread (never abort).
@@ -360,8 +750,10 @@ fn run_loop(
     rt.last_render = Instant::now();
     let mut pending: Vec<Command> = Vec::new();
     loop {
-        // Decide how long to wait: running → until the frame deadline OR a command; paused → block.
-        let wait = if rt.fps > 0 {
+        // Decide how long to wait: running (or a swap in flight) → until the frame deadline OR a
+        // command; paused with no swap → block.
+        let animating = rt.fps > 0 || !matches!(rt.swap, SwapState::Idle);
+        let wait = if animating {
             frame_interval(rt.fps).saturating_sub(rt.last_render.elapsed())
         } else {
             Duration::from_secs(3600) // effectively "block until a command"
@@ -383,7 +775,7 @@ fn run_loop(
             }
             // Frame deadline reached while running: render one paced frame.
             Err(RecvTimeoutError::Timeout) => {
-                if rt.fps > 0 {
+                if rt.fps > 0 || !matches!(rt.swap, SwapState::Idle) {
                     render_guarded(rt, cell, poisoned, poison_msg);
                 }
             }
@@ -468,6 +860,20 @@ mod tests {
     fn send_surfaces_is_send() {
         fn assert_send<T: Send>() {}
         assert_send::<SendSurfaces>();
+    }
+
+    #[test]
+    fn crossfade_t_endpoints_and_midpoint() {
+        use std::time::Duration;
+        let dur = Duration::from_millis(200);
+        assert_eq!(super::crossfade_t(Duration::ZERO, dur), 0.0);
+        assert_eq!(super::crossfade_t(Duration::from_millis(200), dur), 1.0);
+        assert_eq!(super::crossfade_t(Duration::from_millis(400), dur), 1.0); // clamped past end
+        // smoothstep(0.5) == 0.5
+        let mid = super::crossfade_t(Duration::from_millis(100), dur);
+        assert!((mid - 0.5).abs() < 1e-6, "mid was {mid}");
+        // zero duration completes instantly
+        assert_eq!(super::crossfade_t(Duration::ZERO, Duration::ZERO), 1.0);
     }
 }
 
@@ -611,6 +1017,101 @@ mod render_tests {
         );
         unsafe { crate::handle::carapace_destroy(handle) };
     }
+
+    #[test]
+    fn swap_resized_adopts_new_pool_and_renders() {
+        use std::ffi::c_void;
+        let (w1, h1) = (300u32, 140u32);
+        let vt = crate::host::CarapaceHostVTable {
+            ctx: std::ptr::null_mut(),
+            get_num: None,
+            get_str: None,
+            invoke: None,
+            frame_ready: None,
+            row_count: None,
+            get_row_str: None,
+            get_row_num: None,
+            invoke_arg: None,
+        };
+        let (handle, _old) = crate::handle::test_support::create_test_handle_pool_vt(w1, h1, 2, vt);
+        assert_eq!(
+            unsafe { crate::handle::carapace_set_frame_rate(handle, 0) },
+            crate::guard::CarapaceStatus::Ok
+        );
+
+        // A NEW pool at the `frame` skin's native size (480x320).
+        let (w2, h2) = (480u32, 320u32);
+        let new_surfaces: Vec<crate::render::IOSurfaceRef> = (0..2)
+            .map(|_| crate::handle::test_support::make_bgra_iosurface(w2 as usize, h2 as usize))
+            .collect();
+        let refs: Vec<*const c_void> = new_surfaces.iter().map(|&s| s as *const c_void).collect();
+        let dir = std::ffi::CString::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../carapace-demo/skins/frame"
+        ))
+        .unwrap();
+
+        assert_eq!(
+            unsafe {
+                crate::handle::carapace_swap_skin_resized(
+                    handle,
+                    dir.as_ptr(),
+                    refs.as_ptr(),
+                    refs.len() as u32,
+                    w2,
+                    h2,
+                    std::ptr::null(),
+                )
+            },
+            crate::guard::CarapaceStatus::Ok
+        );
+        // Drive frames so the warm/crossfade advances into the new pool.
+        crate::handle::test_support::wait_for(std::time::Duration::from_secs(10), || {
+            for i in 0..2 {
+                unsafe {
+                    let _ = crate::handle::carapace_release_surface(handle, i);
+                }
+            }
+            unsafe {
+                crate::handle::test_support::iosurface_has_nonzero_pixels(new_surfaces[0], w2, h2)
+                    || crate::handle::test_support::iosurface_has_nonzero_pixels(
+                        new_surfaces[1],
+                        w2,
+                        h2,
+                    )
+            }
+        });
+        assert!(
+            unsafe {
+                crate::handle::test_support::iosurface_has_nonzero_pixels(new_surfaces[0], w2, h2)
+                    || crate::handle::test_support::iosurface_has_nonzero_pixels(
+                        new_surfaces[1],
+                        w2,
+                        h2,
+                    )
+            },
+            "the new-size pool must receive a rendered frame"
+        );
+
+        // A bad dir → ErrBadSkin, existing pool/skin intact (still renders on the OLD pool is not
+        // re-checked here; we only assert the error is synchronous and the handle survives).
+        let bad = std::ffi::CString::new("/no/such/skin").unwrap();
+        assert_eq!(
+            unsafe {
+                crate::handle::carapace_swap_skin_resized(
+                    handle,
+                    bad.as_ptr(),
+                    refs.as_ptr(),
+                    refs.len() as u32,
+                    w2,
+                    h2,
+                    std::ptr::null(),
+                )
+            },
+            crate::guard::CarapaceStatus::ErrBadSkin
+        );
+        unsafe { crate::handle::carapace_destroy(handle) };
+    }
 }
 
 #[cfg(all(test, target_os = "macos"))]
@@ -697,6 +1198,104 @@ mod pacing_tests {
         });
         std::thread::sleep(std::time::Duration::from_millis(50));
         assert_eq!(count.load(Ordering::SeqCst), 1);
+        unsafe { crate::handle::carapace_destroy(h) };
+    }
+
+    #[test]
+    fn crossfade_auto_advances_while_paused() {
+        let count: &'static AtomicU32 = Box::leak(Box::new(AtomicU32::new(0)));
+        let h = make(count); // default fps
+        unsafe {
+            assert_eq!(
+                crate::handle::carapace_set_frame_rate(h, 0),
+                crate::guard::CarapaceStatus::Ok
+            )
+        };
+        // Let any startup frames settle, then zero the baseline so we count only swap-driven frames.
+        std::thread::sleep(std::time::Duration::from_millis(80));
+        for i in 0..3 {
+            unsafe {
+                let _ = crate::handle::carapace_release_surface(h, i);
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(40));
+        count.store(0, Ordering::SeqCst);
+
+        // Swap classic -> minimal: absent [transition] → default crossfade (250 ms).
+        let dir = std::ffi::CString::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../carapace-demo/skins/minimal"
+        ))
+        .unwrap();
+        unsafe {
+            assert_eq!(
+                crate::handle::carapace_swap_skin(h, dir.as_ptr()),
+                crate::guard::CarapaceStatus::Ok
+            )
+        };
+
+        // Release surfaces continuously so the auto-advancing crossfade never backpressures.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while std::time::Instant::now() < deadline && count.load(Ordering::SeqCst) < 3 {
+            for i in 0..3 {
+                unsafe {
+                    let _ = crate::handle::carapace_release_surface(h, i);
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(8));
+        }
+        let n = count.load(Ordering::SeqCst);
+        assert!(
+            n >= 3,
+            "crossfade should auto-produce frames while paused (old skin keeps animating), got {n}"
+        );
+        unsafe { crate::handle::carapace_destroy(h) };
+    }
+
+    #[test]
+    fn cut_swap_promotes_without_crossfade_burst() {
+        let count: &'static AtomicU32 = Box::leak(Box::new(AtomicU32::new(0)));
+        let h = make(count);
+        unsafe {
+            assert_eq!(
+                crate::handle::carapace_set_frame_rate(h, 0),
+                crate::guard::CarapaceStatus::Ok
+            )
+        };
+        std::thread::sleep(std::time::Duration::from_millis(80));
+        for i in 0..3 {
+            unsafe {
+                let _ = crate::handle::carapace_release_surface(h, i);
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(40));
+        count.store(0, Ordering::SeqCst);
+
+        // Swap to the `cut` fixture: promotes in one warming frame, no crossfade.
+        let dir = std::ffi::CString::new(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/skins/cut"))
+            .unwrap();
+        unsafe {
+            assert_eq!(
+                crate::handle::carapace_swap_skin(h, dir.as_ptr()),
+                crate::guard::CarapaceStatus::Ok
+            )
+        };
+
+        // Keep releasing for well past a crossfade's worth of time; a cut must NOT spawn a burst.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
+        while std::time::Instant::now() < deadline {
+            for i in 0..3 {
+                unsafe {
+                    let _ = crate::handle::carapace_release_surface(h, i);
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(8));
+        }
+        let n = count.load(Ordering::SeqCst);
+        assert!(
+            n <= 2,
+            "cut swap promotes in one frame — no crossfade burst; got {n}"
+        );
         unsafe { crate::handle::carapace_destroy(h) };
     }
 }

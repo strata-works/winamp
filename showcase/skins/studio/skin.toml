@@ -4,3 +4,8 @@ name = "Studio Deck"
 engine = "^0.1"
 canvas = { width = 720, height = 480 }
 entry = "skin.lua"
+
+# Crop-to-fill the outgoing skin on aspect-changing swaps (e.g. portrait Faceplate -> this landscape
+# deck) so the whole frame cross-dissolves uniformly instead of pillarboxing. See faceplate/skin.toml.
+[transition]
+fit = "cover"

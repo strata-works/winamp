@@ -6,6 +6,11 @@ edition = "2024"   # repo standard (rustfmt.toml + all non-spike crates); see ed
 [lib]
 crate-type = ["cdylib", "staticlib", "rlib"]   # cdylib+staticlib: host apps link one or the other
 
+[features]
+# Gate GPU-touching tests so headless CI lanes (`cargo test --workspace`) don't panic with
+# "no wgpu adapter"; a Metal-capable lane runs them explicitly with `--features gpu-tests`.
+gpu-tests = []
+
 [dependencies]
 carapace = { path = "../carapace" }
 libc = "0.2.186"

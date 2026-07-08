@@ -311,6 +311,7 @@ Schema: `Manifest` (`skin.rs:20-39`), loaded/validated by `load_dir` (`skin.rs:6
 | `resizable` | bool | no | resizable window (frame-skin archetype); default `false` |
 | `min_size` | `[w,h]` | no | minimum window size (logical px) |
 | `max_size` | `[w,h]` | no | maximum window size (logical px) |
+| `transition` | `{kind,duration_ms}` | no | swap-in dissolve; see [below](#the-transition-table) |
 
 ```toml
 # fixed-size skin
@@ -333,6 +334,51 @@ canvas = { width = 480, height = 320 }
 resizable = true
 min_size = [320, 220]
 asset_dir = "assets"
+```
+
+### The `[transition]` table
+
+Schema: `Transition`/`TransitionKind`/`TransitionFit` (`skin.rs`). Declares how *this* skin dissolves in when a host swaps another skin *to* it (via `carapace_swap_skin`/`carapace_swap_skin_resized`) — it's a property of the incoming skin, not the outgoing one.
+
+| field | type | required | meaning |
+|---|---|---|---|
+| `kind` | `"cut"` \| `"crossfade"` | no | dissolve style; default `"crossfade"` |
+| `duration_ms` | u32 | no | dissolve duration in ms; default `250`, clamped to `≤ 5000` on load |
+| `fit` | `"contain"` \| `"cover"` | no | how the OUTGOING skin is fit when the two skins' aspect ratios differ; default `"contain"` |
+
+An absent `[transition]` table is equivalent to `{ kind = "crossfade", duration_ms = 250, fit = "contain" }`. `kind = "cut"` swaps instantly — still stall-free, since the incoming skin is warmed off the render thread before it's presented.
+
+**`fit`** only matters when the incoming and outgoing skins have *different aspect ratios* (e.g. a landscape skin swapping to a portrait one). The outgoing skin is always rendered at its own aspect — never stretched — and then composited into the incoming skin's target:
+
+- `"contain"` (default) — letterbox the outgoing skin whole; the bars where it doesn't reach show the incoming skin. You keep the full outgoing skin on screen, but its bars appear at full opacity from the start of the fade.
+- `"cover"` — scale the outgoing skin to fill the target, cropping its overflow. No bars, so the entire frame cross-dissolves uniformly (smoother), at the cost of clipping the outgoing skin's edges during the fade.
+
+Same-aspect swaps are identical under both values.
+
+```toml
+# explicit fast cut
+schema = 1
+id = "terminal"
+name = "Terminal"
+engine = "^0.1"
+canvas = { width = 480, height = 320 }
+entry = "skin.lua"
+
+[transition]
+kind = "cut"
+```
+
+```toml
+# explicit slow crossfade (clamped to 5000 if higher)
+[transition]
+kind = "crossfade"
+duration_ms = 600
+```
+
+```toml
+# crop-to-fill the outgoing skin instead of letterboxing it (uniform full-frame dissolve)
+[transition]
+fit = "cover"
 ```
 
 ## The Lua sandbox

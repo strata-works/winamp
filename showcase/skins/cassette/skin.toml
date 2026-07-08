@@ -4,3 +4,9 @@ name = "Cassette"
 engine = "^0.1"
 canvas = { width = 600, height = 400 }
 entry = "skin.lua"
+
+# Crop-to-fill the outgoing skin on aspect-changing swaps (uniform dissolve, no bars). The swap into
+# this deck is from the same-aspect Studio, so it's a no-op today, but keeps the demo consistent if
+# the cycle changes. See faceplate/skin.toml.
+[transition]
+fit = "cover"

@@ -25,6 +25,9 @@ pub use hit::*;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 mod render_thread;
 
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+mod crossfade;
+
 /// The ABI version this library implements: `MAJOR << 16 | MINOR`. Additive changes bump MINOR;
 /// breaking changes bump MAJOR. A host compares this against the header's constants at load time.
 #[unsafe(no_mangle)]
@@ -37,9 +40,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn abi_version_is_v3() {
-        assert_eq!(carapace_abi_version(), 3 << 16);
+    fn abi_version_is_v3_2() {
+        assert_eq!(carapace_abi_version(), (3 << 16) | 2);
         assert_eq!(CARAPACE_ABI_MAJOR, 3);
-        assert_eq!(CARAPACE_ABI_MINOR, 0);
+        assert_eq!(CARAPACE_ABI_MINOR, 2);
     }
 }
