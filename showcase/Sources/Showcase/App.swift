@@ -156,36 +156,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ditherTimer?.invalidate(); ditherTimer = nil; dither = nil
     }
 
-    /// Live-swap to `dir`: the engine crossfades the incoming skin in over its declared duration
-    /// while the old skin keeps animating (no teardown of the bridge/pool). After the fade,
-    /// animate the borderless window to the new skin's canvas size (top-left corner fixed, same
-    /// as `applySkin`'s resize) so the settle reads as a deliberate follow-through, not a snap.
+    /// Live-swap to `dir` at the incoming skin's NATIVE size: the engine adopts a new pool sized to
+    /// the new skin, crossfades the incoming skin in at native resolution (the outgoing skin scales
+    /// out during the fade), and the window resizes to the new size at swap start.
     private func swapSkin(dir: String) {
-        guard bridge.swap(skinDir: dir) else {
-            // Live swap rejected (e.g. incompatible pool) — fall back to the full rebuild.
-            applySkin(dir: dir)
+        let (cw, ch) = SkinManifest.canvas(atDir: dir, fallback: (420, 660))
+        let scale = Int((NSScreen.main?.backingScaleFactor ?? 2).rounded())
+        let content = ditherSurface(forDir: dir, width: cw * scale, height: ch * scale)
+        guard let b = bridge,
+              b.swapResized(skinDir: dir, width: cw * scale, height: ch * scale, contentSurface: content)
+        else {
+            applySkin(dir: dir) // fall back to full rebuild if the resized swap is rejected
             return
         }
-        positionTrafficLights(forDir: dir)  // re-place chrome for the incoming skin now
-        let ms = SkinManifest.durationMs(atDir: dir)
-        let (w, h) = SkinManifest.canvas(atDir: dir, fallback: (420, 660))
-        // Resize AFTER the crossfade completes so the seamless dissolve isn't disturbed; the
-        // fixed IOSurface pool scales to fit during the brief settle (pool re-fit at the exact
-        // new size is deferred).
-        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(ms)) { [weak self] in
-            guard let self else { return }
-            let window = self.window!
-            let topY = window.frame.origin.y + window.frame.height
-            var frame = window.frame
-            frame.size = NSSize(width: w, height: h)
-            frame.origin.y = topY - CGFloat(h)
-            NSAnimationContext.runAnimationGroup { ctx in
-                ctx.duration = 0.15
-                window.animator().setFrame(frame, display: true)
-            }
-            self.view.canvasW = Double(w)
-            self.view.canvasH = Double(h)
-        }
+        positionTrafficLights(forDir: dir)
+        // Resize the borderless window to the new native size at swap start (top-left anchored); the
+        // new pool is already native size, so the incoming skin is pixel-native as it fades in.
+        let window = self.window!
+        let topY = window.frame.origin.y + window.frame.height
+        var frame = window.frame
+        frame.size = NSSize(width: cw, height: ch)
+        frame.origin.y = topY - CGFloat(ch)
+        window.setFrame(frame, display: true)
+        view.frame = NSRect(x: 0, y: 0, width: cw, height: ch)
+        view.canvasW = Double(cw)
+        view.canvasH = Double(ch)
     }
 
     private func cycleSkin() {
