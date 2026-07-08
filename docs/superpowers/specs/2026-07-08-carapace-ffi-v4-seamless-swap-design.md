@@ -16,9 +16,16 @@ new skin's load and then **pops** the new skin in with no transition. v4 makes t
    duration.
 
 The transition is a property the **incoming skin declares in its `skin.toml`**, not a host parameter.
-The **C ABI is unchanged** — `carapace_swap_skin(handle, dir)` keeps its exact signature; host apps
-recompile with zero code changes and inherit seamless swaps. ABI **MINOR bumps 3.0 → 3.1** purely to
-advertise the new manifest capability (the C symbol surface is byte-compatible).
+`carapace_swap_skin(handle, dir)` keeps its exact signature (same-size swaps); host apps recompile
+with zero code changes and inherit seamless same-size swaps. ABI **MINOR bumps 3.0 → 3.1** for the
+manifest capability.
+
+3. **Native-size swaps** (added after review feedback) — a companion export
+   `carapace_swap_skin_resized` lets the host hand in a **new surface pool at the incoming skin's
+   native size** so each skin renders at its own resolution instead of being scaled to the first
+   skin's pool. The outgoing skin is briefly scaled as it dissolves out; you always *land* on a
+   native-size skin. This reuses the same warm-then-crossfade machinery. Adding an export is
+   **additive** — ABI **MINOR bumps 3.1 → 3.2** (existing symbols unchanged). See Component 5.
 
 **Scope:** Apple-only, on the existing render-thread/`wgpu-hal` IOSurface path. No new threads
 (inline warm). One transition kind: crossfade (plus `cut`).
@@ -45,7 +52,8 @@ warm-up.
   presenting, costing at most ~1 dropped old-skin frame during warm. No worker thread. (A
   background-worker preload is a possible future enhancement, deferred — decode/upload must stay on
   the render thread regardless, so the marginal gain is small.)
-- **C ABI unchanged**; ABI MINOR 3.0 → 3.1.
+- **C ABI: existing symbols unchanged**; MINOR 3.0 → 3.1 for the manifest capability, then 3.1 → 3.2
+  for the one additive export `carapace_swap_skin_resized` (Component 5).
 
 ## Component 1 — Skin-authored transition (engine crate, additive)
 
@@ -233,9 +241,75 @@ This makes the flagship app the living verification of v4, and the manual check 
 confirm the old skin keeps animating, dissolves smoothly into the new one, and the window settles to
 the new size afterward — no freeze, no pop.
 
+## Component 5 — native-size swaps (`carapace_swap_skin_resized`)
+
+`carapace_swap_skin` keeps the host's original surface pool, so the engine scales every incoming
+skin's design canvas into that fixed size — swapping between differently-sized skins scales them all
+to the first skin's resolution. To let each skin render at its **native** size, v4 adds a companion
+export that swaps the skin *and* adopts a new host-provided pool.
+
+### New export (additive, ABI 3.1 → 3.2)
+
+```c
+CarapaceStatus carapace_swap_skin_resized(
+    CarapaceEngine* ptr,
+    const char* skin_dir,
+    const void* const* surfaces,   // new pool, host-allocated at the incoming skin's native size
+    uint32_t surface_count,
+    uint32_t width,                // new surface pixel size
+    uint32_t height,
+    const void* content_surface    // new content surface for a view{} cutout, or null
+);
+```
+
+Same contract as `carapace_swap_skin`: **synchronous** (blocks until the render thread has built the
+incoming engine, rebuilt its present pool at the new size, and entered the transition), reporting
+`ErrBadSkin` on load/build failure with the current skin+pool left intact. The new surfaces must
+outlive the engine until the next swap or destroy (same as `carapace_create`). `carapace_swap_skin`
+is unchanged and remains the right call for same-size hosts.
+
+### Render-thread mechanics
+
+The `Command::SwapSkinResized { dir, pool, w, h, reply }` handler mirrors the `SwapSkin` handler,
+plus a **pool rebuild** before entering `Warming`:
+
+1. `load_dir` + `Engine::new` (as `SwapSkin`; failure → `ErrBadSkin`, pool untouched).
+2. Rebuild the present pool at the new size: `build_present(gpu, surface, w, h)` per new surface
+   (recomputing the weakest tier), `build_content(gpu, new_content)`, and fresh `tex_a`/`tex_b`
+   offscreens at `w×h`.
+3. **Atomic switch** on the render thread: replace `self.{surfaces, presents, held(all false),
+   content, tier, w, h, tex_a, tex_b, next_surface=0}` with the rebuilt pool (the old `Present`s
+   drop, freeing our wgpu wrappers; the host owns and frees the old IOSurfaces after the call
+   returns). Then `self.swap = Warming { incoming, transition }`, `invalidated = true`, reply `Ok`.
+4. The existing Warming → Crossfading path then runs **in the new pool**: the warm frame presents the
+   outgoing skin scaled into the new size; the crossfade renders the incoming skin at native size
+   into `tex_a` and the outgoing skin scaled into `tex_b`, blending into the new-size present. So the
+   skin you land on is native; only the departing skin is scaled while it fades.
+
+Because the export blocks until the switch is done (reply sent *after* the switch), no old-pool frame
+is emitted after it returns — the host can swap its surface set and resize its window on `Ok`.
+
+### Showcase adoption (revises Component 4)
+
+The showcase's `swapSkin` becomes: compute the incoming skin's native `(w,h)` (canvas × backing
+scale), allocate a new 3-surface pool (and, for Studio, a correctly-sized dither content surface),
+call `carapace_swap_skin_resized`, then on `Ok` switch the frame-sink's surface set to the new pool
+and resize the borderless window to the new native size (top-left anchored). The **window resize now
+happens at swap start** (the new pool is already native size), not after the fade — so the departing
+skin is what scales during the ~250 ms dissolve, and the incoming skin is pixel-native throughout.
+This also **resolves Component 4's deferred content-surface gap**: the host now provisions a
+correctly-sized content surface for the incoming skin, so live-swapping into Studio gets a proper
+dither cutout.
+
+The frame-sink surface handoff crosses the render thread; guard the shared surface array (a small
+lock, or rely on the blocking swap making the window narrow) so a frame in flight during the switch
+can't read a half-updated pool.
+
 ## What does NOT change
 
-- **C ABI symbols & signatures** — `carapace_swap_skin(handle, skin_dir)` identical. No new exports.
+- **Existing C ABI symbols & signatures** — `carapace_swap_skin(handle, skin_dir)` and every other
+  existing export are identical. The only ABI change is **one additive export**
+  (`carapace_swap_skin_resized`, Component 5) → MINOR 3.1 → 3.2. Nothing is renamed or reordered.
 - **Engine rendering** — `render_frame`, `Renderer`, vello path all untouched. v4 runs two engines
   and blends their outputs in the FFI crate.
 - **Present tiers** — Tier-2 blit / Tier-1 readback paths unchanged; the blend writes into the same
@@ -314,7 +388,7 @@ step `t` from 0 → 1 without wall-clock sleeps.
 
 - Background-worker preload (fully removing disk I/O from the render thread).
 - Transition kinds beyond crossfade (slide/wipe/etc.) and host-overridable transitions.
-- A `carapace_resize` export / live pool re-fit at a new surface size (showcase scales the fixed
-  surface during the post-fade window animation instead).
+- A pure `carapace_resize` (resize the current skin's pool with no skin change) — Component 5 covers
+  resize *coupled with* a swap, which is what the showcase needs; a standalone resize is deferred.
 - Cross-platform (Windows/Linux/Android) — unchanged from prior versions.
 - Engine self-scheduling animation clock (`next_wake()`/`is_animating()`).

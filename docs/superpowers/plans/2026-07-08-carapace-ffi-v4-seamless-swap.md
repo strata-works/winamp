@@ -1194,6 +1194,422 @@ git commit -m "docs(ffi): document seamless swap + [transition] manifest table"
 
 ---
 
+## Task 10: `carapace_swap_skin_resized` — native-size swap (FFI)
+
+Added after review feedback (Component 5 of the spec). A companion export that swaps the skin AND
+adopts a new host-provided surface pool at the incoming skin's native size, so skins render at their
+own resolution instead of being scaled to the first skin's pool. Reuses the Warming→Crossfading
+machinery; the outgoing skin is scaled into the new-size pool while it fades.
+
+**Files:**
+- Modify: `crates/carapace-ffi/src/queue.rs` (new `SendPool` + `Command::SwapSkinResized`)
+- Modify: `crates/carapace-ffi/src/render_thread.rs` (handler + pool rebuild; new gpu-test)
+- Modify: `crates/carapace-ffi/src/handle.rs` (new export)
+
+**Interfaces:**
+- Produces (C export): `carapace_swap_skin_resized(ptr, skin_dir, surfaces, surface_count, width, height, content_surface) -> CarapaceStatus`
+- Produces (Rust): `queue::SendPool { surfaces: Vec<*const c_void>, content: *const c_void }` (`unsafe impl Send`); `Command::SwapSkinResized { dir: PathBuf, pool: SendPool, w: u32, h: u32, reply: mpsc::Sender<CarapaceStatus> }`.
+
+- [ ] **Step 1: Write the failing gpu-test**
+
+Add to the `render_tests` module (`render_thread.rs`, macOS-gated, next to `swap_skin_applies_and_bad_dir_is_rejected`). It allocates a NEW pool at a different size via `test_support::make_bgra_iosurface`, calls the new export to swap to the `frame` skin (native 480×320), and asserts a new-pool surface renders non-blank at the new size.
+
+```rust
+    #[test]
+    fn swap_resized_adopts_new_pool_and_renders() {
+        use std::ffi::c_void;
+        let (w1, h1) = (300u32, 140u32);
+        let vt = crate::host::CarapaceHostVTable {
+            ctx: std::ptr::null_mut(), get_num: None, get_str: None, invoke: None,
+            frame_ready: None, row_count: None, get_row_str: None, get_row_num: None, invoke_arg: None,
+        };
+        let (handle, _old) = crate::handle::test_support::create_test_handle_pool_vt(w1, h1, 2, vt);
+        assert_eq!(unsafe { crate::handle::carapace_set_frame_rate(handle, 0) }, crate::guard::CarapaceStatus::Ok);
+
+        // A NEW pool at the `frame` skin's native size (480x320).
+        let (w2, h2) = (480u32, 320u32);
+        let new_surfaces: Vec<crate::render::IOSurfaceRef> = (0..2)
+            .map(|_| crate::handle::test_support::make_bgra_iosurface(w2 as usize, h2 as usize))
+            .collect();
+        let refs: Vec<*const c_void> = new_surfaces.iter().map(|&s| s as *const c_void).collect();
+        let dir = std::ffi::CString::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../carapace-demo/skins/frame")).unwrap();
+
+        assert_eq!(
+            unsafe {
+                crate::handle::carapace_swap_skin_resized(
+                    handle, dir.as_ptr(), refs.as_ptr(), refs.len() as u32, w2, h2, std::ptr::null(),
+                )
+            },
+            crate::guard::CarapaceStatus::Ok
+        );
+        // Drive frames so the warm/crossfade advances into the new pool.
+        crate::handle::test_support::wait_for(std::time::Duration::from_secs(10), || {
+            for i in 0..2 { unsafe { let _ = crate::handle::carapace_release_surface(handle, i); } }
+            unsafe {
+                crate::handle::test_support::iosurface_has_nonzero_pixels(new_surfaces[0], w2, h2)
+                    || crate::handle::test_support::iosurface_has_nonzero_pixels(new_surfaces[1], w2, h2)
+            }
+        });
+        assert!(unsafe {
+            crate::handle::test_support::iosurface_has_nonzero_pixels(new_surfaces[0], w2, h2)
+                || crate::handle::test_support::iosurface_has_nonzero_pixels(new_surfaces[1], w2, h2)
+        }, "the new-size pool must receive a rendered frame");
+
+        // A bad dir → ErrBadSkin, existing pool/skin intact (still renders on the OLD pool is not
+        // re-checked here; we only assert the error is synchronous and the handle survives).
+        let bad = std::ffi::CString::new("/no/such/skin").unwrap();
+        assert_eq!(
+            unsafe { crate::handle::carapace_swap_skin_resized(handle, bad.as_ptr(), refs.as_ptr(), refs.len() as u32, w2, h2, std::ptr::null()) },
+            crate::guard::CarapaceStatus::ErrBadSkin
+        );
+        unsafe { crate::handle::carapace_destroy(handle) };
+    }
+```
+
+- [ ] **Step 2: Run — verify fail**
+
+Run: `cargo test -p carapace-ffi swap_resized_adopts_new_pool_and_renders`
+Expected: FAIL — `carapace_swap_skin_resized` / `Command::SwapSkinResized` don't exist.
+
+- [ ] **Step 3: Add `SendPool` + `Command::SwapSkinResized` to `queue.rs`**
+
+At the top of `queue.rs` ensure `use std::ffi::c_void;` and `use std::path::PathBuf;` are present (add if missing). Add near the other queue types:
+
+```rust
+/// A host-owned surface pool crossing to the render thread for a resized swap. Same Send contract
+/// as `render_thread::SendSurfaces`: the pointers are caller-owned, valid for their `w`×`h` size,
+/// and outlive the engine until the next swap/destroy. Only the render thread touches them.
+pub struct SendPool {
+    /// The new pooled BGRA IOSurfaces (raw, caller-owned).
+    pub surfaces: Vec<*const c_void>,
+    /// The new content IOSurface for a `view{}` cutout, or null.
+    pub content: *const c_void,
+}
+// SAFETY: opaque host memory only touched by the render thread after the move; see contract above.
+unsafe impl Send for SendPool {}
+```
+
+Add the variant to `enum Command` (after `SwapSkin`):
+
+```rust
+    /// Load the skin at `dir` and swap it in on the render thread, replacing the surface pool with
+    /// `pool` at the new `w`×`h` size (native-size swap). `reply` reports `ErrBadSkin` synchronously.
+    SwapSkinResized {
+        dir: PathBuf,
+        pool: SendPool,
+        w: u32,
+        h: u32,
+        reply: std::sync::mpsc::Sender<CarapaceStatus>,
+    },
+```
+
+(`CarapaceStatus` is already imported in `queue.rs` for `SwapSkin`'s reply type.) The
+`drain_coalescing` helper only coalesces consecutive pointer moves, so `SwapSkinResized` passes
+through unchanged — no change needed there.
+
+- [ ] **Step 4: Add the render-thread handler**
+
+In `render_thread.rs`, in the `apply()` `match cmd` (right after the `Command::SwapSkin` arm), add:
+
+```rust
+            Command::SwapSkinResized { dir, pool, w, h, reply } => {
+                let status = match carapace::skin::load_dir(&dir) {
+                    Ok((manifest, source)) => {
+                        match Engine::new(
+                            Box::new(FfiHost::new(self.vtable)),
+                            carapace::vocab::VocabRegistry::base(),
+                            source,
+                        ) {
+                            Ok(incoming) => {
+                                // Rebuild the present pool at the new size from the host's surfaces.
+                                let new_surfaces: Vec<IOSurfaceRef> =
+                                    pool.surfaces.into_iter().map(|p| p as IOSurfaceRef).collect();
+                                let mut new_presents = Vec::with_capacity(new_surfaces.len());
+                                let mut tier = Tier::Shared;
+                                for &s in &new_surfaces {
+                                    let (p, t) = build_present(&self.gpu, s, w, h);
+                                    if t == Tier::Readback {
+                                        tier = Tier::Readback;
+                                    }
+                                    new_presents.push(p);
+                                }
+                                let new_content = build_content(&self.gpu, pool.content as IOSurfaceRef);
+                                let n = new_surfaces.len();
+                                // Atomic switch: old Presents drop (our wgpu wrappers freed); the host
+                                // owns + frees the old IOSurfaces after this call returns.
+                                self.surfaces = new_surfaces;
+                                self.presents = new_presents;
+                                self.held = vec![false; n];
+                                self.content = new_content;
+                                self.tier = tier;
+                                self.w = w;
+                                self.h = h;
+                                self.tex_a = new_offscreen(&self.gpu.device, w, h);
+                                self.tex_b = new_offscreen(&self.gpu.device, w, h);
+                                self.next_surface = 0;
+                                // Warm the incoming skin, then crossfade — now in the new pool.
+                                self.swap = SwapState::Warming { incoming, transition: manifest.transition };
+                                *invalidated = true;
+                                CarapaceStatus::Ok
+                            }
+                            Err(e) => {
+                                set_last_error(&format!("swap_skin_resized: engine init failed: {e:?}"));
+                                CarapaceStatus::ErrBadSkin
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        set_last_error(&format!("swap_skin_resized: load failed: {e:?}"));
+                        CarapaceStatus::ErrBadSkin
+                    }
+                };
+                let _ = reply.send(status);
+            }
+```
+
+All referenced items are already imported/used by earlier tasks: `Engine`, `FfiHost`,
+`carapace::vocab::VocabRegistry`, `IOSurfaceRef`, `build_present`, `build_content`, `Tier`,
+`new_offscreen`, `SwapState`. Import `crate::queue::SendPool`/`Command::SwapSkinResized` alongside the
+existing `Command` import (the `Command` enum is already imported; the new variant comes with it).
+
+- [ ] **Step 5: Add the C export to `handle.rs`**
+
+After `carapace_swap_skin` (around line 332), add:
+
+```rust
+/// Swap the running skin to the one at `skin_dir` AND replace the surface pool with a new one at
+/// `width`×`height` (the incoming skin's native size). The incoming skin renders at native size; the
+/// outgoing skin is scaled into the new pool while it crossfades out. Synchronous: blocks until the
+/// render thread has built the new skin + pool and begun the transition, so a bad skin dir is
+/// reported as `ErrBadSkin` with the current skin + pool left intact. On `Ok`, the caller may free
+/// the OLD surfaces and must keep the NEW ones alive until the next swap or `carapace_destroy`.
+///
+/// # Safety
+/// `ptr` must come from `carapace_create` and not have been destroyed. `skin_dir` must be a valid
+/// NUL-terminated UTF-8 path. `surfaces` must point to `surface_count` (>= 1) live `width`×`height`
+/// BGRA IOSurfaces that outlive the engine until the next swap/destroy. `content_surface` may be null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn carapace_swap_skin_resized(
+    ptr: *mut CarapaceEngine,
+    skin_dir: *const c_char,
+    surfaces: *const *const c_void,
+    surface_count: u32,
+    width: u32,
+    height: u32,
+    content_surface: *const c_void,
+) -> CarapaceStatus {
+    let Some(e) = (unsafe { ptr.as_ref() }) else {
+        return CarapaceStatus::ErrNullArg;
+    };
+    if skin_dir.is_null() {
+        set_last_error("carapace_swap_skin_resized: null skin_dir");
+        return CarapaceStatus::ErrNullArg;
+    }
+    if surfaces.is_null() || surface_count == 0 {
+        set_last_error("carapace_swap_skin_resized: surfaces null or surface_count == 0");
+        return CarapaceStatus::ErrNullArg;
+    }
+    if e.poisoned.load(std::sync::atomic::Ordering::Acquire) {
+        return e.enter_poisoned();
+    }
+    let dir = match unsafe { CStr::from_ptr(skin_dir) }.to_str() {
+        Ok(s) => std::path::PathBuf::from(s),
+        Err(_) => {
+            set_last_error("carapace_swap_skin_resized: skin_dir is not valid UTF-8");
+            return CarapaceStatus::ErrNullArg;
+        }
+    };
+    let surfaces_vec: Vec<*const c_void> = (0..surface_count as usize)
+        .map(|i| unsafe { *surfaces.add(i) } as *const c_void)
+        .collect();
+    let pool = crate::queue::SendPool {
+        surfaces: surfaces_vec,
+        content: content_surface,
+    };
+    let (reply_tx, reply_rx) = std::sync::mpsc::channel::<CarapaceStatus>();
+    if e.tx
+        .send(Command::SwapSkinResized { dir, pool, w: width, h: height, reply: reply_tx })
+        .is_err()
+    {
+        return e.enter_poisoned();
+    }
+    reply_rx.recv().unwrap_or_else(|_| e.enter_poisoned())
+}
+```
+
+`c_void` is already imported in `handle.rs` (`use std::ffi::{CStr, c_char, c_void};`).
+
+- [ ] **Step 6: Run the gpu-test — verify pass**
+
+```bash
+cargo test -p carapace-ffi swap_resized_adopts_new_pool_and_renders
+cargo test -p carapace-ffi --features gpu-tests
+cargo clippy -p carapace-ffi --all-targets --features gpu-tests -- -D warnings
+```
+Expected: the new test passes; the full gpu suite (incl. all prior swap/crossfade tests) stays green; clippy clean.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add crates/carapace-ffi/src/queue.rs crates/carapace-ffi/src/render_thread.rs crates/carapace-ffi/src/handle.rs
+git commit -m "feat(ffi): carapace_swap_skin_resized — native-size swap with new pool"
+```
+
+---
+
+## Task 11: ABI 3.1 → 3.2 + header regen (adds the new export)
+
+Same mechanics as Task 6, one minor higher, because Task 10 added an export.
+
+**Files:** `src/guard.rs`, `src/lib.rs`, `include/carapace.h`, `tests/header.rs`, `showcase/Sources/CCarapace/include/carapace.h`.
+
+- [ ] **Step 1: Update the ABI version test in `lib.rs`**
+
+```rust
+    #[test]
+    fn abi_version_is_v3_2() {
+        assert_eq!(carapace_abi_version(), (3 << 16) | 2);
+        assert_eq!(CARAPACE_ABI_MAJOR, 3);
+        assert_eq!(CARAPACE_ABI_MINOR, 2);
+    }
+```
+(Rename the existing `abi_version_is_v3_1` test to this.)
+
+- [ ] **Step 2: Run — verify fail**
+
+Run: `cargo test -p carapace-ffi abi_version_is_v3_2` → FAIL (minor still 1).
+
+- [ ] **Step 3: Bump the constant** — `guard.rs`: `pub const CARAPACE_ABI_MINOR: u32 = 2;`
+
+- [ ] **Step 4: Run — verify pass** — `cargo test -p carapace-ffi abi_version_is_v3_2` → PASS.
+
+- [ ] **Step 5: Regenerate the header (cbindgen is a LIBRARY here, not a CLI)**
+
+```bash
+cargo test -p carapace-ffi --test header regenerate_header -- --ignored --exact
+cargo test -p carapace-ffi --test header header_is_fresh
+```
+Inspect `git diff crates/carapace-ffi/include/carapace.h`: it should show (a) the `CARAPACE_ABI_MINOR` bump AND (b) the new `carapace_swap_skin_resized` prototype. No OTHER signature changes. Then copy the regenerated header over the showcase mirror:
+
+```bash
+cp crates/carapace-ffi/include/carapace.h showcase/Sources/CCarapace/include/carapace.h
+```
+Confirm the mirror diff shows only the version bump + the new prototype.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add crates/carapace-ffi/src/guard.rs crates/carapace-ffi/src/lib.rs \
+        crates/carapace-ffi/include/carapace.h crates/carapace-ffi/tests/header.rs \
+        showcase/Sources/CCarapace/include/carapace.h
+git commit -m "chore(ffi): bump ABI to 3.2 (carapace_swap_skin_resized)"
+```
+
+---
+
+## Task 12: Showcase — native-size live swap (replaces Task 8's fixed-pool approach)
+
+Rewire the showcase to use `carapace_swap_skin_resized`: on skin-cycle, allocate a new pool at the
+incoming skin's native size, swap into it, switch the frame-sink's surfaces, and resize the window at
+swap start. This supersedes Task 8's `swapSkin` (crossfade-within-initial-pool + post-fade resize).
+
+**Files:**
+- Modify: `showcase/Sources/Showcase/CarapaceBridge.swift` (a `swapResized(...)` method + expose/refresh the pool)
+- Modify: `showcase/Sources/Showcase/App.swift` (`swapSkin` rewritten; window resize at swap start)
+
+**Interfaces:**
+- Consumes: `carapace_swap_skin_resized` (Task 10), `SkinManifest.canvas(atDir:fallback:)`, `SkinManifest.durationMs(atDir:)`, the existing `ditherSurface(forDir:width:height:)` in App.swift (returns a Studio content surface or nil).
+
+- [ ] **Step 1: Add `swapResized` to `CarapaceBridge`**
+
+Add a method that allocates a fresh pool at the new size (mirroring `init`'s pool creation), calls the C export, and — on success — updates `self`'s surfaces and the global `frameSink.surfaces` so future `frame_ready` indices resolve to the new pool. Guard the `frameSink.surfaces` write with the same synchronization the codebase already uses for cross-thread frame-sink state (a lock or `DispatchQueue`); at minimum, set `frameSink.surfaces` to the new pool and keep a strong reference in `self` so the surfaces outlive the swap.
+
+```swift
+    /// Live-swap to `skinDir` AND adopt a new pool at `width`×`height` (the incoming skin's native
+    /// size). Returns true on success; on failure the current skin+pool are unchanged.
+    func swapResized(skinDir: String, width: Int, height: Int, contentSurface: IOSurface?) -> Bool {
+        guard let e = engine else { return false }
+        var pool: [IOSurface] = []
+        for _ in 0..<3 {
+            guard let s = IOSurface(properties: [
+                .width: width, .height: height, .bytesPerElement: 4,
+                .pixelFormat: 0x42475241 as UInt32,
+            ]) else { return false }
+            pool.append(s)
+        }
+        let refs: [Unmanaged<IOSurfaceRef>?] = pool.map { Unmanaged.passUnretained($0 as IOSurfaceRef) }
+        let content = contentSurface.map { Unmanaged.passUnretained($0 as IOSurfaceRef) } ?? nil
+        let ok = refs.withUnsafeBufferPointer { buf -> Bool in
+            skinDir.withCString { dir -> Bool in
+                carapace_swap_skin_resized(e, dir, buf.baseAddress, UInt32(buf.count),
+                                           UInt32(width), UInt32(height), content) == Ok
+            }
+        }
+        guard ok else { return false }
+        // The C call blocked until the render thread switched pools, so no old-pool frame will fire
+        // after this. Adopt the new pool for future frame_ready lookups.
+        self.surfaces = pool
+        self.width = width
+        self.height = height
+        frameSink.surfaces = pool
+        return true
+    }
+```
+
+Note: `surfaces`/`width`/`height` are currently `let` on `CarapaceBridge` — change them to `private(set) var` so `swapResized` can update them. Keep the old pool referenced only until this returns (ARC frees it after `frameSink.surfaces`/`self.surfaces` are reassigned). If `frameSink.surfaces` needs synchronization to avoid a torn read on the render thread's `onFrameReady`, wrap the read+write in the codebase's existing frame-sink locking pattern (check `MusicHost`/`FrameSink` for the established approach); a brief `objc_sync_enter/exit` around both sides is acceptable if no pattern exists.
+
+- [ ] **Step 2: Rewrite `swapSkin` in `App.swift`**
+
+Replace the Task-8 `swapSkin(dir:)` body with the native-size version: compute the incoming skin's native pixel size, build its content surface (Studio only), call `bridge.swapResized`, and on success resize the window at swap start (top-left anchored). Fall back to `applySkin` on failure.
+
+```swift
+    /// Live-swap to `dir` at the incoming skin's NATIVE size: the engine adopts a new pool sized to
+    /// the new skin, crossfades the incoming skin in at native resolution (the outgoing skin scales
+    /// out during the fade), and the window resizes to the new size at swap start.
+    private func swapSkin(dir: String) {
+        let (cw, ch) = SkinManifest.canvas(atDir: dir, fallback: (420, 660))
+        let scale = Int((NSScreen.main?.backingScaleFactor ?? 2).rounded())
+        let content = ditherSurface(forDir: dir, width: cw * scale, height: ch * scale)
+        guard let b = bridge,
+              b.swapResized(skinDir: dir, width: cw * scale, height: ch * scale, contentSurface: content)
+        else {
+            applySkin(dir: dir) // fall back to full rebuild if the resized swap is rejected
+            return
+        }
+        positionTrafficLights(forDir: dir)
+        // Resize the borderless window to the new native size at swap start (top-left anchored); the
+        // new pool is already native size, so the incoming skin is pixel-native as it fades in.
+        let window = self.window!
+        let topY = window.frame.origin.y + window.frame.height
+        var frame = window.frame
+        frame.size = NSSize(width: cw, height: ch)
+        frame.origin.y = topY - CGFloat(ch)
+        window.setFrame(frame, display: true)
+        view.frame = NSRect(x: 0, y: 0, width: cw, height: ch)
+        view.canvasW = Double(cw)
+        view.canvasH = Double(ch)
+    }
+```
+
+Note: `ditherSurface(forDir:width:height:)` already exists (App.swift ~139) and returns a Studio-only content surface (nil otherwise), and it starts/stops the dither loop — reusing it here provisions a correctly-sized dither surface for the incoming skin, resolving Task 8's deferred content-surface gap. Keep `cycleSkin()` calling `swapSkin(dir:)` (unchanged from Task 8). Leave the initial `applySkin` in setup unchanged. If `view.frame`/`canvasW` fields differ, match the names `applySkin` uses.
+
+- [ ] **Step 3: Build + verify**
+
+```bash
+swift build --package-path showcase
+swift test --package-path showcase
+```
+Expected: clean build; existing tests green. Then a manual launch check as in Task 8 (see the manual verification below) — this task's real proof is visual.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add showcase/Sources/Showcase/CarapaceBridge.swift showcase/Sources/Showcase/App.swift
+git commit -m "feat(showcase): native-size live swap via carapace_swap_skin_resized"
+```
+
+---
+
 ## Final verification (before opening the PR)
 
 Run the full gate the CI enforces:
@@ -1214,8 +1630,10 @@ Expected: all green. Then open a PR from `carapace-ffi-v4-seamless-swap` into `m
 - Skin-authored `[transition]` (Component 1) → Task 1.
 - Swap state machine `Idle/Warming/Crossfading` (Component 2) → Tasks 4, 5.
 - Crossfade blend pass, no engine diff (Component 3) → Task 2.
-- Showcase live-swap + resize-after-fade (Component 4) → Tasks 7, 8.
-- ABI unchanged, MINOR 3.0 → 3.1 → Task 6.
+- Showcase live-swap (Component 4) → Tasks 7, 8 — but the resize-after-fade approach is SUPERSEDED by
+  Component 5 / Task 12 (native-size, resize-at-swap-start). Task 8's `swapSkin` is replaced by Task 12.
+- Native-size swaps `carapace_swap_skin_resized` (Component 5) → Tasks 10 (FFI), 11 (ABI 3.2), 12 (showcase).
+- ABI: manifest capability MINOR 3.0 → 3.1 → Task 6; additive export 3.1 → 3.2 → Task 11.
 - Default crossfade 250 for existing skins; `cut` opt-in → Tasks 1, 5.
 - Inline warm, no worker thread → Task 5 (`warm_incoming`).
 - Pointer/hit-test canvas flips at crossfade start → Task 5, Step 5.
