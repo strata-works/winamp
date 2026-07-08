@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import QuartzCore // CAMediaTimingFunction for the animated-resize transition
 import UniformTypeIdentifiers
 
 @main
@@ -78,6 +79,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             } else {
                 b.isEnabled = false
             }
+            // Never let AppKit's autoresize move these: `swapSkin` animates their origin explicitly in
+            // lockstep with the window resize, and a flexible margin would fight that animation.
+            b.autoresizingMask = []
             view.addSubview(b)
             trafficLightButtons.append(b)
         }
@@ -158,7 +162,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Live-swap to `dir` at the incoming skin's NATIVE size: the engine adopts a new pool sized to
     /// the new skin, crossfades the incoming skin in at native resolution (the outgoing skin scales
-    /// out during the fade), and the window resizes to the new size at swap start.
+    /// out during the fade), and the window is ANIMATED to the new size over the crossfade window so
+    /// the geometry morphs in lockstep with the dissolve instead of snapping in one frame.
     private func swapSkin(dir: String) {
         let (cw, ch) = SkinManifest.canvas(atDir: dir, fallback: (420, 660))
         let scale = Int((NSScreen.main?.backingScaleFactor ?? 2).rounded())
@@ -185,26 +190,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // swapResized returned Ok → the render thread has switched off the outgoing content surface,
         // so releasing the outgoing dither now unmaps it strictly AFTER the engine stopped reading it.
         withExtendedLifetime(outgoingDither) {}
-        // Resize the borderless window to the new native size at swap start (top-left anchored); the
-        // new pool is already native size, so the incoming skin is pixel-native as it fades in.
+        // Resize the borderless window to the new native size (top-left anchored). We ANIMATE the
+        // resize over the same window the engine crossfades in, rather than snapping in one frame:
+        // the old code hard-cut the window to the new size at swap start while the GPU dissolve ran
+        // for another ~250 ms, so a hard geometry jump sat next to a soft fade — the transition's
+        // dominant "jitter". Animating setFrame over the crossfade duration makes the geometry morph
+        // in lockstep with the dissolve. The new pool is already native size, so the layer's
+        // `.resizeAspect` gravity scales that native surface into the interpolating frame each step.
         let window = self.window!
         let topY = window.frame.origin.y + window.frame.height
         var frame = window.frame
         frame.size = NSSize(width: cw, height: ch)
         frame.origin.y = topY - CGFloat(ch)
-        window.setFrame(frame, display: true)
-        view.frame = NSRect(x: 0, y: 0, width: cw, height: ch)
+        // Update the logical canvas immediately so hit-testing maps against the new skin from frame 1;
+        // the view (contentView) autoresizes with the window as the animation drives it.
         view.canvasW = Double(cw)
         view.canvasH = Double(ch)
-        // Re-place the traffic lights AFTER the view resizes: their y is derived from
-        // `view.bounds.height`, so positioning before the resize uses the OLD skin's height and drops
-        // them onto the wrong spot (matches `applySkin`'s ordering).
-        positionTrafficLights(forDir: dir)
+        // Traffic lights slide to the new skin's reserved spot in lockstep. Their target y derives
+        // from the FINAL view height (ch), so they land correctly whatever the interpolating height is
+        // mid-morph — matching `positionTrafficLights`' math but animated instead of snapped.
+        let o = trafficLightOrigin(forDir: dir)
+        let finalH = CGFloat(ch)
+        NSAnimationContext.runAnimationGroup { ctx in
+            // Match the engine's crossfade window: the incoming skin's declared `[transition]`
+            // duration_ms (default 250 ms). All showcase skins use the default today.
+            ctx.duration = Double(SkinManifest.durationMs(atDir: dir)) / 1000.0
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            window.animator().setFrame(frame, display: true)
+            for (i, b) in trafficLightButtons.enumerated() {
+                b.animator().setFrameOrigin(NSPoint(x: o.x + CGFloat(i) * 20,
+                                                    y: finalH - o.y - b.frame.height))
+            }
+        }
     }
 
     private func cycleSkin() {
         skinIndex = (skinIndex + 1) % skinDirs.count
-        swapSkin(dir: skinDirs[skinIndex]) // live crossfade; window settles to new size after the fade
+        swapSkin(dir: skinDirs[skinIndex]) // live crossfade; window morphs to the new size during the fade
     }
 
     /// Minimal main menu so ⌘O (Open Music…) works and is discoverable. The skin window itself
