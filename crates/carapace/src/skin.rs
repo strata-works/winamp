@@ -6,9 +6,49 @@ use crate::command::SkinSource;
 
 const SUPPORTED_SCHEMA: u32 = 1;
 const SUPPORTED_ENGINE: &str = "^0.1";
+const MAX_TRANSITION_MS: u32 = 5000;
 
 fn default_asset_dir() -> String {
     "assets".to_string()
+}
+
+fn default_transition_kind() -> TransitionKind {
+    TransitionKind::Crossfade
+}
+fn default_transition_ms() -> u32 {
+    250
+}
+
+/// How a skin dissolves in when another skin is swapped to it. Declared by the *incoming* skin's
+/// `skin.toml` `[transition]` table. Absent table → [`Transition::default`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransitionKind {
+    /// Instant replacement (still stall-free — the load is warmed off the presented frame).
+    Cut,
+    /// Alpha dissolve from the outgoing skin to this one over `duration_ms`.
+    Crossfade,
+}
+
+/// The incoming skin's swap transition. An absent `[transition]` table yields the default
+/// (`Crossfade`, 250 ms). `duration_ms` is clamped to a sane ceiling by [`load_dir`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub struct Transition {
+    /// The dissolve style.
+    #[serde(default = "default_transition_kind")]
+    pub kind: TransitionKind,
+    /// Dissolve duration in milliseconds (clamped to 5000 on load).
+    #[serde(default = "default_transition_ms")]
+    pub duration_ms: u32,
+}
+
+impl Default for Transition {
+    fn default() -> Self {
+        Self {
+            kind: default_transition_kind(),
+            duration_ms: default_transition_ms(),
+        }
+    }
 }
 
 /// The skin's design-resolution size, in logical pixels.
@@ -47,6 +87,9 @@ pub struct Manifest {
     /// Maximum window size in logical pixels; `[width, height]` in the TOML.
     #[serde(default)]
     pub max_size: Option<(u32, u32)>,
+    /// How this skin dissolves in when swapped to. Defaulted; see [`Transition`].
+    #[serde(default)]
+    pub transition: Transition,
 }
 
 /// Errors from loading or validating a skin directory via [`load_dir`].
@@ -86,13 +129,14 @@ impl From<crate::asset::AssetError> for SkinError {
 /// `asset_dir` (default `assets/`, recursively indexed by relative path;
 /// symlinks are skipped to prevent sandbox escape).
 pub fn load_dir(dir: &Path) -> Result<(Manifest, SkinSource), SkinError> {
-    let manifest: Manifest = toml::from_str(&std::fs::read_to_string(dir.join("skin.toml"))?)?;
+    let mut manifest: Manifest = toml::from_str(&std::fs::read_to_string(dir.join("skin.toml"))?)?;
     if manifest.schema != SUPPORTED_SCHEMA {
         return Err(SkinError::UnsupportedSchema(manifest.schema));
     }
     if manifest.engine != SUPPORTED_ENGINE {
         return Err(SkinError::EngineIncompat(manifest.engine.clone()));
     }
+    manifest.transition.duration_ms = manifest.transition.duration_ms.min(MAX_TRANSITION_MS);
     let lua_src = std::fs::read_to_string(dir.join(&manifest.entry))?;
     let canvas = (manifest.canvas.width, manifest.canvas.height);
     let assets = std::rc::Rc::new(crate::asset::AssetResolver::resolve(
@@ -145,6 +189,36 @@ mod tests {
             load_dir(dir.path()),
             Err(SkinError::EngineIncompat(_))
         ));
+    }
+
+    #[test]
+    fn transition_defaults_to_crossfade_250_when_absent() {
+        let (m, _) = load_dir(&skins_dir().join("ok")).unwrap();
+        assert_eq!(m.transition.kind, TransitionKind::Crossfade);
+        assert_eq!(m.transition.duration_ms, 250);
+    }
+
+    #[test]
+    fn transition_parses_explicit_cut() {
+        let dir = tempdir_with(
+            "schema=1\nid='x'\nname='x'\nengine='^0.1'\ncanvas={width=1,height=1}\nentry='s.lua'\n\
+             [transition]\nkind='cut'\nduration_ms=100",
+            "return {}",
+        );
+        let (m, _) = load_dir(dir.path()).unwrap();
+        assert_eq!(m.transition.kind, TransitionKind::Cut);
+        assert_eq!(m.transition.duration_ms, 100);
+    }
+
+    #[test]
+    fn transition_duration_is_clamped() {
+        let dir = tempdir_with(
+            "schema=1\nid='x'\nname='x'\nengine='^0.1'\ncanvas={width=1,height=1}\nentry='s.lua'\n\
+             [transition]\nkind='crossfade'\nduration_ms=999999",
+            "return {}",
+        );
+        let (m, _) = load_dir(dir.path()).unwrap();
+        assert_eq!(m.transition.duration_ms, 5000);
     }
 
     // Minimal temp-dir helper (no external crate).
