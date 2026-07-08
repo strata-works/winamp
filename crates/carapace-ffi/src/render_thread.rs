@@ -509,6 +509,74 @@ impl RenderThread {
                 };
                 let _ = reply.send(status);
             }
+            Command::SwapSkinResized {
+                dir,
+                pool,
+                w,
+                h,
+                reply,
+            } => {
+                let status = match carapace::skin::load_dir(&dir) {
+                    Ok((manifest, source)) => {
+                        match Engine::new(
+                            Box::new(FfiHost::new(self.vtable)),
+                            carapace::vocab::VocabRegistry::base(),
+                            source,
+                        ) {
+                            Ok(incoming) => {
+                                // Rebuild the present pool at the new size from the host's surfaces.
+                                let new_surfaces: Vec<IOSurfaceRef> = pool
+                                    .surfaces
+                                    .into_iter()
+                                    .map(|p| p as IOSurfaceRef)
+                                    .collect();
+                                let mut new_presents = Vec::with_capacity(new_surfaces.len());
+                                let mut tier = Tier::Shared;
+                                for &s in &new_surfaces {
+                                    let (p, t) = build_present(&self.gpu, s, w, h);
+                                    if t == Tier::Readback {
+                                        tier = Tier::Readback;
+                                    }
+                                    new_presents.push(p);
+                                }
+                                let new_content =
+                                    build_content(&self.gpu, pool.content as IOSurfaceRef);
+                                let n = new_surfaces.len();
+                                // Atomic switch: old Presents drop (our wgpu wrappers freed); the host
+                                // owns + frees the old IOSurfaces after this call returns.
+                                self.surfaces = new_surfaces;
+                                self.presents = new_presents;
+                                self.held = vec![false; n];
+                                self.content = new_content;
+                                self.tier = tier;
+                                self.w = w;
+                                self.h = h;
+                                self.tex_a = new_offscreen(&self.gpu.device, w, h);
+                                self.tex_b = new_offscreen(&self.gpu.device, w, h);
+                                self.next_surface = 0;
+                                // Warm the incoming skin, then crossfade — now in the new pool.
+                                self.swap = SwapState::Warming {
+                                    incoming,
+                                    transition: manifest.transition,
+                                };
+                                *invalidated = true;
+                                CarapaceStatus::Ok
+                            }
+                            Err(e) => {
+                                set_last_error(&format!(
+                                    "swap_skin_resized: engine init failed: {e:?}"
+                                ));
+                                CarapaceStatus::ErrBadSkin
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        set_last_error(&format!("swap_skin_resized: load failed: {e:?}"));
+                        CarapaceStatus::ErrBadSkin
+                    }
+                };
+                let _ = reply.send(status);
+            }
             #[cfg(test)]
             Command::ForcePanic => {
                 self.force_panic = true;
@@ -860,6 +928,101 @@ mod render_tests {
         let bad = std::ffi::CString::new("/no/such/skin/dir").unwrap();
         assert_eq!(
             unsafe { crate::handle::carapace_swap_skin(handle, bad.as_ptr()) },
+            crate::guard::CarapaceStatus::ErrBadSkin
+        );
+        unsafe { crate::handle::carapace_destroy(handle) };
+    }
+
+    #[test]
+    fn swap_resized_adopts_new_pool_and_renders() {
+        use std::ffi::c_void;
+        let (w1, h1) = (300u32, 140u32);
+        let vt = crate::host::CarapaceHostVTable {
+            ctx: std::ptr::null_mut(),
+            get_num: None,
+            get_str: None,
+            invoke: None,
+            frame_ready: None,
+            row_count: None,
+            get_row_str: None,
+            get_row_num: None,
+            invoke_arg: None,
+        };
+        let (handle, _old) = crate::handle::test_support::create_test_handle_pool_vt(w1, h1, 2, vt);
+        assert_eq!(
+            unsafe { crate::handle::carapace_set_frame_rate(handle, 0) },
+            crate::guard::CarapaceStatus::Ok
+        );
+
+        // A NEW pool at the `frame` skin's native size (480x320).
+        let (w2, h2) = (480u32, 320u32);
+        let new_surfaces: Vec<crate::render::IOSurfaceRef> = (0..2)
+            .map(|_| crate::handle::test_support::make_bgra_iosurface(w2 as usize, h2 as usize))
+            .collect();
+        let refs: Vec<*const c_void> = new_surfaces.iter().map(|&s| s as *const c_void).collect();
+        let dir = std::ffi::CString::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../carapace-demo/skins/frame"
+        ))
+        .unwrap();
+
+        assert_eq!(
+            unsafe {
+                crate::handle::carapace_swap_skin_resized(
+                    handle,
+                    dir.as_ptr(),
+                    refs.as_ptr(),
+                    refs.len() as u32,
+                    w2,
+                    h2,
+                    std::ptr::null(),
+                )
+            },
+            crate::guard::CarapaceStatus::Ok
+        );
+        // Drive frames so the warm/crossfade advances into the new pool.
+        crate::handle::test_support::wait_for(std::time::Duration::from_secs(10), || {
+            for i in 0..2 {
+                unsafe {
+                    let _ = crate::handle::carapace_release_surface(handle, i);
+                }
+            }
+            unsafe {
+                crate::handle::test_support::iosurface_has_nonzero_pixels(new_surfaces[0], w2, h2)
+                    || crate::handle::test_support::iosurface_has_nonzero_pixels(
+                        new_surfaces[1],
+                        w2,
+                        h2,
+                    )
+            }
+        });
+        assert!(
+            unsafe {
+                crate::handle::test_support::iosurface_has_nonzero_pixels(new_surfaces[0], w2, h2)
+                    || crate::handle::test_support::iosurface_has_nonzero_pixels(
+                        new_surfaces[1],
+                        w2,
+                        h2,
+                    )
+            },
+            "the new-size pool must receive a rendered frame"
+        );
+
+        // A bad dir → ErrBadSkin, existing pool/skin intact (still renders on the OLD pool is not
+        // re-checked here; we only assert the error is synchronous and the handle survives).
+        let bad = std::ffi::CString::new("/no/such/skin").unwrap();
+        assert_eq!(
+            unsafe {
+                crate::handle::carapace_swap_skin_resized(
+                    handle,
+                    bad.as_ptr(),
+                    refs.as_ptr(),
+                    refs.len() as u32,
+                    w2,
+                    h2,
+                    std::ptr::null(),
+                )
+            },
             crate::guard::CarapaceStatus::ErrBadSkin
         );
         unsafe { crate::handle::carapace_destroy(handle) };

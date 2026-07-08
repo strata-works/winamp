@@ -331,6 +331,71 @@ pub unsafe extern "C" fn carapace_swap_skin(
     reply_rx.recv().unwrap_or_else(|_| e.enter_poisoned())
 }
 
+/// Swap the running skin to the one at `skin_dir` AND replace the surface pool with a new one at
+/// `width`×`height` (the incoming skin's native size). The incoming skin renders at native size; the
+/// outgoing skin is scaled into the new pool while it crossfades out. Synchronous: blocks until the
+/// render thread has built the new skin + pool and begun the transition, so a bad skin dir is
+/// reported as `ErrBadSkin` with the current skin + pool left intact. On `Ok`, the caller may free
+/// the OLD surfaces and must keep the NEW ones alive until the next swap or `carapace_destroy`.
+///
+/// # Safety
+/// `ptr` must come from `carapace_create` and not have been destroyed. `skin_dir` must be a valid
+/// NUL-terminated UTF-8 path. `surfaces` must point to `surface_count` (>= 1) live `width`×`height`
+/// BGRA IOSurfaces that outlive the engine until the next swap/destroy. `content_surface` may be null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn carapace_swap_skin_resized(
+    ptr: *mut CarapaceEngine,
+    skin_dir: *const c_char,
+    surfaces: *const *const c_void,
+    surface_count: u32,
+    width: u32,
+    height: u32,
+    content_surface: *const c_void,
+) -> CarapaceStatus {
+    let Some(e) = (unsafe { ptr.as_ref() }) else {
+        return CarapaceStatus::ErrNullArg;
+    };
+    if skin_dir.is_null() {
+        set_last_error("carapace_swap_skin_resized: null skin_dir");
+        return CarapaceStatus::ErrNullArg;
+    }
+    if surfaces.is_null() || surface_count == 0 {
+        set_last_error("carapace_swap_skin_resized: surfaces null or surface_count == 0");
+        return CarapaceStatus::ErrNullArg;
+    }
+    if e.poisoned.load(std::sync::atomic::Ordering::Acquire) {
+        return e.enter_poisoned();
+    }
+    let dir = match unsafe { CStr::from_ptr(skin_dir) }.to_str() {
+        Ok(s) => std::path::PathBuf::from(s),
+        Err(_) => {
+            set_last_error("carapace_swap_skin_resized: skin_dir is not valid UTF-8");
+            return CarapaceStatus::ErrNullArg;
+        }
+    };
+    let surfaces_vec: Vec<*const c_void> = (0..surface_count as usize)
+        .map(|i| unsafe { *surfaces.add(i) })
+        .collect();
+    let pool = crate::queue::SendPool {
+        surfaces: surfaces_vec,
+        content: content_surface,
+    };
+    let (reply_tx, reply_rx) = std::sync::mpsc::channel::<CarapaceStatus>();
+    if e.tx
+        .send(Command::SwapSkinResized {
+            dir,
+            pool,
+            w: width,
+            h: height,
+            reply: reply_tx,
+        })
+        .is_err()
+    {
+        return e.enter_poisoned();
+    }
+    reply_rx.recv().unwrap_or_else(|_| e.enter_poisoned())
+}
+
 /// Pointer event kind, mirrored 1:1 by the Rust `queue::PointerKind` the render thread consumes.
 #[repr(i32)]
 #[derive(Clone, Copy, PartialEq, Eq)]
