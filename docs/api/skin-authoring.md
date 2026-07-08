@@ -311,6 +311,7 @@ Schema: `Manifest` (`skin.rs:20-39`), loaded/validated by `load_dir` (`skin.rs:6
 | `resizable` | bool | no | resizable window (frame-skin archetype); default `false` |
 | `min_size` | `[w,h]` | no | minimum window size (logical px) |
 | `max_size` | `[w,h]` | no | maximum window size (logical px) |
+| `transition` | `{kind,duration_ms}` | no | swap-in dissolve; see [below](#the-transition-table) |
 
 ```toml
 # fixed-size skin
@@ -333,6 +334,37 @@ canvas = { width = 480, height = 320 }
 resizable = true
 min_size = [320, 220]
 asset_dir = "assets"
+```
+
+### The `[transition]` table
+
+Schema: `Transition`/`TransitionKind` (`skin.rs:26-52`). Declares how *this* skin dissolves in when a host swaps another skin *to* it (via `carapace_swap_skin`/`carapace_swap_skin_resized`) — it's a property of the incoming skin, not the outgoing one.
+
+| field | type | required | meaning |
+|---|---|---|---|
+| `kind` | `"cut"` \| `"crossfade"` | no | dissolve style; default `"crossfade"` |
+| `duration_ms` | u32 | no | dissolve duration in ms; default `250`, clamped to `≤ 5000` on load |
+
+An absent `[transition]` table is equivalent to `{ kind = "crossfade", duration_ms = 250 }`. `kind = "cut"` swaps instantly — still stall-free, since the incoming skin is warmed off the render thread before it's presented.
+
+```toml
+# explicit fast cut
+schema = 1
+id = "terminal"
+name = "Terminal"
+engine = "^0.1"
+canvas = { width = 480, height = 320 }
+entry = "skin.lua"
+
+[transition]
+kind = "cut"
+```
+
+```toml
+# explicit slow crossfade (clamped to 5000 if higher)
+[transition]
+kind = "crossfade"
+duration_ms = 600
 ```
 
 ## The Lua sandbox
