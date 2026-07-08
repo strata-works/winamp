@@ -22,3 +22,12 @@ import Testing
     let c = SkinManifest.canvas(atDir: "/no/such/dir", fallback: (420, 660))
     #expect(c == (420, 660))
 }
+
+@Test func parses_duration_ms() {
+    let toml = "[transition]\nkind = \"crossfade\"\nduration_ms = 300\n"
+    #expect(SkinManifest.parseDurationMs(fromTOML: toml) == 300)
+}
+
+@Test func missing_duration_ms_is_nil() {
+    #expect(SkinManifest.parseDurationMs(fromTOML: "canvas = { width = 1, height = 1 }") == nil)
+}
