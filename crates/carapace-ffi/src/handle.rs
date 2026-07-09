@@ -403,7 +403,6 @@ pub unsafe extern "C" fn carapace_swap_skin_resized(
 /// # Safety
 /// `ptr` from `carapace_create`, not destroyed. `view_id` a valid NUL-terminated UTF-8 string.
 /// `surface` null or a live BGRA IOSurface outliving this call.
-#[cfg(any(target_os = "macos", target_os = "ios"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn carapace_set_content_surface(
     ptr: *mut CarapaceEngine,
