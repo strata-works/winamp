@@ -18,6 +18,12 @@ text{ value="clock", font="DSEG7Classic-Regular.ttf", x=600, y=34, size=13, colo
 -- live music-reactive dither field (host-rendered) fills the baked viz-glass opening
 view{ id="host", x=20, y=74, w=474, h=214 }
 
+-- second host-rendered region (proves multi-cutout): an amber spectrum strip on the empty
+-- brushed-metal panel between the knobs/volume slot and the transport buttons. Clear of host
+-- (ends y=288), the volume slot (ends y=336), the transport buttons (start y=392), the position
+-- scrub (y=400), and the playlist well (x>=508).
+view{ id="viz", x=220, y=340, w=270, h=48 }
+
 -- playlist in the recessed well
 list{ collection="playlist", x=520, y=86, w=168, h=208, row_height=32,
       on_select="play_index", selected="current_index", highlight={r=36,g=112,b=66, a=200},

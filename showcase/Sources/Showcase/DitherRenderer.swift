@@ -11,11 +11,18 @@ final class DitherRenderer {
     private let queue: MTLCommandQueue
     private let pipeline: MTLRenderPipelineState
     private let texture: MTLTexture
-    // Studio's viz-panel opening (logical px) — the cutout the content is stretched into.
-    private let cutoutW: Float = 474
-    private let cutoutH: Float = 214
+    // The logical cutout (px) this content is stretched into — drives square Bayer cells post-stretch.
+    private let cutoutW: Float
+    private let cutoutH: Float
+    // Dither front color (RGB, 0..1). Lets a second instance read as a visually distinct region.
+    private let front: (Float, Float, Float)
 
-    init?(width: Int, height: Int) {
+    init?(width: Int, height: Int,
+          cutoutW: Float = 474, cutoutH: Float = 214,
+          front: (Float, Float, Float) = (77.0/255, 160.0/255, 240.0/255)) {
+        self.cutoutW = cutoutW
+        self.cutoutH = cutoutH
+        self.front = front
         guard let dev = MTLCreateSystemDefaultDevice(),
               let q = dev.makeCommandQueue(),
               let s = IOSurface(properties: [
@@ -50,7 +57,7 @@ final class DitherRenderer {
     /// lock-free safety holds ONLY while the engine reads via that CPU copy; if the engine ever
     /// aliases this surface as a GPU texture (Tier-2 zero-copy), a fence would be required here.
     func render(time: Float, level: Float) {
-        var u = makeDitherUniforms(time: time, level: level, width: cutoutW, height: cutoutH)
+        var u = makeDitherUniforms(time: time, level: level, width: cutoutW, height: cutoutH, front: front)
         let rp = MTLRenderPassDescriptor()
         rp.colorAttachments[0].texture = texture
         rp.colorAttachments[0].loadAction = .clear
