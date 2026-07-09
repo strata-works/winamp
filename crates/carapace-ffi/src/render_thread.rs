@@ -666,6 +666,24 @@ impl RenderThread {
                 };
                 let _ = reply.send(status);
             }
+            Command::SetContent {
+                view_id,
+                surface,
+                reply,
+            } => {
+                let status = if surface.0.is_null() {
+                    self.content.remove(&view_id);
+                    CarapaceStatus::Ok
+                } else if let Some(tex) = build_content(&self.gpu, surface.0 as IOSurfaceRef) {
+                    self.content.insert(view_id, tex); // replaces any prior entry (its ContentTex drops here)
+                    CarapaceStatus::Ok
+                } else {
+                    set_last_error("set_content_surface: null/zero-dim/failed content surface");
+                    CarapaceStatus::ErrBadSkin
+                };
+                let _ = reply.send(status);
+                *invalidated = true; // show the change on the next frame
+            }
             #[cfg(test)]
             Command::ForcePanic => {
                 self.force_panic = true;
@@ -1157,6 +1175,97 @@ mod render_tests {
             unsafe { crate::handle::test_support::iosurface_has_nonzero_pixels(surfaces[0], w, h) },
             "host content must still composite via the registry"
         );
+        unsafe { crate::handle::carapace_destroy(handle) };
+    }
+
+    #[test]
+    fn set_content_surface_attaches_replaces_and_clears() {
+        let (w, h) = (480u32, 320u32);
+        let vt = crate::host::CarapaceHostVTable {
+            ctx: std::ptr::null_mut(),
+            get_num: None,
+            get_str: None,
+            invoke: None,
+            frame_ready: None,
+            row_count: None,
+            get_row_str: None,
+            get_row_num: None,
+            invoke_arg: None,
+        };
+        // Skin with TWO cutouts: id="a" (top) and id="b" (bottom).
+        let dir = std::ffi::CString::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/skins/twocutout"
+        ))
+        .unwrap();
+        let (handle, surfaces) = crate::handle::test_support::create_test_handle_with_content(
+            w,
+            h,
+            2,
+            vt,
+            std::ptr::null_mut(),
+            &dir,
+        );
+        unsafe {
+            let _ = crate::handle::carapace_set_frame_rate(handle, 0);
+        };
+
+        let sa = crate::handle::test_support::make_bgra_iosurface(64, 64);
+        unsafe { crate::handle::test_support::fill_iosurface(sa, 64, 64, [200, 0, 0, 255]) };
+        let ida = std::ffi::CString::new("a").unwrap();
+        assert_eq!(
+            unsafe {
+                crate::handle::carapace_set_content_surface(
+                    handle,
+                    ida.as_ptr(),
+                    sa as *const std::ffi::c_void,
+                    64,
+                    64,
+                )
+            },
+            crate::guard::CarapaceStatus::Ok
+        );
+
+        unsafe {
+            let _ = crate::handle::carapace_invalidate(handle);
+        };
+        crate::handle::test_support::wait_for(std::time::Duration::from_secs(10), || unsafe {
+            crate::handle::test_support::iosurface_has_nonzero_pixels(surfaces[0], w, h)
+        });
+        assert!(unsafe {
+            crate::handle::test_support::iosurface_has_nonzero_pixels(surfaces[0], w, h)
+        });
+
+        // Clear id="a": returns Ok even though the surface stays valid; blocking guarantees the
+        // render thread dropped its ContentTex before we could free `sa`.
+        assert_eq!(
+            unsafe {
+                crate::handle::carapace_set_content_surface(
+                    handle,
+                    ida.as_ptr(),
+                    std::ptr::null(),
+                    0,
+                    0,
+                )
+            },
+            crate::guard::CarapaceStatus::Ok
+        );
+
+        // Attach for an id the skin does NOT declare → Ok, no crash, nothing rendered there.
+        let idz = std::ffi::CString::new("nope").unwrap();
+        assert_eq!(
+            unsafe {
+                crate::handle::carapace_set_content_surface(
+                    handle,
+                    idz.as_ptr(),
+                    sa as *const std::ffi::c_void,
+                    64,
+                    64,
+                )
+            },
+            crate::guard::CarapaceStatus::Ok
+        );
+
         unsafe { crate::handle::carapace_destroy(handle) };
     }
 }

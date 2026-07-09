@@ -20,6 +20,12 @@ pub struct SendPool {
 // SAFETY: opaque host memory only touched by the render thread after the move; see contract above.
 unsafe impl Send for SendPool {}
 
+/// A single host-owned content surface crossing to the render thread. Same Send contract as
+/// `SendPool`: opaque host memory, only the render thread touches it after the move.
+pub struct SendSurface(pub *const c_void);
+// SAFETY: opaque host memory only touched by the render thread after the move.
+unsafe impl Send for SendSurface {}
+
 /// Pointer event kind, mirrored 1:1 by the C `CarapacePointerKind` (see `handle.rs`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PointerKind {
@@ -63,6 +69,13 @@ pub enum Command {
         /// The new pool's height.
         h: u32,
         /// Reports the outcome synchronously to the calling `carapace_swap_skin_resized`.
+        reply: std::sync::mpsc::Sender<CarapaceStatus>,
+    },
+    /// Attach/replace (`surface` non-null) or clear (`surface` null) the content for `view_id`.
+    /// Blocking via `reply` (mirrors SwapSkinResized) so the host can free a replaced/cleared surface.
+    SetContent {
+        view_id: String,
+        surface: SendSurface,
         reply: std::sync::mpsc::Sender<CarapaceStatus>,
     },
     /// Test-only: forces a panic inside `render_guarded`'s `catch_unwind` on the render thread, to

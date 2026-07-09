@@ -396,6 +396,53 @@ pub unsafe extern "C" fn carapace_swap_skin_resized(
     reply_rx.recv().unwrap_or_else(|_| e.enter_poisoned())
 }
 
+/// Attach/replace (`surface` non-null) or clear (`surface` null) the live content for the skin's
+/// `view{ id = view_id }` cutout. Blocks until applied; then the caller may free a replaced/cleared
+/// surface. `w`/`h` are accepted for symmetry with create/swap (dims are derived from the surface).
+///
+/// # Safety
+/// `ptr` from `carapace_create`, not destroyed. `view_id` a valid NUL-terminated UTF-8 string.
+/// `surface` null or a live BGRA IOSurface outliving this call.
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn carapace_set_content_surface(
+    ptr: *mut CarapaceEngine,
+    view_id: *const c_char,
+    surface: *const c_void,
+    _w: u32,
+    _h: u32,
+) -> CarapaceStatus {
+    let Some(e) = (unsafe { ptr.as_ref() }) else {
+        return CarapaceStatus::ErrNullArg;
+    };
+    if view_id.is_null() {
+        set_last_error("carapace_set_content_surface: null view_id");
+        return CarapaceStatus::ErrNullArg;
+    }
+    if e.poisoned.load(std::sync::atomic::Ordering::Acquire) {
+        return e.enter_poisoned();
+    }
+    let view_id = match unsafe { CStr::from_ptr(view_id) }.to_str() {
+        Ok(s) => s.to_string(),
+        Err(_) => {
+            set_last_error("carapace_set_content_surface: view_id is not valid UTF-8");
+            return CarapaceStatus::ErrBadSkin;
+        }
+    };
+    let (reply_tx, reply_rx) = std::sync::mpsc::channel::<CarapaceStatus>();
+    if e.tx
+        .send(Command::SetContent {
+            view_id,
+            surface: crate::queue::SendSurface(surface),
+            reply: reply_tx,
+        })
+        .is_err()
+    {
+        return e.enter_poisoned();
+    }
+    reply_rx.recv().unwrap_or_else(|_| e.enter_poisoned())
+}
+
 /// Pointer event kind, mirrored 1:1 by the Rust `queue::PointerKind` the render thread consumes.
 #[repr(i32)]
 #[derive(Clone, Copy, PartialEq, Eq)]

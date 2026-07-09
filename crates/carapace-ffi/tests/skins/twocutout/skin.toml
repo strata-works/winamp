@@ -1,0 +1,6 @@
+schema = 1
+id = "twocutout"
+name = "Two Cutout"
+engine = "^0.1"
+canvas = { width = 480, height = 320 }
+entry = "skin.lua"
