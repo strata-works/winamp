@@ -692,6 +692,47 @@ pub(crate) mod test_support {
         nonzero
     }
 
+    /// Scan a BGRA IOSurface for any pixel matching `bgra` within +/- `tol` per channel (alpha
+    /// ignored). Used to detect that a specific content surface composited into its cutout, as
+    /// opposed to `iosurface_has_nonzero_pixels` which any full-canvas background fill trips.
+    ///
+    /// # Safety
+    /// `surface` must be a valid, live IOSurface of at least `w`x`h` BGRA8 pixels.
+    pub(crate) unsafe fn iosurface_has_color(
+        surface: IOSurfaceRef,
+        w: u32,
+        h: u32,
+        bgra: [u8; 4],
+        tol: u8,
+    ) -> bool {
+        use crate::render::{
+            IOSurfaceGetBaseAddress, IOSurfaceGetBytesPerRow, IOSurfaceLock, IOSurfaceUnlock,
+        };
+        let mut seed: u32 = 0;
+        unsafe {
+            IOSurfaceLock(surface, 0x1 /* kIOSurfaceLockReadOnly */, &mut seed)
+        };
+        let base = unsafe { IOSurfaceGetBaseAddress(surface) } as *const u8;
+        let stride = unsafe { IOSurfaceGetBytesPerRow(surface) };
+        let close = |a: u8, b: u8| (a as i16 - b as i16).unsigned_abs() as u8 <= tol;
+        let mut found = false;
+        for y in 0..h as usize {
+            for x in 0..w as usize {
+                let p = unsafe { base.add(y * stride + x * 4) };
+                let px = unsafe { std::slice::from_raw_parts(p, 3) };
+                if close(px[0], bgra[0]) && close(px[1], bgra[1]) && close(px[2], bgra[2]) {
+                    found = true;
+                    break;
+                }
+            }
+            if found {
+                break;
+            }
+        }
+        unsafe { IOSurfaceUnlock(surface, 0x1, &mut seed) };
+        found
+    }
+
     /// Fill a BGRA IOSurface with a solid color (bytes B,G,R,A per pixel).
     ///
     /// # Safety

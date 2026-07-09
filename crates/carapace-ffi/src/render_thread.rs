@@ -624,19 +624,21 @@ impl RenderThread {
                                     }
                                     new_presents.push(p);
                                 }
-                                let mut new_content: HashMap<String, ContentTex> = HashMap::new();
-                                if let Some(tex) =
-                                    build_content(&self.gpu, pool.content as IOSurfaceRef)
-                                {
-                                    new_content.insert("host".to_string(), tex);
-                                }
                                 let n = new_surfaces.len();
                                 // Atomic switch: old Presents drop (our wgpu wrappers freed); the host
                                 // owns + frees the old IOSurfaces after this call returns.
                                 self.surfaces = new_surfaces;
                                 self.presents = new_presents;
                                 self.held = vec![false; n];
-                                self.content = new_content;
+                                // A1: preserve the content registry across a resized swap. The GPU
+                                // device is unchanged, so the existing ContentTex textures stay valid.
+                                // Only re-seed the "host" key from the passed surface; a null
+                                // pool.content keeps whatever "host" entry already exists.
+                                if let Some(tex) =
+                                    build_content(&self.gpu, pool.content as IOSurfaceRef)
+                                {
+                                    self.content.insert("host".to_string(), tex);
+                                }
                                 self.tier = tier;
                                 self.w = w;
                                 self.h = h;
@@ -1266,6 +1268,124 @@ mod render_tests {
             crate::guard::CarapaceStatus::Ok
         );
 
+        unsafe { crate::handle::carapace_destroy(handle) };
+    }
+
+    #[test]
+    fn content_registry_survives_resized_swap() {
+        let (w, h) = (480u32, 320u32);
+        let vt = crate::host::CarapaceHostVTable {
+            ctx: std::ptr::null_mut(),
+            get_num: None,
+            get_str: None,
+            invoke: None,
+            frame_ready: None,
+            row_count: None,
+            get_row_str: None,
+            get_row_num: None,
+            invoke_arg: None,
+        };
+        let dir = std::ffi::CString::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/skins/twocutout"
+        ))
+        .unwrap();
+        let (handle, _surfaces) = crate::handle::test_support::create_test_handle_with_content(
+            w,
+            h,
+            2,
+            vt,
+            std::ptr::null_mut(),
+            &dir,
+        );
+        unsafe {
+            let _ = crate::handle::carapace_set_frame_rate(handle, 0);
+        };
+
+        let sb = crate::handle::test_support::make_bgra_iosurface(64, 64);
+        unsafe { crate::handle::test_support::fill_iosurface(sb, 64, 64, [0, 0, 200, 255]) };
+        let idb = std::ffi::CString::new("b").unwrap();
+        unsafe {
+            let _ = crate::handle::carapace_set_content_surface(
+                handle,
+                idb.as_ptr(),
+                sb as *const std::ffi::c_void,
+                64,
+                64,
+            );
+        };
+
+        // Resized swap to the SAME two-cutout skin at a new pixel size; a new pool.
+        let (w2, h2) = (600u32, 400u32);
+        let new_surfaces: Vec<crate::render::IOSurfaceRef> = (0..2)
+            .map(|_| crate::handle::test_support::make_bgra_iosurface(w2 as usize, h2 as usize))
+            .collect();
+        let refs: Vec<*const std::ffi::c_void> = new_surfaces
+            .iter()
+            .map(|&s| s as *const std::ffi::c_void)
+            .collect();
+        assert_eq!(
+            unsafe {
+                crate::handle::carapace_swap_skin_resized(
+                    handle,
+                    dir.as_ptr(),
+                    refs.as_ptr(),
+                    refs.len() as u32,
+                    w2,
+                    h2,
+                    std::ptr::null(),
+                )
+            },
+            crate::guard::CarapaceStatus::Ok
+        );
+
+        // The "b" content persisted: cutout b must still be non-blank after the swap.
+        unsafe {
+            let _ = crate::handle::carapace_invalidate(handle);
+        };
+        // "b" content is filled rgba [0,0,200] → BGRA bytes ≈ [200,0,0,255] (strong blue). The
+        // background fill is gray [20,20,20]; scanning for the distinctive blue cleanly proves the
+        // content composited, where a whole-surface nonzero scan would trip on the background.
+        crate::handle::test_support::wait_for(std::time::Duration::from_secs(10), || {
+            for i in 0..2 {
+                unsafe {
+                    let _ = crate::handle::carapace_release_surface(handle, i);
+                }
+            }
+            unsafe {
+                crate::handle::test_support::iosurface_has_color(
+                    new_surfaces[0],
+                    w2,
+                    h2,
+                    [200, 0, 0, 255],
+                    40,
+                ) || crate::handle::test_support::iosurface_has_color(
+                    new_surfaces[1],
+                    w2,
+                    h2,
+                    [200, 0, 0, 255],
+                    40,
+                )
+            }
+        });
+        assert!(
+            unsafe {
+                crate::handle::test_support::iosurface_has_color(
+                    new_surfaces[0],
+                    w2,
+                    h2,
+                    [200, 0, 0, 255],
+                    40,
+                ) || crate::handle::test_support::iosurface_has_color(
+                    new_surfaces[1],
+                    w2,
+                    h2,
+                    [200, 0, 0, 255],
+                    40,
+                )
+            },
+            "content set before a resized swap must survive it (A1)"
+        );
         unsafe { crate::handle::carapace_destroy(handle) };
     }
 }
