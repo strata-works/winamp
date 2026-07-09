@@ -18,6 +18,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var bridge: CarapaceBridge!
     private var skinDirs: [String] = []
     private var skinIndex = 0
+    private var swapGate = SwapGate()        // serializes swaps so rapid Tabs don't overlap animations
     private var dither: DitherRenderer?      // fills view{ id="host" }
     private var vizDither: DitherRenderer?   // fills the second view{ id="viz" } cutout
     private var ditherTimer: Timer?
@@ -220,6 +221,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             applySkin(dir: dir) // fall back to full rebuild if the resized swap is rejected
             withExtendedLifetime(outgoingDither) {}
             withExtendedLifetime(outgoingViz) {}
+            // applySkin snaps (no crossfade animation), so the transition is already done: settle the
+            // gate and honor any tap that queued up (in practice none, since the body ran synchronously).
+            if swapGate.swapCompleted() { swapSkin(dir: skinDirs[skinIndex]) }
             return
         }
         // swapResized returned Ok → the render thread has adopted the new pool + content. Attach the
@@ -253,7 +257,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // mid-morph — matching `positionTrafficLights`' math but animated instead of snapped.
         let o = trafficLightOrigin(forDir: dir)
         let finalH = CGFloat(ch)
-        NSAnimationContext.runAnimationGroup { ctx in
+        NSAnimationContext.runAnimationGroup({ ctx in
             // Match the engine's crossfade window: the incoming skin's declared `[transition]`
             // duration_ms (default 250 ms). All showcase skins use the default today.
             ctx.duration = Double(SkinManifest.durationMs(atDir: dir)) / 1000.0
@@ -263,12 +267,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 b.animator().setFrameOrigin(NSPoint(x: o.x + CGFloat(i) * 20,
                                                     y: finalH - o.y - b.frame.height))
             }
-        }
+        }, completionHandler: { [weak self] in
+            // The transition (crossfade + resize) is done. Settle the gate; if taps arrived during
+            // the animation, run exactly one coalesced follow-up straight to the latest skin.
+            guard let self else { return }
+            if self.swapGate.swapCompleted() {
+                self.swapSkin(dir: self.skinDirs[self.skinIndex])
+            }
+        })
     }
 
     private func cycleSkin() {
+        // Always advance the index so a burst of taps lands on the intended final skin, but only
+        // START a swap when none is in flight. Taps arriving mid-swap are coalesced into a single
+        // follow-up (see SwapGate) so rapid Tabs don't overlap the crossfade + resize animations.
         skinIndex = (skinIndex + 1) % skinDirs.count
-        swapSkin(dir: skinDirs[skinIndex]) // live crossfade; window morphs to the new size during the fade
+        if swapGate.requestSwap() {
+            swapSkin(dir: skinDirs[skinIndex]) // live crossfade; window morphs to the new size during the fade
+        }
     }
 
     /// Minimal main menu so ⌘O (Open Music…) works and is discoverable. The skin window itself
