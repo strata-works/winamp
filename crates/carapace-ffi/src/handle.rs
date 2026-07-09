@@ -644,6 +644,62 @@ pub(crate) mod test_support {
         unsafe { IOSurfaceUnlock(surface, 0x1, &mut seed) };
         nonzero
     }
+
+    /// Fill a BGRA IOSurface with a solid color (bytes B,G,R,A per pixel).
+    ///
+    /// # Safety
+    /// `s` must be a valid, live IOSurface of at least `w`x`h` BGRA8 pixels.
+    pub(crate) unsafe fn fill_iosurface(s: IOSurfaceRef, w: u32, h: u32, rgba: [u8; 4]) {
+        use crate::render::{
+            IOSurfaceGetBaseAddress, IOSurfaceGetBytesPerRow, IOSurfaceLock, IOSurfaceUnlock,
+        };
+        unsafe { IOSurfaceLock(s, 0, std::ptr::null_mut()) };
+        let base = unsafe { IOSurfaceGetBaseAddress(s) } as *mut u8;
+        let stride = unsafe { IOSurfaceGetBytesPerRow(s) };
+        let bgra = [rgba[2], rgba[1], rgba[0], rgba[3]];
+        for y in 0..h as usize {
+            for x in 0..w as usize {
+                let p = unsafe { base.add(y * stride + x * 4) };
+                unsafe { std::ptr::copy_nonoverlapping(bgra.as_ptr(), p, 4) };
+            }
+        }
+        unsafe { IOSurfaceUnlock(s, 0, std::ptr::null_mut()) };
+    }
+
+    /// Create a handle whose pool is `count` `w`×`h` BGRA surfaces, seeded with a `content`
+    /// surface (the `"host"` cutout) and the given skin `dir`. Mirrors
+    /// `create_test_handle_pool_vt`, but supplies a non-null `content_surface` and a
+    /// caller-chosen skin directory (rather than the shared classic-skin fixture) so tests can
+    /// exercise a skin that declares its own `view{ id = "host" }` cutout. Returns the handle
+    /// plus the pool surfaces (kept alive by the caller).
+    pub(crate) fn create_test_handle_with_content(
+        w: u32,
+        h: u32,
+        count: usize,
+        vtable: CarapaceHostVTable,
+        content: IOSurfaceRef,
+        dir: &std::ffi::CStr,
+    ) -> (*mut CarapaceEngine, Vec<IOSurfaceRef>) {
+        let surfaces: Vec<IOSurfaceRef> = (0..count)
+            .map(|_| make_bgra_iosurface(w as usize, h as usize))
+            .collect();
+        let desc = CarapaceCreateDesc {
+            skin_dir: dir.as_ptr(),
+            vtable,
+            surfaces: surfaces.as_ptr(),
+            surface_count: count as u32,
+            content_surface: content,
+            w,
+            h,
+        };
+        let mut handle: *mut CarapaceEngine = std::ptr::null_mut();
+        assert_eq!(
+            unsafe { carapace_create(&desc, &mut handle) },
+            CarapaceStatus::Ok
+        );
+        assert!(!handle.is_null());
+        (handle, surfaces)
+    }
 }
 
 #[cfg(all(test, target_os = "macos"))]
