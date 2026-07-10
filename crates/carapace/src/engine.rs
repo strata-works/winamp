@@ -27,6 +27,7 @@ pub struct Engine {
     registry: Rc<VocabRegistry>,
     queue: Queue,
     skin: LoadedSkin,
+    elapsed: Duration,
 }
 
 impl Engine {
@@ -45,6 +46,7 @@ impl Engine {
             registry,
             queue,
             skin,
+            elapsed: Duration::ZERO,
         })
     }
 
@@ -111,6 +113,7 @@ impl Engine {
     /// `actions()` allowlist before invoking it, applies `Swap`/`SwitchHost` transactionally, then
     /// calls `host.tick(dt)`.
     pub fn update(&mut self, dt: Duration) {
+        self.elapsed += dt;
         let cmds: Vec<Command> = std::mem::take(&mut *self.queue.borrow_mut());
         for cmd in cmds {
             match cmd {
@@ -130,6 +133,12 @@ impl Engine {
             }
         }
         self.host.tick(dt);
+    }
+
+    /// Seconds since this engine was created, accumulated from every `update(dt)` — the clock a
+    /// `shader{}`'s `time` uniform animates on, in lockstep with the rest of the scene.
+    pub fn elapsed_secs(&self) -> f32 {
+        self.elapsed.as_secs_f32()
     }
 
     fn apply_swap(&mut self, source: &SkinSource) {
@@ -321,6 +330,15 @@ mod tests {
 
     fn engine_with(host: Box<dyn Host>, lua: &str, canvas: (u32, u32)) -> Engine {
         Engine::new(host, VocabRegistry::base(), SkinSource::inline(lua, canvas)).unwrap()
+    }
+
+    #[test]
+    fn update_accumulates_elapsed_time() {
+        let mut e = engine_with(Box::new(FixtureHost::new()), "", (100, 60));
+        assert_eq!(e.elapsed_secs(), 0.0);
+        e.update(std::time::Duration::from_millis(500));
+        e.update(std::time::Duration::from_millis(250));
+        assert!((e.elapsed_secs() - 0.75).abs() < 1e-6);
     }
 
     #[test]

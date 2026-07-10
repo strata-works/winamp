@@ -128,6 +128,13 @@ impl AssetResolver {
         Ok(decoded)
     }
 
+    /// Load a `.wgsl` source file's UTF-8 text (thin typed wrapper over `bytes`).
+    pub fn shader_src(&self, name: &str) -> Result<Arc<str>, AssetError> {
+        let bytes = self.bytes(name)?;
+        let s = std::str::from_utf8(&bytes).map_err(|e| AssetError::Decode(e.to_string()))?;
+        Ok(Arc::from(s))
+    }
+
     /// Load `name` as font data (raw font-file bytes wrapped for the text-layout engine),
     /// caching the result. Reuses [`bytes`](Self::bytes) internally.
     pub fn font(&self, name: &str) -> Result<Arc<crate::scene::FontData>, AssetError> {

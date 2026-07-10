@@ -90,6 +90,9 @@ impl BuildContext for SceneBuilder {
     ) -> Result<Arc<crate::scene::FontData>, crate::asset::AssetError> {
         self.assets.font(name)
     }
+    fn shader_src(&mut self, name: &str) -> Result<Arc<str>, crate::asset::AssetError> {
+        self.assets.shader_src(name)
+    }
 }
 
 fn lua_args_to_values(args: mlua::MultiValue) -> Vec<Value> {

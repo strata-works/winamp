@@ -107,6 +107,7 @@ pub fn render_rgba(
                 b: 0,
                 a: 0,
             },
+            time: engine.elapsed_secs(),
         },
     );
     let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());

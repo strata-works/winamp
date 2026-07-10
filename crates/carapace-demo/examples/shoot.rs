@@ -52,7 +52,11 @@ fn offscreen(w: u32, h: u32) -> Offscreen {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_SRC,
+            // RENDER_ATTACHMENT lets shader{} skins render their background + composite passes
+            // into the target (non-shader skins use vello's storage-write path).
+            usage: wgpu::TextureUsages::STORAGE_BINDING
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::RENDER_ATTACHMENT,
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -215,6 +219,7 @@ fn shoot(skin: &str, out_dir: &Path) {
                 b: 0,
                 a: 255,
             },
+            time: engine.elapsed_secs(),
         },
     );
     let data = readback(&o);
@@ -227,7 +232,14 @@ fn shoot(skin: &str, out_dir: &Path) {
 fn main() {
     let out_dir = Path::new("/tmp/carapace-5c");
     std::fs::create_dir_all(out_dir).unwrap();
-    for skin in ["reference", "minimal", "classic", "transport", "sysmon"] {
+    for skin in [
+        "reference",
+        "minimal",
+        "classic",
+        "transport",
+        "sysmon",
+        "shaderdemo",
+    ] {
         shoot(skin, out_dir);
     }
 }

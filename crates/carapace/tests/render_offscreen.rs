@@ -186,6 +186,7 @@ fn renders_fill_and_value_fill_at_sentinel_pixels() {
                 b: 0,
                 a: 255,
             },
+            time: 0.0,
         },
     );
     let data = readback(&o);
@@ -276,6 +277,7 @@ fn renders_an_image_at_sentinel_pixels() {
                 b: 0,
                 a: 255,
             },
+            time: 0.0,
         },
     );
     let data = readback(&o);
@@ -344,6 +346,7 @@ fn renders_translucent_fill_blended_over_background() {
                 b: 0,
                 a: 255,
             },
+            time: 0.0,
         },
     );
     let data = readback(&o);
@@ -415,6 +418,7 @@ fn renders_linear_gradient_oriented_and_interpolating() {
                 b: 0,
                 a: 255,
             },
+            time: 0.0,
         },
     );
     let data = readback(&o);
@@ -487,6 +491,7 @@ fn renders_bundled_font_text_in_fill_color() {
                 b: 0,
                 a: 255,
             },
+            time: 0.0,
         },
     );
     let data = readback(&o);
@@ -570,6 +575,7 @@ fn renders_gradient_filled_text_interpolating_vertically() {
                 b: 0,
                 a: 255,
             },
+            time: 0.0,
         },
     );
     let data = readback(&o);
@@ -652,6 +658,7 @@ fn renders_value_bound_text_from_string_state() {
                 b: 0,
                 a: 255,
             },
+            time: 0.0,
         },
     );
     let data = readback(&o);
@@ -712,6 +719,7 @@ fn value_fill_up_fills_from_the_bottom() {
                 b: 0,
                 a: 255,
             },
+            time: 0.0,
         },
     );
     let data = readback(&o);
@@ -761,6 +769,7 @@ fn value_fill_clips_to_a_non_rect_path() {
                 b: 0,
                 a: 255,
             },
+            time: 0.0,
         },
     );
     let data = readback(&o);
@@ -819,6 +828,7 @@ fn identical_text_is_shaped_once_and_cached() {
             b: 0,
             a: 255,
         },
+        time: 0.0,
     };
     r.draw(&scene, |_k: &str| None, |_| None, &target);
     r.draw(&scene, |_k: &str| None, |_| None, &target); // second frame: must reuse, not re-shape
@@ -863,6 +873,7 @@ fn transparent_base_color_leaves_undrawn_pixels_clear() {
                 b: 0,
                 a: 0,
             },
+            time: 0.0,
         },
     );
     let data = readback(&o);
@@ -959,6 +970,7 @@ fn view_composites_supplied_texture_into_its_rect() {
                 b: 0,
                 a: 255,
             },
+            time: 0.0,
         },
     );
     let data = readback(&o);
@@ -1007,6 +1019,7 @@ fn view_without_texture_leaves_the_hole() {
                 b: 7,
                 a: 255,
             },
+            time: 0.0,
         },
     );
     assert_eq!(
@@ -1091,6 +1104,7 @@ fn view_alpha_blends_over_the_layer_behind() {
                 b: 0,
                 a: 255,
             },
+            time: 0.0,
         },
     );
     let data = readback(&o);
@@ -1142,6 +1156,7 @@ fn gadget_path_still_uniform_scales() {
                 b: 0,
                 a: 255,
             },
+            time: 0.0,
         },
     );
     let data = readback(&o);
@@ -1156,6 +1171,264 @@ fn gadget_path_still_uniform_scales() {
         px(&data, 300, 5, 5),
         [0, 0, 0],
         "surface (5,5) is outside the fill — must be base black"
+    );
+}
+
+#[test]
+fn shader_background_renders_under_2d() {
+    use carapace::scene::ImageDest;
+    use std::hash::{DefaultHasher, Hash, Hasher};
+    use std::sync::Arc;
+
+    let (w, h) = (64u32, 64u32);
+    let o = offscreen(w, h);
+    let mut r = Renderer::new(&o.device);
+    // A trivial shader that outputs solid green everywhere, as a full-canvas background.
+    let frag =
+        "@fragment fn fs(in: VsOut) -> @location(0) vec4<f32> { return vec4(0.0, 1.0, 0.0, 1.0); }";
+    let full = format!("{}\n{}", carapace::shader::prelude_for(&[]), frag);
+    // Replicate ShaderPrim's key derivation exactly (DefaultHasher over the full source) — the
+    // pipeline cache only needs the key to be stable within this test.
+    let mut hasher = DefaultHasher::new();
+    full.hash(&mut hasher);
+    let key = hasher.finish();
+
+    let scene = Scene {
+        canvas: (w, h),
+        nodes: vec![
+            Node::Shader {
+                dest: ImageDest {
+                    x: 0.0,
+                    y: 0.0,
+                    w: w as f32,
+                    h: h as f32,
+                },
+                wgsl: Arc::from(full.as_str()),
+                uniforms: vec![],
+                key,
+            },
+            // Red fill covering the left half, drawn OVER the shader background.
+            Node::Fill {
+                path: rect(0.0, 0.0, (w / 2) as f32, h as f32),
+                paint: Paint::Solid(Color {
+                    r: 255,
+                    g: 0,
+                    b: 0,
+                    a: 255,
+                }),
+            },
+        ],
+    };
+    r.draw(
+        &scene,
+        |_| None,
+        |_| None,
+        &RenderTarget {
+            device: &o.device,
+            queue: &o.queue,
+            view: &o.view,
+            width: w,
+            height: h,
+            time: 0.0,
+            base_color: Color {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 0,
+            },
+        },
+    );
+    let d = readback(&o);
+    assert_eq!(
+        px(&d, w, 3 * w / 4, h / 2),
+        [0, 255, 0],
+        "bg shader shows through the transparent right half"
+    );
+    assert_eq!(
+        px(&d, w, w / 4, h / 2),
+        [255, 0, 0],
+        "2D fill draws OVER the shader on the left half"
+    );
+}
+
+#[test]
+fn shader_uniform_is_reactive() {
+    use carapace::scene::ImageDest;
+    use carapace::shader::{ShaderUniform, UniformSource};
+    use std::hash::{DefaultHasher, Hash, Hasher};
+    use std::sync::Arc;
+
+    let (w, h) = (64u32, 64u32);
+    // A shader that outputs the host-bound `intensity` uniform as red, everywhere.
+    let frag = "@fragment fn fs(in: VsOut) -> @location(0) vec4<f32> { return vec4(u.intensity, 0.0, 0.0, 1.0); }";
+    let full = format!(
+        "{}\n{}",
+        carapace::shader::prelude_for(&["intensity"]),
+        frag
+    );
+    let mut hasher = DefaultHasher::new();
+    full.hash(&mut hasher);
+    let key = hasher.finish();
+
+    let make_scene = || Scene {
+        canvas: (w, h),
+        nodes: vec![Node::Shader {
+            dest: ImageDest {
+                x: 0.0,
+                y: 0.0,
+                w: w as f32,
+                h: h as f32,
+            },
+            wgsl: Arc::from(full.as_str()),
+            uniforms: vec![ShaderUniform {
+                name: "intensity".to_string(),
+                source: UniformSource::Host("wx".to_string()),
+            }],
+            key,
+        }],
+    };
+
+    // Draw 1: host reports wx = 0.0 -> red should be ~0.
+    let o1 = offscreen(w, h);
+    let mut r1 = Renderer::new(&o1.device);
+    let read_lo = |k: &str| (k == "wx").then_some(StateValue::Scalar(0.0));
+    r1.draw(
+        &make_scene(),
+        read_lo,
+        |_| None,
+        &RenderTarget {
+            device: &o1.device,
+            queue: &o1.queue,
+            view: &o1.view,
+            width: o1.w,
+            height: o1.h,
+            time: 0.0,
+            base_color: Color {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 0,
+            },
+        },
+    );
+    let d1 = readback(&o1);
+    let red_lo = px(&d1, w, w / 2, h / 2)[0];
+
+    // Draw 2: host reports wx = 1.0 -> red should be ~255.
+    let o2 = offscreen(w, h);
+    let mut r2 = Renderer::new(&o2.device);
+    let read_hi = |k: &str| (k == "wx").then_some(StateValue::Scalar(1.0));
+    r2.draw(
+        &make_scene(),
+        read_hi,
+        |_| None,
+        &RenderTarget {
+            device: &o2.device,
+            queue: &o2.queue,
+            view: &o2.view,
+            width: o2.w,
+            height: o2.h,
+            time: 0.0,
+            base_color: Color {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 0,
+            },
+        },
+    );
+    let d2 = readback(&o2);
+    let red_hi = px(&d2, w, w / 2, h / 2)[0];
+
+    assert!(red_lo < 10, "wx=0.0 should render ~0 red, got {red_lo}");
+    assert!(red_hi > 245, "wx=1.0 should render ~255 red, got {red_hi}");
+}
+
+#[test]
+fn no_shader_scene_uses_2stage_path_unchanged() {
+    // Same scene/assertions as `renders_fill_and_value_fill_at_sentinel_pixels` — pins that a
+    // scene with zero `Node::Shader` nodes still takes the original 2-stage path (vello straight
+    // into `target.view` with `target.base_color`, no offscreen/composite detour) after the
+    // renderer grew the 4-stage shader path.
+    let o = offscreen(200, 200);
+    let mut r = Renderer::new(&o.device);
+    let scene = Scene {
+        canvas: (200, 200),
+        nodes: vec![
+            Node::Fill {
+                path: vec![
+                    Pt { x: 20.0, y: 20.0 },
+                    Pt { x: 100.0, y: 20.0 },
+                    Pt { x: 100.0, y: 100.0 },
+                    Pt { x: 20.0, y: 100.0 },
+                ],
+                paint: Paint::Solid(Color {
+                    r: 255,
+                    g: 0,
+                    b: 0,
+                    a: 255,
+                }),
+            },
+            Node::ValueFill {
+                path: vec![
+                    Pt { x: 0.0, y: 150.0 },
+                    Pt { x: 200.0, y: 150.0 },
+                    Pt { x: 200.0, y: 170.0 },
+                    Pt { x: 0.0, y: 170.0 },
+                ],
+                value_key: "v".to_string(),
+                color: Color {
+                    r: 0,
+                    g: 255,
+                    b: 0,
+                    a: 255,
+                },
+                direction: carapace::scene::FillDir::Right,
+            },
+        ],
+    };
+    let read = |k: &str| {
+        if k == "v" {
+            Some(StateValue::Scalar(0.5))
+        } else {
+            None
+        }
+    };
+    r.draw(
+        &scene,
+        read,
+        |_| None,
+        &RenderTarget {
+            device: &o.device,
+            queue: &o.queue,
+            view: &o.view,
+            width: o.w,
+            height: o.h,
+            base_color: Color {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 255,
+            },
+            time: 0.0,
+        },
+    );
+    let data = readback(&o);
+    assert_eq!(px(&data, 200, 60, 60), [255, 0, 0], "inside the red fill");
+    assert_eq!(
+        px(&data, 200, 150, 60),
+        [0, 0, 0],
+        "outside any fill = base black"
+    );
+    assert_eq!(
+        px(&data, 200, 50, 160),
+        [0, 255, 0],
+        "value_fill filled half (x=50 < 100)"
+    );
+    assert_eq!(
+        px(&data, 200, 150, 160),
+        [0, 0, 0],
+        "value_fill empty half (x=150 > 100)"
     );
 }
 
@@ -1244,6 +1517,7 @@ fn frame_keeps_corners_fixed_and_stretches_edges() {
             width: o120.w,
             height: o120.h,
             base_color: black_bg,
+            time: 0.0,
         },
     );
     let data120 = readback(&o120);
@@ -1262,6 +1536,7 @@ fn frame_keeps_corners_fixed_and_stretches_edges() {
             width: o200.w,
             height: o200.h,
             base_color: black_bg,
+            time: 0.0,
         },
     );
     let data200 = readback(&o200);

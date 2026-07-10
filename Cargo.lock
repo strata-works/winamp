@@ -392,6 +392,7 @@ dependencies = [
  "image 0.25.10",
  "insta",
  "mlua",
+ "naga",
  "parley",
  "pollster",
  "proptest",

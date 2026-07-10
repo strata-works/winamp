@@ -32,6 +32,9 @@ pub struct RenderTarget<'a> {
     pub height: u32,
     /// Background color cleared/blended under the scene (vello's `RenderParams::base_color`).
     pub base_color: crate::scene::Color,
+    /// Seconds since the engine was created ([`Engine::elapsed_secs`](crate::engine::Engine::elapsed_secs)) —
+    /// the `time` uniform a `shader{}` node animates on.
+    pub time: f32,
 }
 
 /// The per-frame painter: draws a `Scene` via vello, shapes/caches text via parley, and
@@ -49,10 +52,19 @@ pub struct Renderer {
     families: HashMap<u64, String>,
     // Cache of shaped layouts so unchanged text is never re-shaped per frame (perf-priority).
     layouts: HashMap<LayoutKey, parley::Layout<Brush>>,
-    // Composite pipeline: blits an embedder-supplied wgpu texture into a view{}'s rect.
+    // Composite pipeline: blits an embedder-supplied wgpu texture into a view{}'s rect. Also
+    // reused (unmodified) as Stage 3 of the shader-background path: compositing the vello 2D
+    // offscreen over the shader background is the exact same "blit one texture over the target
+    // with premultiplied blending" operation.
     composite_pipeline: wgpu::RenderPipeline,
     composite_sampler: wgpu::Sampler,
     composite_bgl: wgpu::BindGroupLayout,
+    // shader{} background pipelines, keyed by `Node::Shader::key` (a content hash of the node's
+    // combined WGSL source) so identical shaders across frames/nodes share one pipeline.
+    shader_pipelines: HashMap<u64, wgpu::RenderPipeline>,
+    // Bind group layout for a shader{} node's `@group(0) @binding(0)` uniform buffer (the
+    // `struct U { time, res, ... }` the generated prelude declares).
+    shader_bgl: wgpu::BindGroupLayout,
 }
 
 fn vcolor(c: Color) -> VColor {
@@ -129,6 +141,18 @@ fn value_of(read: &impl Fn(&str) -> Option<StateValue>, key: &str) -> f64 {
     match read(key) {
         Some(StateValue::Scalar(v)) => v.clamp(0.0, 1.0) as f64,
         Some(StateValue::Bool(true)) => 1.0,
+        _ => 0.0,
+    }
+}
+
+// Raw (unclamped) scalar resolver for shader{} user uniforms — deliberately distinct from
+// `value_of` above, which clamps to 0..1 for the UI-fill use case. A shader uniform is
+// author-declared free-form data (e.g. a temperature or season value); clamping it here would
+// silently corrupt anything outside 0..1.
+fn scalar_of(read: &impl Fn(&str) -> Option<StateValue>, key: &str) -> f32 {
+    match read(key) {
+        Some(StateValue::Scalar(v)) => v,
+        Some(StateValue::Bool(b)) => b as i32 as f32,
         _ => 0.0,
     }
 }
@@ -224,6 +248,19 @@ impl Renderer {
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
+        let shader_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("shader-node-bgl"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
         Self {
             inner,
             font_cx: FontContext::new(),
@@ -233,6 +270,8 @@ impl Renderer {
             composite_pipeline,
             composite_sampler,
             composite_bgl,
+            shader_pipelines: HashMap::new(),
+            shader_bgl,
         }
     }
 
@@ -267,6 +306,12 @@ impl Renderer {
         let sy = target.height as f64 / ch.max(1) as f64;
         let xform = Affine::scale_non_uniform(sx, sy);
 
+        // A scene with zero shader{} nodes takes the original 2-stage path (vello straight into
+        // `target.view` with `target.base_color`) byte-identically — see the branch below. Only a
+        // scene with >=1 shader pays for the 4-stage detour (shader bg -> transparent vello
+        // offscreen -> composite offscreen over bg -> view-composite).
+        let has_shaders = scene.has_shaders();
+
         let mut vs = VScene::new();
         for node in &scene.nodes {
             match node {
@@ -296,6 +341,7 @@ impl Renderer {
                     vs.pop_layer();
                 }
                 Node::View { .. } => {} // composited in the live-host-view-region render task
+                Node::Shader { .. } => {} // drawn by the 4-stage shader-background render task
                 Node::List { .. } => {} // expands to Text rows during layout; nothing to draw here
                 Node::Scrub {
                     region,
@@ -563,25 +609,128 @@ impl Renderer {
             }
         }
 
-        self.inner
-            .render_to_texture(
-                target.device,
-                target.queue,
-                &vs,
-                target.view,
-                &RenderParams {
-                    base_color: VColor::from_rgba8(
-                        target.base_color.r,
-                        target.base_color.g,
-                        target.base_color.b,
-                        target.base_color.a,
-                    ),
+        if !has_shaders {
+            // Original 2-stage path, unchanged: vello straight into the target with the caller's
+            // base color.
+            self.inner
+                .render_to_texture(
+                    target.device,
+                    target.queue,
+                    &vs,
+                    target.view,
+                    &RenderParams {
+                        base_color: VColor::from_rgba8(
+                            target.base_color.r,
+                            target.base_color.g,
+                            target.base_color.b,
+                            target.base_color.a,
+                        ),
+                        width: target.width,
+                        height: target.height,
+                        antialiasing_method: AaConfig::Area,
+                    },
+                )
+                .expect("vello render_to_texture");
+        } else {
+            // Stage 1: shader background(s) drawn straight into `target.view`.
+            self.draw_shader_backgrounds(scene, &read_value, target, sx, sy);
+
+            // Stage 2: vello 2D into a transient TRANSPARENT offscreen, same device/size as the
+            // target, so 2D content composites cleanly (Stage 3) over the shader background
+            // instead of clobbering it. `TEXTURE_BINDING` lets Stage 3 sample it;
+            // `RENDER_ATTACHMENT` lets vello render into it.
+            let vello_offscreen = target.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("shader-vello-offscreen"),
+                size: wgpu::Extent3d {
                     width: target.width,
                     height: target.height,
-                    antialiasing_method: AaConfig::Area,
+                    depth_or_array_layers: 1,
                 },
-            )
-            .expect("vello render_to_texture");
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                // TEXTURE_BINDING: Stage 3 samples it. RENDER_ATTACHMENT: vello renders into it.
+                // STORAGE_BINDING: vello's internal fine-rasterization pass writes to the target
+                // via a storage binding (see the spike's `same_device_target`, which needs it for
+                // the same reason).
+                usage: wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::STORAGE_BINDING,
+                view_formats: &[],
+            });
+            let vello_offscreen_view =
+                vello_offscreen.create_view(&wgpu::TextureViewDescriptor::default());
+            self.inner
+                .render_to_texture(
+                    target.device,
+                    target.queue,
+                    &vs,
+                    &vello_offscreen_view,
+                    &RenderParams {
+                        // TRANSPARENT (not target.base_color) — the shader background already
+                        // fills the target; the 2D layer must only cover what it actually draws.
+                        base_color: VColor::from_rgba8(0, 0, 0, 0),
+                        width: target.width,
+                        height: target.height,
+                        antialiasing_method: AaConfig::Area,
+                    },
+                )
+                .expect("vello render_to_texture (shader offscreen)");
+
+            // Stage 3: composite the vello offscreen OVER `target.view`. Reuses the view-composite
+            // pipeline verbatim — premultiplied-alpha blend, so 2D's transparent regions reveal
+            // the shader background and opaque regions cover it.
+            let bind_group = target.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("shader-vello-composite-bg"),
+                layout: &self.composite_bgl,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&vello_offscreen_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&self.composite_sampler),
+                    },
+                ],
+            });
+            let mut enc = target
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("shader-vello-composite-enc"),
+                });
+            {
+                let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("shader-vello-composite-pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: target.view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                rp.set_pipeline(&self.composite_pipeline);
+                rp.set_viewport(
+                    0.0,
+                    0.0,
+                    target.width as f32,
+                    target.height as f32,
+                    0.0,
+                    1.0,
+                );
+                rp.set_bind_group(0, &bind_group, &[]);
+                rp.draw(0..4, 0..1);
+            }
+            target.queue.submit(Some(enc.finish()));
+        }
 
         // Composite embedder-supplied content into each view's surface-space rect.
         let mut srcs: Vec<(Rect, &'v wgpu::TextureView)> = Vec::new();
@@ -657,11 +806,183 @@ impl Renderer {
             target.queue.submit(Some(enc.finish()));
         }
     }
+
+    // Stage 1 of the shader-background path: draws every `Node::Shader` in `scene` straight into
+    // `target.view`, first-to-last (later shaders draw over earlier ones, same as any other
+    // node kind). The first shader clears the target (transparent) so scenes that mix shader
+    // backgrounds with regions the shader doesn't cover stay transparent there rather than
+    // showing stale contents; subsequent shaders `LoadOp::Load` to draw over what's already been
+    // written (by the first shader or vello — but vello hasn't run yet at this point, so in
+    // practice "what's already been written" is only earlier shaders).
+    fn draw_shader_backgrounds(
+        &mut self,
+        scene: &Scene,
+        read_value: &impl Fn(&str) -> Option<StateValue>,
+        target: &RenderTarget,
+        sx: f64,
+        sy: f64,
+    ) {
+        let mut first = true;
+        for node in &scene.nodes {
+            let Node::Shader {
+                dest,
+                wgsl,
+                uniforms,
+                key,
+            } = node
+            else {
+                continue;
+            };
+
+            // Get-or-create the pipeline for this shader's content hash. `bgl` is captured as a
+            // local so the closure below only touches `self.shader_bgl` (not all of `self`),
+            // leaving `self.shader_pipelines` free for the concurrent `entry()` mutable borrow —
+            // the same disjoint-field-borrow pattern used for `self.families`/`self.font_cx`
+            // above.
+            let bgl = &self.shader_bgl;
+            let pipeline = self.shader_pipelines.entry(*key).or_insert_with(|| {
+                let module = target
+                    .device
+                    .create_shader_module(wgpu::ShaderModuleDescriptor {
+                        label: Some("shader-node"),
+                        source: wgpu::ShaderSource::Wgsl(wgsl.as_ref().into()),
+                    });
+                let layout =
+                    target
+                        .device
+                        .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                            label: Some("shader-node-pl"),
+                            bind_group_layouts: &[Some(bgl)],
+                            immediate_size: 0,
+                        });
+                target
+                    .device
+                    .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                        label: Some("shader-node-pipeline"),
+                        layout: Some(&layout),
+                        vertex: wgpu::VertexState {
+                            module: &module,
+                            entry_point: Some("vs"),
+                            buffers: &[],
+                            compilation_options: Default::default(),
+                        },
+                        fragment: Some(wgpu::FragmentState {
+                            module: &module,
+                            entry_point: Some("fs"),
+                            targets: &[Some(wgpu::ColorTargetState {
+                                format: wgpu::TextureFormat::Rgba8Unorm,
+                                // v1: shader{} backgrounds are opaque (no author-facing translucency
+                                // yet), so no blending — the shader always fully replaces whatever
+                                // was in the target for its dest rect.
+                                blend: None,
+                                write_mask: wgpu::ColorWrites::ALL,
+                            })],
+                            compilation_options: Default::default(),
+                        }),
+                        primitive: wgpu::PrimitiveState {
+                            topology: wgpu::PrimitiveTopology::TriangleStrip,
+                            ..Default::default()
+                        },
+                        depth_stencil: None,
+                        multisample: Default::default(),
+                        multiview_mask: None,
+                        cache: None,
+                    })
+            });
+
+            let vx = (dest.x as f64 * sx) as f32;
+            let vy = (dest.y as f64 * sy) as f32;
+            let vw = (dest.w as f64 * sx) as f32;
+            let vh = (dest.h as f64 * sy) as f32;
+
+            // Uniform buffer: `shader_uniform_header` packs the fixed `time`/`res` prefix that
+            // the generated `struct U` always starts with (16 bytes). Each `ShaderUniform` is
+            // then appended, tightly packed as 4-byte f32s in `uniforms` order — the exact order
+            // `prelude_for` declared the named fields in, so field N here lines up with the
+            // prelude's Nth named field at byte offset 16 + 4*N. Finally tail-pad to a multiple
+            // of 16 bytes (wgpu uniform buffers must be 16-byte aligned in size).
+            let mut bytes = shader_uniform_header(target.time, (vw, vh));
+            for u in uniforms {
+                let v = match &u.source {
+                    crate::shader::UniformSource::Literal(v) => *v,
+                    crate::shader::UniformSource::Host(k) => scalar_of(read_value, k),
+                };
+                bytes.extend_from_slice(&v.to_le_bytes());
+            }
+            while !bytes.len().is_multiple_of(16) {
+                bytes.push(0);
+            }
+            let uniform_buf = target.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("shader-node-uniform"),
+                size: bytes.len() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            target.queue.write_buffer(&uniform_buf, 0, &bytes);
+            let bind_group = target.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("shader-node-bg"),
+                layout: &self.shader_bgl,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform_buf.as_entire_binding(),
+                }],
+            });
+
+            let mut enc = target
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("shader-node-enc"),
+                });
+            {
+                let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("shader-node-pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: target.view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: if first {
+                                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
+                            } else {
+                                wgpu::LoadOp::Load
+                            },
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                rp.set_pipeline(pipeline);
+                rp.set_viewport(vx, vy, vw, vh, 0.0, 1.0);
+                rp.set_bind_group(0, &bind_group, &[]);
+                rp.draw(0..4, 0..1);
+            }
+            target.queue.submit(Some(enc.finish()));
+            first = false;
+        }
+    }
+}
+
+// Packs the fixed `time: f32, res: vec2<f32>` header every `shader{}`'s generated `struct U`
+// starts with (see `shader::prelude_for`), std140-style: `time` at offset 0, padded to align
+// `res` at offset 8, `res.x`/`res.y` at 8/12 — 16 bytes total, already 16-byte tail-aligned. The
+// caller (`draw_shader_backgrounds`) appends each `ShaderUniform`'s resolved value after this
+// header, in the same order `prelude_for` declared the named fields, then tail-pads to a
+// multiple of 16 bytes before writing the uniform buffer.
+fn shader_uniform_header(time: f32, res: (f32, f32)) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(16);
+    buf.extend_from_slice(&time.to_le_bytes());
+    buf.extend_from_slice(&[0u8; 4]); // pad so `res` lands at offset 8
+    buf.extend_from_slice(&res.0.to_le_bytes());
+    buf.extend_from_slice(&res.1.to_le_bytes());
+    buf
 }
 
 #[cfg(test)]
 mod tests {
-    use super::value_of;
+    use super::{scalar_of, value_of};
     use crate::state::StateValue;
     use std::sync::Arc;
 
@@ -669,5 +990,16 @@ mod tests {
     fn value_of_ignores_string_state() {
         let read = |_: &str| Some(StateValue::Str(Arc::from("not a number")));
         assert_eq!(value_of(&read, "k"), 0.0);
+    }
+
+    #[test]
+    fn scalar_of_is_raw_not_clamped() {
+        // Unlike `value_of` (clamped to 0..1 for UI fills), a shader uniform is free-form
+        // author data — `scalar_of` must pass an out-of-range scalar through unchanged.
+        let read = |_: &str| Some(StateValue::Scalar(2.5));
+        assert_eq!(scalar_of(&read, "k"), 2.5);
+
+        let read = |_: &str| Some(StateValue::Bool(true));
+        assert_eq!(scalar_of(&read, "k"), 1.0);
     }
 }

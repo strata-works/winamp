@@ -106,14 +106,15 @@ pub fn node_bbox(node: &Node) -> Option<Rect> {
         }
     }
     match node {
-        Node::Image { dest, .. } | Node::View { dest, .. } | Node::Frame { dest, .. } => {
-            Some(Rect {
-                x: dest.x,
-                y: dest.y,
-                w: dest.w,
-                h: dest.h,
-            })
-        }
+        Node::Image { dest, .. }
+        | Node::View { dest, .. }
+        | Node::Frame { dest, .. }
+        | Node::Shader { dest, .. } => Some(Rect {
+            x: dest.x,
+            y: dest.y,
+            w: dest.w,
+            h: dest.h,
+        }),
         Node::List { region, .. } => Some(Rect {
             x: region.x,
             y: region.y,
@@ -163,7 +164,10 @@ fn transform_node(node: &Node, from: Rect, to: Rect) -> Node {
     let map_path = |path: &[Pt]| path.iter().map(|p| map(*p)).collect::<Vec<_>>();
     let mut n = node.clone();
     match &mut n {
-        Node::Image { dest, .. } | Node::View { dest, .. } | Node::Frame { dest, .. } => {
+        Node::Image { dest, .. }
+        | Node::View { dest, .. }
+        | Node::Frame { dest, .. }
+        | Node::Shader { dest, .. } => {
             *dest = ImageDest {
                 x: to.x,
                 y: to.y,

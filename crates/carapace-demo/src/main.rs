@@ -152,6 +152,7 @@ impl AppShell {
                     b: 26,
                     a: 255,
                 },
+                time: self.engine.elapsed_secs(),
             },
         );
     }
@@ -163,6 +164,7 @@ const MEDIA_SKINS: &[&str] = &[
     "skins/reference",
     "skins/transport",
     "skins/frame",
+    "skins/shaderdemo",
 ];
 const SYSMON_SKINS: &[&str] = &["skins/sysmon"];
 const INIT_SCALE: u32 = 2;
@@ -616,6 +618,7 @@ impl ApplicationHandler for App {
                             b: 0,
                             a: 0,
                         },
+                        time: self.engine.elapsed_secs(),
                     },
                 );
 
