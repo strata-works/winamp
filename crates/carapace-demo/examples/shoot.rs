@@ -215,6 +215,7 @@ fn shoot(skin: &str, out_dir: &Path) {
                 b: 0,
                 a: 255,
             },
+            time: engine.elapsed_secs(),
         },
     );
     let data = readback(&o);

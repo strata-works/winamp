@@ -95,6 +95,7 @@ fn benches(c: &mut Criterion) {
                         b: 0,
                         a: 255,
                     },
+                    time: e.elapsed_secs(),
                 },
             );
         });

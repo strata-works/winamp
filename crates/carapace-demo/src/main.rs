@@ -152,6 +152,7 @@ impl AppShell {
                     b: 26,
                     a: 255,
                 },
+                time: self.engine.elapsed_secs(),
             },
         );
     }
@@ -616,6 +617,7 @@ impl ApplicationHandler for App {
                             b: 0,
                             a: 0,
                         },
+                        time: self.engine.elapsed_secs(),
                     },
                 );
 

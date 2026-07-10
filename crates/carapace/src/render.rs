@@ -32,6 +32,9 @@ pub struct RenderTarget<'a> {
     pub height: u32,
     /// Background color cleared/blended under the scene (vello's `RenderParams::base_color`).
     pub base_color: crate::scene::Color,
+    /// Seconds since the engine was created ([`Engine::elapsed_secs`](crate::engine::Engine::elapsed_secs)) —
+    /// the `time` uniform a `shader{}` node animates on.
+    pub time: f32,
 }
 
 /// The per-frame painter: draws a `Scene` via vello, shapes/caches text via parley, and

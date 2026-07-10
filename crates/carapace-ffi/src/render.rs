@@ -126,6 +126,7 @@ pub fn render_frame(
                 b: 0,
                 a: 0,
             },
+            time: engine.elapsed_secs(),
         },
     );
     // Poll only when the caller requests it. The Shared path skips this stall because

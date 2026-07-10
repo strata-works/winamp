@@ -390,6 +390,7 @@ fn four_stage_composites_2d_over_shader_background() {
                     b: 0,
                     a: 0,
                 }, // TRANSPARENT — key to the spike
+                time: 0.0,
             },
         );
     };

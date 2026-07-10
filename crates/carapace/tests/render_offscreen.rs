@@ -186,6 +186,7 @@ fn renders_fill_and_value_fill_at_sentinel_pixels() {
                 b: 0,
                 a: 255,
             },
+            time: 0.0,
         },
     );
     let data = readback(&o);
@@ -276,6 +277,7 @@ fn renders_an_image_at_sentinel_pixels() {
                 b: 0,
                 a: 255,
             },
+            time: 0.0,
         },
     );
     let data = readback(&o);
@@ -344,6 +346,7 @@ fn renders_translucent_fill_blended_over_background() {
                 b: 0,
                 a: 255,
             },
+            time: 0.0,
         },
     );
     let data = readback(&o);
@@ -415,6 +418,7 @@ fn renders_linear_gradient_oriented_and_interpolating() {
                 b: 0,
                 a: 255,
             },
+            time: 0.0,
         },
     );
     let data = readback(&o);
@@ -487,6 +491,7 @@ fn renders_bundled_font_text_in_fill_color() {
                 b: 0,
                 a: 255,
             },
+            time: 0.0,
         },
     );
     let data = readback(&o);
@@ -570,6 +575,7 @@ fn renders_gradient_filled_text_interpolating_vertically() {
                 b: 0,
                 a: 255,
             },
+            time: 0.0,
         },
     );
     let data = readback(&o);
@@ -652,6 +658,7 @@ fn renders_value_bound_text_from_string_state() {
                 b: 0,
                 a: 255,
             },
+            time: 0.0,
         },
     );
     let data = readback(&o);
@@ -712,6 +719,7 @@ fn value_fill_up_fills_from_the_bottom() {
                 b: 0,
                 a: 255,
             },
+            time: 0.0,
         },
     );
     let data = readback(&o);
@@ -761,6 +769,7 @@ fn value_fill_clips_to_a_non_rect_path() {
                 b: 0,
                 a: 255,
             },
+            time: 0.0,
         },
     );
     let data = readback(&o);
@@ -819,6 +828,7 @@ fn identical_text_is_shaped_once_and_cached() {
             b: 0,
             a: 255,
         },
+        time: 0.0,
     };
     r.draw(&scene, |_k: &str| None, |_| None, &target);
     r.draw(&scene, |_k: &str| None, |_| None, &target); // second frame: must reuse, not re-shape
@@ -863,6 +873,7 @@ fn transparent_base_color_leaves_undrawn_pixels_clear() {
                 b: 0,
                 a: 0,
             },
+            time: 0.0,
         },
     );
     let data = readback(&o);
@@ -959,6 +970,7 @@ fn view_composites_supplied_texture_into_its_rect() {
                 b: 0,
                 a: 255,
             },
+            time: 0.0,
         },
     );
     let data = readback(&o);
@@ -1007,6 +1019,7 @@ fn view_without_texture_leaves_the_hole() {
                 b: 7,
                 a: 255,
             },
+            time: 0.0,
         },
     );
     assert_eq!(
@@ -1091,6 +1104,7 @@ fn view_alpha_blends_over_the_layer_behind() {
                 b: 0,
                 a: 255,
             },
+            time: 0.0,
         },
     );
     let data = readback(&o);
@@ -1142,6 +1156,7 @@ fn gadget_path_still_uniform_scales() {
                 b: 0,
                 a: 255,
             },
+            time: 0.0,
         },
     );
     let data = readback(&o);
@@ -1244,6 +1259,7 @@ fn frame_keeps_corners_fixed_and_stretches_edges() {
             width: o120.w,
             height: o120.h,
             base_color: black_bg,
+            time: 0.0,
         },
     );
     let data120 = readback(&o120);
@@ -1262,6 +1278,7 @@ fn frame_keeps_corners_fixed_and_stretches_edges() {
             width: o200.w,
             height: o200.h,
             base_color: black_bg,
+            time: 0.0,
         },
     );
     let data200 = readback(&o200);
