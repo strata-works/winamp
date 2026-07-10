@@ -15,7 +15,7 @@ Reflects `crates/carapace/src/{vocab,script,scene,skin,shape,render}.rs` as of 2
 
 ## Primitives
 
-Primitives are Lua globals that each take a single table argument, e.g. `fill{ ... }`. The engine registers one constructor per primitive in `VocabRegistry::base()` (`vocab.rs:530-542`) and wires them data-drivenly (`script.rs:132-166`). The stock set is ten primitives; hosts can register more (see [Custom primitives](#custom-primitives)).
+Primitives are Lua globals that each take a single table argument, e.g. `fill{ ... }`. The engine registers one constructor per primitive in `VocabRegistry::base()` (`vocab.rs:569-582`) and wires them data-drivenly (`script.rs:132-166`). The stock set is ten primitives; hosts can register more (see [Custom primitives](#custom-primitives)).
 
 **Two fields work on every primitive** (handled outside each primitive's own `build()`):
 
