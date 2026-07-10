@@ -4,8 +4,8 @@ use carapace::scene::Node;
 use carapace::vocab::VocabRegistry;
 
 #[test]
-fn base_registry_now_has_nine() {
-    assert_eq!(VocabRegistry::base().iter().count(), 9);
+fn base_registry_now_has_ten() {
+    assert_eq!(VocabRegistry::base().iter().count(), 10);
 }
 
 #[test]

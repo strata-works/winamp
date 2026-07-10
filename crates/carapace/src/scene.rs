@@ -364,6 +364,19 @@ pub enum Node {
         /// Anchor position, in canvas coordinates.
         pos: Pt,
     },
+    /// A GPU shader fill: the engine runs `wgsl` (prelude + author fragment) into `dest` each
+    /// frame as a BACKGROUND layer (under the 2D UI), driven by `uniforms`. `key` content-
+    /// addresses the compiled pipeline in the renderer cache.
+    Shader {
+        /// Where the shader is drawn, in canvas coordinates.
+        dest: ImageDest,
+        /// The full combined WGSL source (prelude + author fragment), pre-validated at load.
+        wgsl: std::sync::Arc<str>,
+        /// The uniform bindings the shader reads each frame.
+        uniforms: Vec<crate::shader::ShaderUniform>,
+        /// A stable content hash of `wgsl`, used to key the renderer's pipeline cache.
+        key: u64,
+    },
 }
 
 /// Where a scene node came from in the skin source. Metadata only — the renderer and
@@ -511,9 +524,17 @@ impl Scene {
                         *size as i64
                     )
                 }
+                Node::Shader { uniforms, key, .. } => {
+                    format!("shader key={key} uniforms={}", uniforms.len())
+                }
             });
         }
         lines.join("\n")
+    }
+
+    /// True if any node is a `shader{}` (selects the renderer's 4-stage compositing path).
+    pub fn has_shaders(&self) -> bool {
+        self.nodes.iter().any(|n| matches!(n, Node::Shader { .. }))
     }
 
     /// The host-content regions a skin declares, in canvas coords — the embedder fills these.
@@ -668,9 +689,10 @@ impl Scene {
             Node::Fill { path, .. } | Node::ValueFill { path, .. } => {
                 region_of(path).contains(Point { x: p.x, y: p.y })
             }
-            Node::Image { dest, .. } | Node::Frame { dest, .. } | Node::View { dest, .. } => {
-                inside_rect(dest.x, dest.y, dest.w, dest.h)
-            }
+            Node::Image { dest, .. }
+            | Node::Frame { dest, .. }
+            | Node::View { dest, .. }
+            | Node::Shader { dest, .. } => inside_rect(dest.x, dest.y, dest.w, dest.h),
             Node::List { region, .. } | Node::Scrub { region, .. } => {
                 inside_rect(region.x, region.y, region.w, region.h)
             }

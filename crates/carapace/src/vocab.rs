@@ -15,6 +15,9 @@ pub enum BuildError {
     Lua(mlua::Error),
     /// Resolving an asset (image/font) referenced by the primitive failed.
     Asset(crate::asset::AssetError),
+    /// A `shader{}`'s combined WGSL (prelude + author fragment) failed naga validation at load;
+    /// carries the naga parse error message.
+    Shader(String),
 }
 
 impl From<mlua::Error> for BuildError {
@@ -42,6 +45,9 @@ pub trait BuildContext {
     /// Resolve an asset name to loaded font data, relative to the skin's asset directory.
     fn font(&mut self, name: &str)
     -> Result<Arc<crate::scene::FontData>, crate::asset::AssetError>;
+    /// Resolve an asset name to a `.wgsl` source file's UTF-8 text, relative to the skin's asset
+    /// directory.
+    fn shader_src(&mut self, name: &str) -> Result<Arc<str>, crate::asset::AssetError>;
 }
 
 /// A vocabulary entry a skin can construct: `id` is the Lua constructor name.
@@ -558,8 +564,8 @@ impl VocabRegistry {
     pub fn iter(&self) -> impl Iterator<Item = &dyn Primitive> {
         self.prims.iter().map(|b| b.as_ref())
     }
-    /// The stock set of 9 base primitives: `fill`, `region`, `value_fill`, `image`, `frame`,
-    /// `text`, `view`, `list`, `scrub`. The typical `registry` argument to `Engine::new`.
+    /// The stock set of 10 base primitives: `fill`, `region`, `value_fill`, `image`, `frame`,
+    /// `text`, `view`, `list`, `scrub`, `shader`. The typical `registry` argument to `Engine::new`.
     pub fn base() -> Self {
         let mut r = Self::new();
         r.register(Box::new(FillPrim));
@@ -571,6 +577,7 @@ impl VocabRegistry {
         r.register(Box::new(ViewPrim));
         r.register(Box::new(ListPrim));
         r.register(Box::new(ScrubPrim));
+        r.register(Box::new(crate::shader::ShaderPrim));
         r
     }
 }
@@ -606,6 +613,9 @@ mod tests {
             &mut self,
             name: &str,
         ) -> Result<std::sync::Arc<crate::scene::FontData>, crate::asset::AssetError> {
+            Err(crate::asset::AssetError::Unresolved(name.to_string()))
+        }
+        fn shader_src(&mut self, name: &str) -> Result<Arc<str>, crate::asset::AssetError> {
             Err(crate::asset::AssetError::Unresolved(name.to_string()))
         }
     }
@@ -703,6 +713,9 @@ mod tests {
                 name: &str,
             ) -> Result<std::sync::Arc<crate::scene::FontData>, crate::asset::AssetError>
             {
+                Err(crate::asset::AssetError::Unresolved(name.to_string()))
+            }
+            fn shader_src(&mut self, name: &str) -> Result<Arc<str>, crate::asset::AssetError> {
                 Err(crate::asset::AssetError::Unresolved(name.to_string()))
             }
         }
@@ -857,6 +870,9 @@ mod tests {
             ) -> Result<Arc<crate::scene::FontData>, crate::asset::AssetError> {
                 Err(crate::asset::AssetError::Unresolved(n.to_string()))
             }
+            fn shader_src(&mut self, n: &str) -> Result<Arc<str>, crate::asset::AssetError> {
+                Err(crate::asset::AssetError::Unresolved(n.to_string()))
+            }
         }
         let img = Arc::new(DecodedImage {
             rgba: vec![0; 4],
@@ -937,8 +953,8 @@ mod tests {
     }
 
     #[test]
-    fn base_registry_now_has_nine() {
-        assert_eq!(VocabRegistry::base().iter().count(), 9);
+    fn base_registry_now_has_ten() {
+        assert_eq!(VocabRegistry::base().iter().count(), 10);
     }
 
     #[test]
@@ -1094,6 +1110,9 @@ mod tests {
                 name: &str,
             ) -> Result<std::sync::Arc<crate::scene::FontData>, crate::asset::AssetError>
             {
+                Err(crate::asset::AssetError::Unresolved(name.to_string()))
+            }
+            fn shader_src(&mut self, name: &str) -> Result<Arc<str>, crate::asset::AssetError> {
                 Err(crate::asset::AssetError::Unresolved(name.to_string()))
             }
         }

@@ -73,7 +73,7 @@ mod tests {
     fn registers_and_builds_a_vertical_gauge_with_label() {
         let mut reg = VocabRegistry::base();
         reg.register(Box::new(GaugePrim));
-        assert_eq!(reg.iter().count(), 10); // base 9 + gauge
+        assert_eq!(reg.iter().count(), 11); // base 10 + gauge
 
         let lua = carapace::mlua::Lua::new();
         let t: carapace::mlua::Table = lua
@@ -100,6 +100,12 @@ mod tests {
                 n: &str,
             ) -> Result<std::sync::Arc<carapace::scene::FontData>, carapace::asset::AssetError>
             {
+                Err(carapace::asset::AssetError::Unresolved(n.to_string()))
+            }
+            fn shader_src(
+                &mut self,
+                n: &str,
+            ) -> Result<std::sync::Arc<str>, carapace::asset::AssetError> {
                 Err(carapace::asset::AssetError::Unresolved(n.to_string()))
             }
         }

@@ -22,6 +22,9 @@ pub mod render;
 pub mod scene;
 /// Lua script loading and execution errors for the skin entry point.
 pub mod script;
+/// The `shader{}` primitive: `Node::Shader`, `ShaderUniform`/`UniformSource`, and the WGSL
+/// prelude generator + naga validation run at skin-load time.
+pub mod shader;
 /// Geometry types (paths, contours) shared by hotspots and fills.
 pub mod shape;
 /// Skin manifest (`skin.toml`) loading and validation.
