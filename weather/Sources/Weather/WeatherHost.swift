@@ -1,8 +1,20 @@
+import Foundation
+
 /// Answers the host-data contract (numeric shader uniforms, display strings, daily rows) from a
 /// `WeatherModel`. Held by the HostCallbacks vtable; mutate `model` to change what the skin shows.
 final class WeatherHost {
-    var model: WeatherModel
-    init(model: WeatherModel) { self.model = model }
+    private var _model: WeatherModel
+    private let lock = NSLock()
+    init(model: WeatherModel) { self._model = model }
+
+    /// The current weather state. Thread-safe: the engine reads via the host vtable on the
+    /// RENDER thread (num/str/rowCount/rowString) while the app mutates from the MAIN thread
+    /// (the debug condition-cycle now; M2's live data updates later). All access is lock-guarded,
+    /// so a full-model swap is atomic w.r.t. the render thread's reads.
+    var model: WeatherModel {
+        get { lock.lock(); defer { lock.unlock() }; return _model }
+        set { lock.lock(); _model = newValue; lock.unlock() }
+    }
 
     /// Parse the `i` out of "wx_hour_<i>_<suffix>", or nil.
     private func hourIndex(_ key: String, suffix: String) -> Int? {
@@ -26,18 +38,22 @@ final class WeatherHost {
     }
 
     func str(_ key: String) -> String? {
+        // Snapshot once so the count-check and the index read below see the SAME model — two
+        // separate `model` reads could observe different snapshots (TOCTOU → out-of-bounds) once
+        // M2 mutates array lengths from another thread.
+        let m = model
         switch key {
-        case "location":       return model.location
-        case "condition_text": return model.conditionText
-        case "temp_now":       return model.tempNow
-        case "hi_lo":          return model.hiLo
-        case "feels":          return model.feels
+        case "location":       return m.location
+        case "condition_text": return m.conditionText
+        case "temp_now":       return m.tempNow
+        case "hi_lo":          return m.hiLo
+        case "feels":          return m.feels
         default:
-            if let i = hourIndex(key, suffix: "_time"), i >= 0, i < model.hours.count {
-                return model.hours[i].time
+            if let i = hourIndex(key, suffix: "_time"), i >= 0, i < m.hours.count {
+                return m.hours[i].time
             }
-            if let i = hourIndex(key, suffix: "_temp"), i >= 0, i < model.hours.count {
-                return model.hours[i].temp
+            if let i = hourIndex(key, suffix: "_temp"), i >= 0, i < m.hours.count {
+                return m.hours[i].temp
             }
             return nil
         }
@@ -46,8 +62,10 @@ final class WeatherHost {
     func rowCount() -> Int { model.days.count }
 
     func rowString(_ index: Int, field: String) -> String? {
-        guard index >= 0, index < model.days.count else { return nil }
-        let d = model.days[index]
+        // Single snapshot so the bounds check and the index read below can't race (see `str`).
+        let m = model
+        guard index >= 0, index < m.days.count else { return nil }
+        let d = m.days[index]
         switch field {
         case "day":   return d.day
         case "glyph": return d.glyph

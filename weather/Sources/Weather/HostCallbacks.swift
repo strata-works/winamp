@@ -46,7 +46,7 @@ func hostGetRowStr(_ ctx: UnsafeMutableRawPointer?, _ col: UnsafePointer<CChar>?
 }
 
 func hostGetRowNum(_ ctx: UnsafeMutableRawPointer?, _ col: UnsafePointer<CChar>?, _ index: UInt32, _ field: UnsafePointer<CChar>?, _ out: UnsafeMutablePointer<Double>?) -> Bool {
-    // playlist has no numeric fields today; string fields only.
+    // daily has no numeric fields today; string fields only.
     return false
 }
 

@@ -4,8 +4,9 @@ import CCarapace
 
 /// Global frame sink so the C `frame_ready` callback (no captured context) can deliver frames.
 /// Set by the single live CarapaceBridge. Fired on the render thread → we hop to main.
-/// `surfaces` is read here (render thread) and written from `swapResized` (main thread), so both
-/// sides take the same lock to avoid a torn read of the array during a live pool swap.
+/// `surfaces` is written once in `init?` (main thread) and read here in `onFrameReady` (render
+/// thread); this app has no live pool swap, but the lock is kept as cheap insurance against a
+/// torn read of the array.
 final class FrameSink {
     var onFrame: ((IOSurface, UInt32) -> Void)?
     var surfaces: [IOSurface] = []
@@ -73,7 +74,7 @@ final class CarapaceBridge {
         if !ok {
             var msg = [CChar](repeating: 0, count: 256)
             _ = carapace_last_error(&msg, UInt(msg.count))
-            print("[showcase] carapace_create failed: \(String(cString: msg))")
+            print("[weather] carapace_create failed: \(String(cString: msg))")
             return nil
         }
     }
