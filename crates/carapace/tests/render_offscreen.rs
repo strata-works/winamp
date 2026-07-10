@@ -1252,6 +1252,99 @@ fn shader_background_renders_under_2d() {
 }
 
 #[test]
+fn shader_uniform_is_reactive() {
+    use carapace::scene::ImageDest;
+    use carapace::shader::{ShaderUniform, UniformSource};
+    use std::hash::{DefaultHasher, Hash, Hasher};
+    use std::sync::Arc;
+
+    let (w, h) = (64u32, 64u32);
+    // A shader that outputs the host-bound `intensity` uniform as red, everywhere.
+    let frag = "@fragment fn fs(in: VsOut) -> @location(0) vec4<f32> { return vec4(u.intensity, 0.0, 0.0, 1.0); }";
+    let full = format!(
+        "{}\n{}",
+        carapace::shader::prelude_for(&["intensity"]),
+        frag
+    );
+    let mut hasher = DefaultHasher::new();
+    full.hash(&mut hasher);
+    let key = hasher.finish();
+
+    let make_scene = || Scene {
+        canvas: (w, h),
+        nodes: vec![Node::Shader {
+            dest: ImageDest {
+                x: 0.0,
+                y: 0.0,
+                w: w as f32,
+                h: h as f32,
+            },
+            wgsl: Arc::from(full.as_str()),
+            uniforms: vec![ShaderUniform {
+                name: "intensity".to_string(),
+                source: UniformSource::Host("wx".to_string()),
+            }],
+            key,
+        }],
+    };
+
+    // Draw 1: host reports wx = 0.0 -> red should be ~0.
+    let o1 = offscreen(w, h);
+    let mut r1 = Renderer::new(&o1.device);
+    let read_lo = |k: &str| (k == "wx").then_some(StateValue::Scalar(0.0));
+    r1.draw(
+        &make_scene(),
+        read_lo,
+        |_| None,
+        &RenderTarget {
+            device: &o1.device,
+            queue: &o1.queue,
+            view: &o1.view,
+            width: o1.w,
+            height: o1.h,
+            time: 0.0,
+            base_color: Color {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 0,
+            },
+        },
+    );
+    let d1 = readback(&o1);
+    let red_lo = px(&d1, w, w / 2, h / 2)[0];
+
+    // Draw 2: host reports wx = 1.0 -> red should be ~255.
+    let o2 = offscreen(w, h);
+    let mut r2 = Renderer::new(&o2.device);
+    let read_hi = |k: &str| (k == "wx").then_some(StateValue::Scalar(1.0));
+    r2.draw(
+        &make_scene(),
+        read_hi,
+        |_| None,
+        &RenderTarget {
+            device: &o2.device,
+            queue: &o2.queue,
+            view: &o2.view,
+            width: o2.w,
+            height: o2.h,
+            time: 0.0,
+            base_color: Color {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 0,
+            },
+        },
+    );
+    let d2 = readback(&o2);
+    let red_hi = px(&d2, w, w / 2, h / 2)[0];
+
+    assert!(red_lo < 10, "wx=0.0 should render ~0 red, got {red_lo}");
+    assert!(red_hi > 245, "wx=1.0 should render ~255 red, got {red_hi}");
+}
+
+#[test]
 fn no_shader_scene_uses_2stage_path_unchanged() {
     // Same scene/assertions as `renders_fill_and_value_fill_at_sentinel_pixels` — pins that a
     // scene with zero `Node::Shader` nodes still takes the original 2-stage path (vello straight

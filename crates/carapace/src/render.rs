@@ -145,6 +145,18 @@ fn value_of(read: &impl Fn(&str) -> Option<StateValue>, key: &str) -> f64 {
     }
 }
 
+// Raw (unclamped) scalar resolver for shader{} user uniforms — deliberately distinct from
+// `value_of` above, which clamps to 0..1 for the UI-fill use case. A shader uniform is
+// author-declared free-form data (e.g. a temperature or season value); clamping it here would
+// silently corrupt anything outside 0..1.
+fn scalar_of(read: &impl Fn(&str) -> Option<StateValue>, key: &str) -> f32 {
+    match read(key) {
+        Some(StateValue::Scalar(v)) => v,
+        Some(StateValue::Bool(b)) => b as i32 as f32,
+        _ => 0.0,
+    }
+}
+
 fn text_of(read: &impl Fn(&str) -> Option<StateValue>, key: &str) -> String {
     match read(key) {
         Some(StateValue::Str(s)) => s.to_string(),
@@ -621,7 +633,7 @@ impl Renderer {
                 .expect("vello render_to_texture");
         } else {
             // Stage 1: shader background(s) drawn straight into `target.view`.
-            self.draw_shader_backgrounds(scene, target, sx, sy);
+            self.draw_shader_backgrounds(scene, &read_value, target, sx, sy);
 
             // Stage 2: vello 2D into a transient TRANSPARENT offscreen, same device/size as the
             // target, so 2D content composites cleanly (Stage 3) over the shader background
@@ -802,11 +814,21 @@ impl Renderer {
     // showing stale contents; subsequent shaders `LoadOp::Load` to draw over what's already been
     // written (by the first shader or vello — but vello hasn't run yet at this point, so in
     // practice "what's already been written" is only earlier shaders).
-    fn draw_shader_backgrounds(&mut self, scene: &Scene, target: &RenderTarget, sx: f64, sy: f64) {
+    fn draw_shader_backgrounds(
+        &mut self,
+        scene: &Scene,
+        read_value: &impl Fn(&str) -> Option<StateValue>,
+        target: &RenderTarget,
+        sx: f64,
+        sy: f64,
+    ) {
         let mut first = true;
         for node in &scene.nodes {
             let Node::Shader {
-                dest, wgsl, key, ..
+                dest,
+                wgsl,
+                uniforms,
+                key,
             } = node
             else {
                 continue;
@@ -873,12 +895,23 @@ impl Renderer {
             let vw = (dest.w as f64 * sx) as f32;
             let vh = (dest.h as f64 * sy) as f32;
 
-            // Uniform buffer: `time` + `resolution` header only (Task 4 scope). The seam for
-            // Task 5's per-shader user uniforms: `shader_uniform_header` packs the fixed
-            // `time`/`res` prefix that the generated `struct U` always starts with; a follow-on
-            // change appends each `ShaderUniform`'s resolved f32 value (in `uniforms` order,
-            // matching `prelude_for`'s field order) after this header before writing the buffer.
-            let bytes = shader_uniform_header(target.time, (vw, vh));
+            // Uniform buffer: `shader_uniform_header` packs the fixed `time`/`res` prefix that
+            // the generated `struct U` always starts with (16 bytes). Each `ShaderUniform` is
+            // then appended, tightly packed as 4-byte f32s in `uniforms` order — the exact order
+            // `prelude_for` declared the named fields in, so field N here lines up with the
+            // prelude's Nth named field at byte offset 16 + 4*N. Finally tail-pad to a multiple
+            // of 16 bytes (wgpu uniform buffers must be 16-byte aligned in size).
+            let mut bytes = shader_uniform_header(target.time, (vw, vh));
+            for u in uniforms {
+                let v = match &u.source {
+                    crate::shader::UniformSource::Literal(v) => *v,
+                    crate::shader::UniformSource::Host(k) => scalar_of(read_value, k),
+                };
+                bytes.extend_from_slice(&v.to_le_bytes());
+            }
+            while !bytes.len().is_multiple_of(16) {
+                bytes.push(0);
+            }
             let uniform_buf = target.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("shader-node-uniform"),
                 size: bytes.len() as u64,
@@ -934,9 +967,10 @@ impl Renderer {
 
 // Packs the fixed `time: f32, res: vec2<f32>` header every `shader{}`'s generated `struct U`
 // starts with (see `shader::prelude_for`), std140-style: `time` at offset 0, padded to align
-// `res` at offset 8, `res.x`/`res.y` at 8/12 — 16 bytes total, already 16-byte tail-aligned.
-// Task 5 seam: appends each `ShaderUniform`'s resolved value after this header, in the same
-// order `prelude_for` declared the named fields, before writing the uniform buffer.
+// `res` at offset 8, `res.x`/`res.y` at 8/12 — 16 bytes total, already 16-byte tail-aligned. The
+// caller (`draw_shader_backgrounds`) appends each `ShaderUniform`'s resolved value after this
+// header, in the same order `prelude_for` declared the named fields, then tail-pads to a
+// multiple of 16 bytes before writing the uniform buffer.
 fn shader_uniform_header(time: f32, res: (f32, f32)) -> Vec<u8> {
     let mut buf = Vec::with_capacity(16);
     buf.extend_from_slice(&time.to_le_bytes());
@@ -948,7 +982,7 @@ fn shader_uniform_header(time: f32, res: (f32, f32)) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::value_of;
+    use super::{scalar_of, value_of};
     use crate::state::StateValue;
     use std::sync::Arc;
 
@@ -956,5 +990,16 @@ mod tests {
     fn value_of_ignores_string_state() {
         let read = |_: &str| Some(StateValue::Str(Arc::from("not a number")));
         assert_eq!(value_of(&read, "k"), 0.0);
+    }
+
+    #[test]
+    fn scalar_of_is_raw_not_clamped() {
+        // Unlike `value_of` (clamped to 0..1 for UI fills), a shader uniform is free-form
+        // author data — `scalar_of` must pass an out-of-range scalar through unchanged.
+        let read = |_: &str| Some(StateValue::Scalar(2.5));
+        assert_eq!(scalar_of(&read, "k"), 2.5);
+
+        let read = |_: &str| Some(StateValue::Bool(true));
+        assert_eq!(scalar_of(&read, "k"), 1.0);
     }
 }
