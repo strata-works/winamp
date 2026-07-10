@@ -126,6 +126,8 @@ view{ id = "app", x = 16, y = 34, w = 448, h = 270,
       anchor = { "left", "right", "top", "bottom" }, min = { w = 288, h = 150 } }
 ```
 
+A skin may declare **multiple** `view{}` cutouts, each with a distinct `id` (e.g. a video pane and a separate widget pane). The host fills each one's live content independently, keyed by `id`, via the engine's view-id-keyed content registry — see [Host-view content registry](./ffi-c-abi.md#host-view-content-registry) for the full mechanism (`carapace_set_content_surface`, the `"host"` seed, persistence across swaps).
+
 ### `list{}`
 
 A host-driven row list (e.g. a playlist), expanded each frame from `host.rows(collection)`. Registered at `vocab.rs:358-436`.

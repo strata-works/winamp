@@ -396,6 +396,52 @@ pub unsafe extern "C" fn carapace_swap_skin_resized(
     reply_rx.recv().unwrap_or_else(|_| e.enter_poisoned())
 }
 
+/// Attach/replace (`surface` non-null) or clear (`surface` null) the live content for the skin's
+/// `view{ id = view_id }` cutout. Blocks until applied; then the caller may free a replaced/cleared
+/// surface. `w`/`h` are accepted for symmetry with create/swap (dims are derived from the surface).
+///
+/// # Safety
+/// `ptr` from `carapace_create`, not destroyed. `view_id` a valid NUL-terminated UTF-8 string.
+/// `surface` null or a live BGRA IOSurface outliving this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn carapace_set_content_surface(
+    ptr: *mut CarapaceEngine,
+    view_id: *const c_char,
+    surface: *const c_void,
+    _w: u32,
+    _h: u32,
+) -> CarapaceStatus {
+    let Some(e) = (unsafe { ptr.as_ref() }) else {
+        return CarapaceStatus::ErrNullArg;
+    };
+    if view_id.is_null() {
+        set_last_error("carapace_set_content_surface: null view_id");
+        return CarapaceStatus::ErrNullArg;
+    }
+    if e.poisoned.load(std::sync::atomic::Ordering::Acquire) {
+        return e.enter_poisoned();
+    }
+    let view_id = match unsafe { CStr::from_ptr(view_id) }.to_str() {
+        Ok(s) => s.to_string(),
+        Err(_) => {
+            set_last_error("carapace_set_content_surface: view_id is not valid UTF-8");
+            return CarapaceStatus::ErrBadSkin;
+        }
+    };
+    let (reply_tx, reply_rx) = std::sync::mpsc::channel::<CarapaceStatus>();
+    if e.tx
+        .send(Command::SetContent {
+            view_id,
+            surface: crate::queue::SendSurface(surface),
+            reply: reply_tx,
+        })
+        .is_err()
+    {
+        return e.enter_poisoned();
+    }
+    reply_rx.recv().unwrap_or_else(|_| e.enter_poisoned())
+}
+
 /// Pointer event kind, mirrored 1:1 by the Rust `queue::PointerKind` the render thread consumes.
 #[repr(i32)]
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -643,6 +689,103 @@ pub(crate) mod test_support {
         }
         unsafe { IOSurfaceUnlock(surface, 0x1, &mut seed) };
         nonzero
+    }
+
+    /// Scan a BGRA IOSurface for any pixel matching `bgra` within +/- `tol` per channel (alpha
+    /// ignored). Used to detect that a specific content surface composited into its cutout, as
+    /// opposed to `iosurface_has_nonzero_pixels` which any full-canvas background fill trips.
+    ///
+    /// # Safety
+    /// `surface` must be a valid, live IOSurface of at least `w`x`h` BGRA8 pixels.
+    pub(crate) unsafe fn iosurface_has_color(
+        surface: IOSurfaceRef,
+        w: u32,
+        h: u32,
+        bgra: [u8; 4],
+        tol: u8,
+    ) -> bool {
+        use crate::render::{
+            IOSurfaceGetBaseAddress, IOSurfaceGetBytesPerRow, IOSurfaceLock, IOSurfaceUnlock,
+        };
+        let mut seed: u32 = 0;
+        unsafe {
+            IOSurfaceLock(surface, 0x1 /* kIOSurfaceLockReadOnly */, &mut seed)
+        };
+        let base = unsafe { IOSurfaceGetBaseAddress(surface) } as *const u8;
+        let stride = unsafe { IOSurfaceGetBytesPerRow(surface) };
+        let close = |a: u8, b: u8| (a as i16 - b as i16).unsigned_abs() as u8 <= tol;
+        let mut found = false;
+        for y in 0..h as usize {
+            for x in 0..w as usize {
+                let p = unsafe { base.add(y * stride + x * 4) };
+                let px = unsafe { std::slice::from_raw_parts(p, 3) };
+                if close(px[0], bgra[0]) && close(px[1], bgra[1]) && close(px[2], bgra[2]) {
+                    found = true;
+                    break;
+                }
+            }
+            if found {
+                break;
+            }
+        }
+        unsafe { IOSurfaceUnlock(surface, 0x1, &mut seed) };
+        found
+    }
+
+    /// Fill a BGRA IOSurface with a solid color (bytes B,G,R,A per pixel).
+    ///
+    /// # Safety
+    /// `s` must be a valid, live IOSurface of at least `w`x`h` BGRA8 pixels.
+    pub(crate) unsafe fn fill_iosurface(s: IOSurfaceRef, w: u32, h: u32, rgba: [u8; 4]) {
+        use crate::render::{
+            IOSurfaceGetBaseAddress, IOSurfaceGetBytesPerRow, IOSurfaceLock, IOSurfaceUnlock,
+        };
+        unsafe { IOSurfaceLock(s, 0, std::ptr::null_mut()) };
+        let base = unsafe { IOSurfaceGetBaseAddress(s) } as *mut u8;
+        let stride = unsafe { IOSurfaceGetBytesPerRow(s) };
+        let bgra = [rgba[2], rgba[1], rgba[0], rgba[3]];
+        for y in 0..h as usize {
+            for x in 0..w as usize {
+                let p = unsafe { base.add(y * stride + x * 4) };
+                unsafe { std::ptr::copy_nonoverlapping(bgra.as_ptr(), p, 4) };
+            }
+        }
+        unsafe { IOSurfaceUnlock(s, 0, std::ptr::null_mut()) };
+    }
+
+    /// Create a handle whose pool is `count` `w`×`h` BGRA surfaces, seeded with a `content`
+    /// surface (the `"host"` cutout) and the given skin `dir`. Mirrors
+    /// `create_test_handle_pool_vt`, but supplies a non-null `content_surface` and a
+    /// caller-chosen skin directory (rather than the shared classic-skin fixture) so tests can
+    /// exercise a skin that declares its own `view{ id = "host" }` cutout. Returns the handle
+    /// plus the pool surfaces (kept alive by the caller).
+    pub(crate) fn create_test_handle_with_content(
+        w: u32,
+        h: u32,
+        count: usize,
+        vtable: CarapaceHostVTable,
+        content: IOSurfaceRef,
+        dir: &std::ffi::CStr,
+    ) -> (*mut CarapaceEngine, Vec<IOSurfaceRef>) {
+        let surfaces: Vec<IOSurfaceRef> = (0..count)
+            .map(|_| make_bgra_iosurface(w as usize, h as usize))
+            .collect();
+        let desc = CarapaceCreateDesc {
+            skin_dir: dir.as_ptr(),
+            vtable,
+            surfaces: surfaces.as_ptr(),
+            surface_count: count as u32,
+            content_surface: content,
+            w,
+            h,
+        };
+        let mut handle: *mut CarapaceEngine = std::ptr::null_mut();
+        assert_eq!(
+            unsafe { carapace_create(&desc, &mut handle) },
+            CarapaceStatus::Ok
+        );
+        assert!(!handle.is_null());
+        (handle, surfaces)
     }
 }
 

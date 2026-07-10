@@ -20,7 +20,7 @@
 /**
  * ABI minor version. Bumped on additive (backward-compatible) changes.
  */
-#define CARAPACE_ABI_MINOR 2
+#define CARAPACE_ABI_MINOR 3
 
 /**
  * Result of every fallible export. Additive: append new variants, never reorder.
@@ -396,6 +396,23 @@ CarapaceStatus carapace_swap_skin_resized(CarapaceEngine *ptr,
                                           uint32_t width,
                                           uint32_t height,
                                           const void *content_surface);
+#endif
+
+#if (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE))
+/**
+ * Attach/replace (`surface` non-null) or clear (`surface` null) the live content for the skin's
+ * `view{ id = view_id }` cutout. Blocks until applied; then the caller may free a replaced/cleared
+ * surface. `w`/`h` are accepted for symmetry with create/swap (dims are derived from the surface).
+ *
+ * # Safety
+ * `ptr` from `carapace_create`, not destroyed. `view_id` a valid NUL-terminated UTF-8 string.
+ * `surface` null or a live BGRA IOSurface outliving this call.
+ */
+CarapaceStatus carapace_set_content_surface(CarapaceEngine *ptr,
+                                            const char *view_id,
+                                            const void *surface,
+                                            uint32_t _w,
+                                            uint32_t _h);
 #endif
 
 #if (defined(CARAPACE_APPLE) || defined(CARAPACE_APPLE))

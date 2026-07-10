@@ -15,10 +15,11 @@ struct DitherUniforms {
 }
 
 /// Studio-palette dither uniforms for a given cutout size, clamping `level` to 0...1.
-func makeDitherUniforms(time: Float, level: Float, width: Float, height: Float) -> DitherUniforms {
+func makeDitherUniforms(time: Float, level: Float, width: Float, height: Float,
+                        front: (Float, Float, Float) = (77.0/255, 160.0/255, 240.0/255)) -> DitherUniforms {
     let l = max(0, min(1, level))
     return DitherUniforms(
         backR: 0.02, backG: 0.03, backB: 0.05, backA: 1,
-        frontR: 77.0/255, frontG: 160.0/255, frontB: 240.0/255, frontA: 1,
+        frontR: front.0, frontG: front.1, frontB: front.2, frontA: 1,
         resX: width, resY: height, time: time, level: l, pxSize: 3)
 }
