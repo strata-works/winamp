@@ -206,10 +206,7 @@ mod tests {
         let lua = Lua::new();
         let t = tbl(&lua, "return { src='bad.wgsl', x=0, y=0, w=10, h=10 }");
         let err = ShaderPrim.build(&t, &mut BadWgsl).unwrap_err();
-        assert!(matches!(
-            err,
-            BuildError::Shader(_) | BuildError::BadType(_) | BuildError::Lua(_)
-        ));
+        assert!(matches!(err, BuildError::Shader(_)));
     }
 
     #[test]
@@ -221,5 +218,17 @@ mod tests {
         assert!(s.contains("season: f32"));
         assert!(s.contains("temp: f32"));
         assert!(s.contains("@group(0) @binding(0) var<uniform> u: U;"));
+    }
+
+    #[test]
+    fn uniform_referencing_fragment_validates() {
+        let prelude = prelude_for(&["season", "temp"]);
+        let fragment = "@fragment fn fs(in: VsOut) -> @location(0) vec4<f32> { \
+            return vec4(u.season, u.temp, u.time, 1.0); }";
+        let full = format!("{prelude}\n{fragment}");
+        assert!(
+            naga::front::wgsl::parse_str(&full).is_ok(),
+            "prelude + uniform-referencing fragment should validate cleanly"
+        );
     }
 }
