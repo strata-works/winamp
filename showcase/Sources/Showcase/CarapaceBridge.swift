@@ -134,6 +134,19 @@ final class CarapaceBridge {
         return true
     }
 
+    /// Attach/replace (`surface != nil`) or clear (`surface == nil`) the live content for the skin's
+    /// `view{ id = viewId }` cutout. Blocking: on return the render thread has applied the change and
+    /// dropped any replaced/cleared `ContentTex`, so a cleared/replaced surface is safe to free. Model
+    /// on `swapResized`'s opaque `const void *` handling — unwrap the IOSurfaceRef to its raw pointer.
+    @discardableResult
+    func setContentSurface(_ viewId: String, _ surface: IOSurface?, _ w: Int, _ h: Int) -> Bool {
+        guard let e = engine else { return false }
+        let ptr = surface.map { UnsafeRawPointer(Unmanaged.passUnretained($0 as IOSurfaceRef).toOpaque()) }
+        return viewId.withCString { vid in
+            carapace_set_content_surface(e, vid, ptr, UInt32(w), UInt32(h)) == Ok
+        }
+    }
+
     func releaseSurface(_ index: UInt32) {
         guard let e = engine else { return }
         _ = carapace_release_surface(e, index)

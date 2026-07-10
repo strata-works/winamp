@@ -40,9 +40,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn abi_version_is_v3_2() {
-        assert_eq!(carapace_abi_version(), (3 << 16) | 2);
+    fn abi_version_is_v3_3() {
+        assert_eq!(carapace_abi_version(), (3 << 16) | 3);
         assert_eq!(CARAPACE_ABI_MAJOR, 3);
-        assert_eq!(CARAPACE_ABI_MINOR, 2);
+        assert_eq!(CARAPACE_ABI_MINOR, 3);
     }
 }

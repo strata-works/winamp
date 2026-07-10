@@ -126,6 +126,8 @@ view{ id = "app", x = 16, y = 34, w = 448, h = 270,
       anchor = { "left", "right", "top", "bottom" }, min = { w = 288, h = 150 } }
 ```
 
+A skin may declare **multiple** `view{}` cutouts, each with a distinct `id` (e.g. a video pane and a separate widget pane). The host fills each one's live content independently, keyed by `id`, via the engine's view-id-keyed content registry — see [Host-view content registry](./ffi-c-abi.md#host-view-content-registry) for the full mechanism (`carapace_set_content_surface`, the `"host"` seed, persistence across swaps).
+
 ### `shader{}`
 
 A GPU fragment-shader fill: the engine runs the author's WGSL fragment stage into `dest` every frame as a **background layer** — it composites *under* the 2D UI (fills, images, text draw on top of it), not as a regular scene node. Parsed and naga-validated entirely at skin-load time, no GPU adapter required (`ShaderPrim::build`, `shader.rs:57-107`); produces a single `Node::Shader { dest, wgsl, uniforms, key }` (`scene.rs:367-379`). At render time, `Scene::has_shaders` (`scene.rs:535-538`) switches the renderer onto a 4-stage compositing path whose first stage, `draw_shader_backgrounds` (`render.rs:817-965`), draws shader nodes straight into the target before the 2D/vello layer is composited over them.

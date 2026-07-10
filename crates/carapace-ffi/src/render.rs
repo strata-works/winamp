@@ -81,9 +81,10 @@ pub fn new_offscreen(device: &wgpu::Device, w: u32, h: u32) -> OffscreenTarget {
 /// exactly ONCE and RETURNS it, so the caller can publish that same laid-out `Scene` for
 /// hit-testing without recomputing layout (see `render_thread::render_guarded`).
 ///
-/// `host_view`: optional `(view_id, texture_view)` for a skin `view{}` cutout. When present, a
-/// skin node `view{ id = view_id, ... }` is composited with the supplied texture (the host's own
-/// live content). `None` means no host content is supplied for any view id.
+/// `content`: the view-id-keyed content registry. Each entry composites into the skin node
+/// `view{ id = <key>, ... }` whose id matches (the host's own live content for that cutout); a
+/// skin `view{}` whose id has no matching entry renders nothing. An empty map means no host
+/// content is supplied for any view id.
 ///
 /// `wait`: set `true` when the caller needs all prior GPU work complete before returning
 /// (e.g. Readback path — `readback_rgba` runs immediately after). Set `false` when the
@@ -99,7 +100,7 @@ pub fn render_frame(
     h: u32,
     dt: Duration,
     wait: bool,
-    host_view: Option<(&str, &wgpu::TextureView)>,
+    content: &std::collections::HashMap<String, crate::handle::ContentTex>,
 ) -> Scene {
     engine.update(dt); // drains queued host actions, ticks host
     // Lay out at the DESIGN CANVAS, not the surface (`w,h`) size. The renderer computes
@@ -108,7 +109,9 @@ pub fn render_frame(
     // callers) sx = 1 and behavior is identical.
     let (cw, ch) = engine.scene().canvas;
     let scene = engine.layout(cw as f32, ch as f32);
-    let view_tex = |id: &str| host_view.and_then(|(vid, v)| if vid == id { Some(v) } else { None });
+    // Resolve each view{} id against the content registry; the renderer's draw() loop is already
+    // N-capable, so every matching (id, texture) composites. Unmatched ids render nothing.
+    let view_tex = |id: &str| content.get(id).map(|c| &c.view);
     renderer.draw(
         &scene,
         |k| engine.state(k),

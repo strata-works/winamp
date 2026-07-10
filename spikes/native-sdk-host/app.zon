@@ -1,0 +1,33 @@
+.{
+    .id = "dev.native_sdk.nsdk-clink",
+    .name = "nsdk-clink",
+    .display_name = "Nsdk C-Link",
+    .description = "Build-path proof: Native SDK app + external C lib + gpu_surface pixel push.",
+    .version = "0.1.0",
+    .platforms = .{"macos"},
+    .permissions = .{"view"},
+    .capabilities = .{ "native_views", "gpu_surfaces" },
+    .shell = .{
+        .windows = .{
+            .{
+                .label = "main",
+                .title = "Nsdk C-Link",
+                .width = 480,
+                .height = 320,
+                .restore_state = false,
+                .restore_policy = "center_on_primary",
+                .views = .{
+                    .{ .label = "canvas", .kind = "gpu_surface", .fill = true, .role = "Pixel canvas", .accessibility_label = "Pixel canvas", .gpu_backend = "metal", .gpu_pixel_format = "bgra8_unorm", .gpu_present_mode = "timer", .gpu_alpha_mode = "opaque", .gpu_color_space = "srgb", .gpu_vsync = true },
+                },
+            },
+        },
+    },
+    .security = .{
+        .navigation = .{
+            .allowed_origins = .{ "zero://app", "zero://inline" },
+            .external_links = .{ .action = "deny" },
+        },
+    },
+    .web_engine = "system",
+    .cef = .{ .dir = "third_party/cef/macos", .auto_install = false },
+}

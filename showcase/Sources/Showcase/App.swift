@@ -18,9 +18,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var bridge: CarapaceBridge!
     private var skinDirs: [String] = []
     private var skinIndex = 0
-    private var dither: DitherRenderer?
+    private var swapGate = SwapGate()        // serializes swaps so rapid Tabs don't overlap animations
+    private var dither: DitherRenderer?      // fills view{ id="host" }
+    private var vizDither: DitherRenderer?   // fills the second view{ id="viz" } cutout
     private var ditherTimer: Timer?
     private var ditherStart: TimeInterval = 0
+    // Studio's second cutout (`view{ id="viz" }`) in logical canvas px; its dither surface is sized
+    // to these × backing scale.
+    private let vizCutoutW = 270
+    private let vizCutoutH = 48
+    // Amber front color for the viz strip so the two cutouts read as distinct live regions.
+    private let vizFront: (Float, Float, Float) = (255.0/255, 180.0/255, 90.0/255)
 
     func applicationDidFinishLaunching(_ note: Notification) {
         NSApp.setActivationPolicy(.regular)
@@ -127,7 +135,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         positionTrafficLights(forDir: dir)  // re-place the cluster for this skin's chrome
 
         // 3. Build a fresh bridge/pool at the new size.
-        let content = ditherSurface(forDir: dir, width: w * scale, height: h * scale)
+        let content = ditherSurface(forDir: dir, width: w * scale, height: h * scale, scale: scale)
         guard let b = CarapaceBridge(skinDir: dir, width: w * scale, height: h * scale,
                                      contentSurface: content,
                                      onFrame: { [weak self] s, i in self?.view.show(surface: s, index: i) }) else {
@@ -135,29 +143,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         bridge = b
         view.bridge = b
+        // 4. Attach the studio cutouts' content via the registry API. The "host" attach is redundant
+        //    with the create seed above but keeps both entry paths (applySkin/swapSkin) uniform; the
+        //    "viz" attach is the second region. No-ops for non-studio skins (dithers are nil). This is
+        //    UAF-safe without a blocking clear: applySkin destroyed the OLD engine (joining its render
+        //    thread) at step 1 BEFORE ditherSurface freed the old dithers, so nothing reads a freed
+        //    surface here — these calls attach the freshly built dithers to the NEW engine `b`.
+        if let host = dither { b.setContentSurface("host", host.surface, host.surface.width, host.surface.height) }
+        if let viz = vizDither { b.setContentSurface("viz", viz.surface, viz.surface.width, viz.surface.height) }
     }
 
-    /// Start/stop the dither loop for the given skin. Only Studio declares a view{ id="host" }
-    /// cutout, so we render (and pay GPU) only there; returns the content surface to hand the
-    /// bridge (nil for other skins).
-    private func ditherSurface(forDir dir: String, width: Int, height: Int) -> IOSurface? {
+    /// Start/stop the dither loop for the given skin. Only Studio declares view{} cutouts, so we
+    /// render (and pay GPU) only there; builds BOTH the host and viz dithers and a single 60fps timer
+    /// that renders both. Returns the HOST content surface to hand the create/swap `"host"` seed (nil
+    /// for other skins); the viz surface is attached separately via `setContentSurface` by the caller.
+    private func ditherSurface(forDir dir: String, width: Int, height: Int, scale: Int) -> IOSurface? {
         stopDither()
         guard (dir as NSString).lastPathComponent == "studio",
-              let r = DitherRenderer(width: width, height: height) else { return nil }
-        dither = r
+              let host = DitherRenderer(width: width, height: height) else { return nil }
+        dither = host
+        // Second cutout: a smaller amber strip. Sized to the viz cutout's pixels × scale; the engine
+        // derives content dims from the surface, so any size composites into the view{ id="viz" } rect.
+        vizDither = DitherRenderer(width: vizCutoutW * scale, height: vizCutoutH * scale,
+                                   cutoutW: Float(vizCutoutW), cutoutH: Float(vizCutoutH), front: vizFront)
         ditherStart = Date().timeIntervalSinceReferenceDate
         let t = Timer(timeInterval: 1.0/60.0, repeats: true) { [weak self] _ in
-            guard let self, let r = self.dither else { return }
+            guard let self else { return }
             let time = Float(Date().timeIntervalSinceReferenceDate - self.ditherStart)
-            r.render(time: time, level: Float(self.host.level()))
+            let level = Float(self.host.level())
+            self.dither?.render(time: time, level: level)
+            self.vizDither?.render(time: time, level: level)
         }
         RunLoop.main.add(t, forMode: .common)   // keep ticking during window drags
         ditherTimer = t
-        return r.surface
+        return host.surface
     }
 
     private func stopDither() {
-        ditherTimer?.invalidate(); ditherTimer = nil; dither = nil
+        ditherTimer?.invalidate(); ditherTimer = nil; dither = nil; vizDither = nil
     }
 
     /// Live-swap to `dir` at the incoming skin's NATIVE size: the engine adopts a new pool sized to
@@ -167,29 +190,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func swapSkin(dir: String) {
         let (cw, ch) = SkinManifest.canvas(atDir: dir, fallback: (420, 660))
         let scale = Int((NSScreen.main?.backingScaleFactor ?? 2).rounded())
-        // The engine's render thread CPU-copies the content (dither) IOSurface every frame via a raw,
-        // non-retained pointer. `ditherSurface` below tears down the previous dither renderer, which
-        // owns the sole strong ref to the OUTGOING skin's surface — releasing it unmaps the surface's
-        // pages. Unlike `applySkin` (which destroys the engine, JOINING the render thread, before
-        // freeing), `swapResized` keeps the render thread running, so freeing the old surface before
-        // the engine has switched off it is a use-after-free. Pin the outgoing dither across the swap;
-        // `swapResized` blocks until the render thread has adopted the new content, after which the
-        // old surface is safe to unmap. See docs/superpowers/specs/2026-07-08-…-swap-design.md.
+        // The engine's render thread CPU-copies each content (dither) IOSurface every frame via a raw,
+        // non-retained pointer. `ditherSurface` below tears down the previous dither renderers, which
+        // own the sole strong refs to the OUTGOING skin's surfaces — releasing one unmaps its pages.
+        // Unlike `applySkin` (which destroys the engine, JOINING the render thread, before freeing),
+        // `swapResized` keeps the render thread running.
+        //
+        // A1 (content registry persists across a resized swap): a `swapResized` with a NULL content
+        // surface now KEEPS the existing "host" entry instead of clearing it — so on a swap AWAY from
+        // Studio the render thread would keep reading the outgoing surfaces after we free them. The
+        // fix is an EXPLICIT blocking clear of EVERY content entry on the CURRENT engine BEFORE any
+        // code frees the dithers those surfaces belong to: `setContentSurface(id, nil)` removes the
+        // entry and blocks until the render thread dropped its ContentTex, so the outgoing surfaces are
+        // safe to unmap. Clearing an absent id is a harmless no-op, so this is safe on any outgoing
+        // skin (faceplate→studio, studio→cassette, …). The `withExtendedLifetime` pins below are kept
+        // as defense-in-depth. See docs/superpowers/specs/2026-07-08-…-swap-design.md.
+        if let b = bridge {
+            _ = b.setContentSurface("host", nil, 0, 0)
+            _ = b.setContentSurface("viz", nil, 0, 0)
+        }
         let outgoingDither = dither
-        let content = ditherSurface(forDir: dir, width: cw * scale, height: ch * scale)
+        let outgoingViz = vizDither
+        let content = ditherSurface(forDir: dir, width: cw * scale, height: ch * scale, scale: scale)
         guard let b = bridge,
               b.swapResized(skinDir: dir, width: cw * scale, height: ch * scale, contentSurface: content)
         else {
-            // Swap rejected → the engine kept the OLD content surface and its render thread is still
-            // running. `applySkin` destroys the engine (joining the render thread) before it frees;
-            // keep the outgoing dither mapped until AFTER that join.
+            // Swap rejected → the engine kept the OLD (now-cleared) registry and its render thread is
+            // still running. `applySkin` destroys the engine (joining the render thread) before it
+            // frees; keep the outgoing dithers mapped until AFTER that join.
             applySkin(dir: dir) // fall back to full rebuild if the resized swap is rejected
             withExtendedLifetime(outgoingDither) {}
+            withExtendedLifetime(outgoingViz) {}
+            // applySkin snaps (no crossfade animation), so the transition is already done: settle the
+            // gate and honor any tap that queued up (in practice none, since the body ran synchronously).
+            if swapGate.swapCompleted() { swapSkin(dir: skinDirs[skinIndex]) }
             return
         }
-        // swapResized returned Ok → the render thread has switched off the outgoing content surface,
-        // so releasing the outgoing dither now unmaps it strictly AFTER the engine stopped reading it.
+        // swapResized returned Ok → the render thread has adopted the new pool + content. Attach the
+        // new studio cutouts' content (no-op when the incoming skin has no dithers). The "host" attach
+        // is redundant with the swap seed above but keeps both entry paths uniform; "viz" is the second
+        // region. These reference the NEW dithers built by ditherSurface — never the outgoing ones.
+        if let host = dither { b.setContentSurface("host", host.surface, host.surface.width, host.surface.height) }
+        if let viz = vizDither { b.setContentSurface("viz", viz.surface, viz.surface.width, viz.surface.height) }
+        // The outgoing surfaces were made safe by the blocking clears above (the engine dropped their
+        // ContentTex); release the pins now, strictly after the engine stopped reading them.
         withExtendedLifetime(outgoingDither) {}
+        withExtendedLifetime(outgoingViz) {}
         // Resize the borderless window to the new native size (top-left anchored). We ANIMATE the
         // resize over the same window the engine crossfades in, rather than snapping in one frame:
         // the old code hard-cut the window to the new size at swap start while the GPU dissolve ran
@@ -211,7 +257,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // mid-morph — matching `positionTrafficLights`' math but animated instead of snapped.
         let o = trafficLightOrigin(forDir: dir)
         let finalH = CGFloat(ch)
-        NSAnimationContext.runAnimationGroup { ctx in
+        NSAnimationContext.runAnimationGroup({ ctx in
             // Match the engine's crossfade window: the incoming skin's declared `[transition]`
             // duration_ms (default 250 ms). All showcase skins use the default today.
             ctx.duration = Double(SkinManifest.durationMs(atDir: dir)) / 1000.0
@@ -221,12 +267,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 b.animator().setFrameOrigin(NSPoint(x: o.x + CGFloat(i) * 20,
                                                     y: finalH - o.y - b.frame.height))
             }
-        }
+        }, completionHandler: { [weak self] in
+            // The transition (crossfade + resize) is done. Settle the gate; if taps arrived during
+            // the animation, run exactly one coalesced follow-up straight to the latest skin.
+            guard let self else { return }
+            if self.swapGate.swapCompleted() {
+                self.swapSkin(dir: self.skinDirs[self.skinIndex])
+            }
+        })
     }
 
     private func cycleSkin() {
+        // Always advance the index so a burst of taps lands on the intended final skin, but only
+        // START a swap when none is in flight. Taps arriving mid-swap are coalesced into a single
+        // follow-up (see SwapGate) so rapid Tabs don't overlap the crossfade + resize animations.
         skinIndex = (skinIndex + 1) % skinDirs.count
-        swapSkin(dir: skinDirs[skinIndex]) // live crossfade; window morphs to the new size during the fade
+        if swapGate.requestSwap() {
+            swapSkin(dir: skinDirs[skinIndex]) // live crossfade; window morphs to the new size during the fade
+        }
     }
 
     /// Minimal main menu so ⌘O (Open Music…) works and is discoverable. The skin window itself
