@@ -1,0 +1,6 @@
+schema = 1
+id = "shaderdemo"
+name = "Shader Demo"
+engine = "^0.1"
+canvas = { width = 480, height = 320 }
+entry = "skin.lua"
