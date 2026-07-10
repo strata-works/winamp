@@ -6,7 +6,7 @@ Reflects `crates/carapace/src/{vocab,script,scene,skin,shape,render}.rs` as of 2
 
 ## Contents
 
-- [Primitives](#primitives) — `fill`, `region`, `value_fill`, `image`, `frame`, `view`, `list`, `scrub`, `text`
+- [Primitives](#primitives) — `fill`, `region`, `value_fill`, `image`, `frame`, `view`, `shader`, `list`, `scrub`, `text`
 - [Shapes & helpers](#shapes--helpers) — `rect`, `circle`, `rounded_rect`, paths, colors, gradients, `math`
 - [Host data (`host.<name>`)](#host-data-hostname) — live value bindings
 - [Host actions (`host.<action>()`)](#host-actions-hostaction) — invoking host behavior
@@ -15,7 +15,7 @@ Reflects `crates/carapace/src/{vocab,script,scene,skin,shape,render}.rs` as of 2
 
 ## Primitives
 
-Primitives are Lua globals that each take a single table argument, e.g. `fill{ ... }`. The engine registers one constructor per primitive in `VocabRegistry::base()` (`vocab.rs:530-542`) and wires them data-drivenly (`script.rs:132-166`). The stock set is nine primitives; hosts can register more (see [Custom primitives](#custom-primitives)).
+Primitives are Lua globals that each take a single table argument, e.g. `fill{ ... }`. The engine registers one constructor per primitive in `VocabRegistry::base()` (`vocab.rs:530-542`) and wires them data-drivenly (`script.rs:132-166`). The stock set is ten primitives; hosts can register more (see [Custom primitives](#custom-primitives)).
 
 **Two fields work on every primitive** (handled outside each primitive's own `build()`):
 
@@ -124,6 +124,47 @@ Declares a named rectangle for **embedder-provided** content (native video, a ho
 ```lua
 view{ id = "app", x = 16, y = 34, w = 448, h = 270,
       anchor = { "left", "right", "top", "bottom" }, min = { w = 288, h = 150 } }
+```
+
+### `shader{}`
+
+A GPU fragment-shader fill: the engine runs the author's WGSL fragment stage into `dest` every frame as a **background layer** — it composites *under* the 2D UI (fills, images, text draw on top of it), not as a regular scene node. Parsed and naga-validated entirely at skin-load time, no GPU adapter required (`ShaderPrim::build`, `shader.rs:57-107`); produces a single `Node::Shader { dest, wgsl, uniforms, key }` (`scene.rs:367-379`). At render time, `Scene::has_shaders` (`scene.rs:535-538`) switches the renderer onto a 4-stage compositing path whose first stage, `draw_shader_backgrounds` (`render.rs:817-965`), draws shader nodes straight into the target before the 2D/vello layer is composited over them.
+
+The author does **not** write a full WGSL module — only the fragment stage. The engine supplies a fixed vertex stage (`shader_prelude.wgsl:1-15`: a fullscreen-quad `vs` producing `VsOut { pos, uv }`) and generates a `struct U` uniform block sized to the primitive's declared uniforms (`prelude_for`, `shader.rs:41-50`). The author's `.wgsl` asset must define exactly:
+
+```wgsl
+@fragment fn fs(in: VsOut) -> @location(0) vec4<f32> { ... }
+```
+
+reading `in.uv` (from the generated `VsOut`) and `u.time`, `u.res`, plus one field per declared uniform, all `f32`. Registered at `vocab.rs:580` (`VocabRegistry::base()`).
+
+| field | type | meaning |
+|---|---|---|
+| `src` | string | `.wgsl` asset filename (fragment stage only — see above) |
+| `x`,`y`,`w`,`h` | number | destination rect (all required) |
+| `uniforms` | table, optional | maps uniform name → value; a Lua **number** bakes a fixed `Literal` value at load time; a Lua **string** is a host binding key, re-resolved every frame (`ShaderUniform`/`UniformSource`, `shader.rs:16-31`) |
+
+Every shader gets two built-in uniforms for free: `u.time` (`f32`, seconds, the engine clock) and `u.res` (`vec2<f32>`, the destination rect's pixel resolution). User uniforms declared via `uniforms` are **`f32`-only** — WGSL's uniform-buffer array stride would otherwise waste a full `vec4` slot per scalar (`shader.rs:38-40`). Host-bound uniforms (string values) are read via the **raw, unclamped** scalar (`scalar_of`, `render.rs:152-158`) — unlike `value_fill`'s `value` field, which clamps to `0..1` (`value_of`, `render.rs:140-146`) — so a host key like a temperature or season index passes through untouched.
+
+The combined prelude + author fragment is parsed with `naga::front::wgsl::parse_str` at skin build time (`shader.rs:93-94`); malformed WGSL fails the skin load with `BuildError::Shader`, which propagates through `ScriptError::Build` to `ErrBadSkin` (`carapace-ffi/src/render_thread.rs:183-193`) — the same failure surface as a missing asset or bad Lua, carrying the naga error message.
+
+**Safety:** unlike the Lua layer, the author's WGSL is not sandboxed — it's arbitrary GPU shader code that runs directly on the host's graphics device. Only load `shader{}` skins from trusted, local sources.
+
+```lua
+shader{ src = "bg.wgsl", x = 0, y = 0, w = 480, h = 320,
+        uniforms = { season = 2, temp = "wx_temp" } }
+```
+
+```wgsl
+// bg.wgsl (fragment stage only; vs/VsOut/struct U are engine-generated)
+@fragment
+fn fs(in: VsOut) -> @location(0) vec4<f32> {
+    let t = u.time;
+    let season_tint = mix(vec3(0.2, 0.5, 0.9), vec3(0.9, 0.6, 0.2), u.season / 3.0);
+    let warmth = clamp(u.temp / 100.0, 0.0, 1.0);
+    let col = mix(season_tint, vec3(1.0, 0.3, 0.1), warmth) * (0.8 + 0.2 * sin(t + in.uv.x * 6.28));
+    return vec4(col, 1.0);
+}
 ```
 
 ### `list{}`
