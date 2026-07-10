@@ -30,6 +30,12 @@ final class WeatherHostTests: XCTestCase {
         XCTAssertNil(host.str("wx_hour_99_temp"))   // out of range
     }
 
+    func testMalformedHourKeysReturnNil() {
+        XCTAssertNil(host.str("wx_hour_time"))   // no index → nil, must not crash
+        XCTAssertNil(host.str("wx_hour_temp"))
+        XCTAssertNil(host.str("wx_hour__time"))  // empty index → nil
+    }
+
     func testDailyRows() {
         XCTAssertEqual(host.rowCount(), WeatherModel.sample.days.count)
         let d = WeatherModel.sample.days[0]

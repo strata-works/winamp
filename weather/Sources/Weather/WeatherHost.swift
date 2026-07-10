@@ -10,6 +10,7 @@ final class WeatherHost {
         guard key.hasPrefix(prefix), key.hasSuffix(suffix) else { return nil }
         let start = key.index(key.startIndex, offsetBy: prefix.count)
         let end = key.index(key.endIndex, offsetBy: -suffix.count)
+        guard start <= end else { return nil }
         return Int(key[start..<end])
     }
 
