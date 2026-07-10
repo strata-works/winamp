@@ -1,0 +1,6 @@
+schema = 1
+id = "weather"
+name = "Weather"
+engine = "^0.1"
+canvas = { width = 400, height = 680 }
+entry = "skin.lua"
