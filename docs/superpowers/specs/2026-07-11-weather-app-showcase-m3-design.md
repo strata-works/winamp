@@ -17,7 +17,7 @@ The M1/M2 `weather.wgsl` fragment returns opaque `alpha = 1` everywhere, so the 
 solid 400×680 rectangle. M3 makes `fs()` compute a **per-pixel alpha**:
 
 - `alpha = 1` above the bottom band (the whole UI region stays fully opaque).
-- Within the bottom band (`uv.y` ∈ ~`[0.85, 1.0]`; note `uv.y = 0` is the TOP, `1` the
+- Within the bottom band (`uv.y` ∈ ~`[0.82, 1.0]`; note `uv.y = 0` is the TOP, `1` the
   BOTTOM, per the existing `sky()`), alpha ramps from `1` down through an **animated,
   condition-reactive edge** to `0` off the bottom.
 - Output becomes **premultiplied**: `return vec4(col * alpha, alpha)`.
@@ -60,7 +60,7 @@ dispatches, applies the temperature tint + season tint, then computes and premul
 ### Bottom-flowing silhouette (per condition)
 
 A helper `silhouette_alpha(uv, t, condition, intensity) -> f32` returns the window alpha,
-`1` above the band and ramping to `0` below an animated edge line near `uv.y ≈ 0.85`. The
+`1` above the band and ramping to `0` below an animated edge line near `uv.y ≈ 0.82`. The
 edge's character is condition-reactive:
 
 - **clear (0):** gentle, slow sine waves — a calm liquid horizon.
