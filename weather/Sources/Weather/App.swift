@@ -14,6 +14,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var host: WeatherHost!
     private var bridge: CarapaceBridge!
     private var trafficLightButtons: [NSButton] = []
+    private let service = WeatherService()
+    private var refreshTimer: Timer?
 
     private let canvasW = 400
     private let canvasH = 680
@@ -22,7 +24,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.regular)
         installMainMenu()
 
-        host = WeatherHost(model: .sample)
+        // First frame shows the bundled fixture immediately; the launch fetch replaces it.
+        host = WeatherHost(model: (try? service.loadBundledFixture()) ?? .sample)
         hostBox.host = host
 
         view = SkinView(frame: NSRect(x: 0, y: 0, width: canvasW, height: canvasH))
@@ -52,6 +55,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         installTrafficLights()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+
+        refresh()  // launch fetch
+        refreshTimer = Timer.scheduledTimer(withTimeInterval: 15 * 60, repeats: true) { [weak self] _ in
+            self?.refresh()
+        }
+    }
+
+    /// Fetch live weather off-main, then swap it into the host on the main thread. The host's
+    /// `model` is lock-guarded, so the render thread's reads stay consistent across the swap.
+    private func refresh() {
+        Task { [weak self] in
+            guard let self else { return }
+            let model = await self.service.fetch()
+            await MainActor.run { self.host.model = model }
+        }
     }
 
     /// Absolute path to weather/skins/weather (App.swift is weather/Sources/Weather/App.swift).
@@ -63,17 +81,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .appendingPathComponent("skins/weather").path
     }
 
-    // Debug (M1 verification scaffolding): → / ← cycle the mock condition to eyeball all six shaders.
+    // Presenter controls: →/← tour the six shader looks via a condition override (text stays
+    // live); R refetches now.
     private func handleKey(_ code: UInt16) {
-        let delta: Double
         switch code {
-        case 124: delta = 1   // right arrow
-        case 123: delta = -1  // left arrow
-        default: return
+        case 124: host.conditionOverride = ConditionCycle.next(host.conditionOverride)  // →
+        case 123: host.conditionOverride = ConditionCycle.prev(host.conditionOverride)  // ←
+        case 15:  refresh()                                                             // R
+        default:  break
         }
-        var c = host.model.condition + delta
-        if c > 5 { c = 0 }; if c < 0 { c = 5 }
-        host.model.condition = c
     }
 
     private func installTrafficLights() {
