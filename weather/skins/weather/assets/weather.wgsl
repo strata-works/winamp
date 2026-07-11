@@ -50,27 +50,73 @@ fn mesh_gradient(uv: vec2<f32>, t: f32, c0: vec3<f32>, c1: vec3<f32>, c2: vec3<f
 // Shared directional light (sun by day / moon by night), drifting slightly.
 fn light_pos(t: f32) -> vec2<f32> { return vec2<f32>(0.72, 0.26 + 0.02 * sin(t * 0.3)); }
 
-// Faint stars for clear/less-obscured night skies.
+// Faint round twinkling stars for clear/less-obscured night skies.
 fn stars(uv: vec2<f32>, t: f32) -> f32 {
-    let g = hash21(floor(uv * 120.0));
+    let sc = uv * 110.0;
+    let cell = floor(sc);
+    let f = fract(sc) - 0.5;
+    let g = hash21(cell);
     let tw = 0.5 + 0.5 * sin(t * 3.0 + g * 40.0);
-    return step(0.985, g) * tw;
+    let dot = smoothstep(0.35, 0.0, length(f));
+    return step(0.982, g) * tw * dot;
 }
 
-// ---- Condition bases (mesh palette only; motifs added in Tasks 3-5) ----
+// Radial god-rays: march from the pixel toward the light, accumulating brightness.
+fn god_rays(uv: vec2<f32>, lp: vec2<f32>, t: f32) -> f32 {
+    var s = uv;
+    let stepv = (lp - uv) / 24.0;
+    var decay = 1.0;
+    var acc = 0.0;
+    for (var i = 0; i < 24; i = i + 1) {
+        s = s + stepv;
+        acc = acc + smoothstep(0.45, 0.0, distance(s, lp)) * decay;
+        decay = decay * 0.92;
+    }
+    return acc / 24.0;
+}
+
+// ---- Condition bases + signature motifs ----
 fn clear_c(uv: vec2<f32>, t: f32, day: f32, intensity: f32) -> vec3<f32> {
     let c0 = mix(vec3<f32>(0.04, 0.05, 0.16), vec3<f32>(0.26, 0.52, 0.92), day);
     let c1 = mix(vec3<f32>(0.06, 0.08, 0.22), vec3<f32>(0.40, 0.66, 0.97), day);
     let c2 = mix(vec3<f32>(0.10, 0.09, 0.22), vec3<f32>(0.70, 0.83, 0.98), day);
     let c3 = mix(vec3<f32>(0.16, 0.11, 0.20), vec3<f32>(0.98, 0.86, 0.68), day);
-    return mesh_gradient(uv, t, c0, c1, c2, c3);
+    var col = mesh_gradient(uv, t, c0, c1, c2, c3);
+    // Night stars.
+    col = col + vec3<f32>(0.9, 0.92, 1.0) * stars(uv, t) * (1.0 - day) * 0.7;
+    // Sun (day) / moon (night), aspect-corrected so the disc is round on the tall canvas.
+    let lp = light_pos(t);
+    let asp = u.res.y / u.res.x;
+    let pd = length((uv - lp) * vec2<f32>(1.0, asp));
+    let disc = smoothstep(0.070, 0.045, pd);
+    let glow = smoothstep(0.40, 0.0, pd) * mix(0.16, 0.24, day);
+    let discCol = mix(vec3<f32>(0.82, 0.87, 1.0), vec3<f32>(1.0, 0.94, 0.74), day);
+    col = col + discCol * (disc + glow);
+    // Volumetric god-rays from the light (subtle; mostly a daytime effect).
+    col = col + discCol * god_rays(uv, lp, t) * (0.10 + 0.20 * day);
+    return col;
 }
 fn cloud_c(uv: vec2<f32>, t: f32, day: f32, intensity: f32) -> vec3<f32> {
     let c0 = mix(vec3<f32>(0.10, 0.11, 0.16), vec3<f32>(0.55, 0.62, 0.74), day);
     let c1 = mix(vec3<f32>(0.13, 0.14, 0.20), vec3<f32>(0.68, 0.73, 0.82), day);
     let c2 = mix(vec3<f32>(0.16, 0.17, 0.23), vec3<f32>(0.80, 0.83, 0.89), day);
     let c3 = mix(vec3<f32>(0.12, 0.13, 0.18), vec3<f32>(0.60, 0.66, 0.78), day);
-    return mesh_gradient(uv, t, c0, c1, c2, c3);
+    var col = mesh_gradient(uv, t, c0, c1, c2, c3);
+    let lp = light_pos(t);
+    let litd = mix(vec3<f32>(0.20, 0.22, 0.28), vec3<f32>(0.92, 0.94, 0.98), day);
+    let shad = mix(vec3<f32>(0.10, 0.11, 0.15), vec3<f32>(0.52, 0.56, 0.64), day);
+    // Three parallax planes at increasing scale/speed/coverage.
+    for (var k = 0; k < 3; k = k + 1) {
+        let fk = f32(k);
+        let sc = 2.0 + fk * 1.6;
+        let sp = 0.04 + fk * 0.03;
+        let n = fbm(uv * vec2<f32>(sc, sc * 0.7) + vec2<f32>(t * sp, fk * 3.1));
+        let cover = smoothstep(0.55, 0.85, n) * (0.35 + 0.25 * fk) * (0.6 + 0.5 * intensity);
+        // Fake lighting: brighter toward the light side.
+        let lit = mix(shad, litd, clamp(0.5 + (lp.x - uv.x) * 0.8, 0.0, 1.0));
+        col = mix(col, lit, cover);
+    }
+    return col;
 }
 fn rain_c(uv: vec2<f32>, t: f32, day: f32, intensity: f32) -> vec3<f32> {
     let c0 = mix(vec3<f32>(0.06, 0.09, 0.14), vec3<f32>(0.30, 0.40, 0.52), day);
