@@ -17,8 +17,18 @@ final class SkinView: NSView {
         layer?.isOpaque = false
         layer?.backgroundColor = NSColor.clear.cgColor
         layer?.contentsGravity = .resizeAspect
+        // The engine renders frames at surface pixel size (canvas × backing scale). Tell CA the
+        // contents are that dense so it maps the IOSurface 1:1 to physical pixels instead of
+        // downscaling to a 1× backing store and letting the screen upscale it (which blurs text).
+        layer?.contentsScale = NSScreen.main?.backingScaleFactor ?? 2.0
     }
     required init?(coder: NSCoder) { fatalError() }
+
+    // Keep contents density in sync if the view moves to a display with a different scale.
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        layer?.contentsScale = window?.backingScaleFactor ?? layer?.contentsScale ?? 2.0
+    }
     override var isFlipped: Bool { false }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override var acceptsFirstResponder: Bool { true }
