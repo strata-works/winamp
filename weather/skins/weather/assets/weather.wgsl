@@ -118,19 +118,60 @@ fn cloud_c(uv: vec2<f32>, t: f32, day: f32, intensity: f32) -> vec3<f32> {
     }
     return col;
 }
+// Falling rain: thin, slightly-diagonal streaks scrolling down, per-column randomized,
+// broken into short segments so they read as rain rather than static pinstripes.
+fn rain_streaks(uv: vec2<f32>, t: f32, intensity: f32) -> f32 {
+    let slant = uv + vec2<f32>(uv.y * 0.06, 0.0);
+    let cols = 55.0;
+    let x = slant.x * cols;
+    let col = floor(x);
+    let fx = fract(x) - 0.5;
+    let speed = 0.8 + hash21(vec2<f32>(col, 1.0)) * 1.0;
+    let y = fract(uv.y * 3.4 + t * speed + hash21(vec2<f32>(col, 3.0)));
+    let line = smoothstep(0.09, 0.0, abs(fx));
+    let head = smoothstep(0.0, 0.10, y) * smoothstep(0.85, 0.30, y);
+    return line * head * (0.4 + 0.7 * intensity);
+}
+// One parallax snow layer: soft round flakes on a drifting grid.
+fn snow_layer(uv: vec2<f32>, t: f32, scale: f32, speed: f32, seed: f32) -> f32 {
+    let p = uv * scale + vec2<f32>(sin(t * 0.3 + seed) * 0.5, t * speed);
+    let g = floor(p);
+    let f = fract(p) - 0.5;
+    let h = hash21(g + seed);
+    return smoothstep(0.14, 0.0, length(f)) * step(0.86, h);
+}
 fn rain_c(uv: vec2<f32>, t: f32, day: f32, intensity: f32) -> vec3<f32> {
     let c0 = mix(vec3<f32>(0.06, 0.09, 0.14), vec3<f32>(0.30, 0.40, 0.52), day);
     let c1 = mix(vec3<f32>(0.08, 0.11, 0.17), vec3<f32>(0.38, 0.48, 0.60), day);
     let c2 = mix(vec3<f32>(0.10, 0.13, 0.19), vec3<f32>(0.46, 0.56, 0.68), day);
     let c3 = mix(vec3<f32>(0.05, 0.08, 0.13), vec3<f32>(0.28, 0.38, 0.50), day);
-    return mesh_gradient(uv, t, c0, c1, c2, c3);
+    // Slight refraction: sample the mesh at a streak-perturbed coord for a wet-glass warp.
+    let streak = rain_streaks(uv, t, intensity);
+    let ruv = uv + vec2<f32>(streak * 0.01, 0.0);
+    var col = mesh_gradient(ruv, t, c0, c1, c2, c3);
+    // Bright streak highlight.
+    col = col + vec3<f32>(0.65, 0.74, 0.88) * streak * 0.3;
+    // Overall wet sheen toward the bottom.
+    col = col + vec3<f32>(0.10, 0.13, 0.18) * smoothstep(0.4, 1.0, uv.y) * (0.4 + 0.4 * day);
+    // Ripples pooling near the silhouette band.
+    let pool = smoothstep(0.78, 0.9, uv.y) * (0.5 + 0.5 * sin(uv.x * 40.0 - t * 4.0 + fbm(uv * 8.0) * 6.0));
+    col = col + vec3<f32>(0.5, 0.6, 0.75) * pool * 0.12 * (0.5 + intensity);
+    return col;
 }
 fn snow_c(uv: vec2<f32>, t: f32, day: f32, intensity: f32) -> vec3<f32> {
     let c0 = mix(vec3<f32>(0.16, 0.19, 0.28), vec3<f32>(0.74, 0.80, 0.90), day);
     let c1 = mix(vec3<f32>(0.20, 0.23, 0.32), vec3<f32>(0.82, 0.87, 0.95), day);
     let c2 = mix(vec3<f32>(0.24, 0.27, 0.36), vec3<f32>(0.90, 0.93, 0.99), day);
     let c3 = mix(vec3<f32>(0.18, 0.21, 0.30), vec3<f32>(0.78, 0.84, 0.93), day);
-    return mesh_gradient(uv, t, c0, c1, c2, c3);
+    var col = mesh_gradient(uv, t, c0, c1, c2, c3);
+    // Far (small/sharp) -> near (big/soft) parallax flake layers.
+    var flakes = 0.0;
+    flakes = flakes + snow_layer(uv, t, 22.0, 0.10, 1.0) * 0.6;
+    flakes = flakes + snow_layer(uv, t, 15.0, 0.16, 2.0) * 0.8;
+    flakes = flakes + snow_layer(uv, t,  9.0, 0.24, 3.0) * 1.0;
+    let bloom = mix(0.75, 1.0, day);
+    col = col + vec3<f32>(1.0) * flakes * (0.35 + 0.4 * intensity) * bloom;
+    return col;
 }
 fn storm_c(uv: vec2<f32>, t: f32, day: f32, intensity: f32) -> vec3<f32> {
     // Faster, higher-contrast churn (extra warp) + darker palette.
