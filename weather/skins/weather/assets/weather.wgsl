@@ -127,14 +127,16 @@ fn rain_streaks(uv: vec2<f32>, t: f32, intensity: f32) -> f32 {
     let col = floor(x);
     let fx = fract(x) - 0.5;
     let speed = 0.8 + hash21(vec2<f32>(col, 1.0)) * 1.0;
-    let y = fract(uv.y * 3.4 + t * speed + hash21(vec2<f32>(col, 3.0)));
+    // -t so streaks scroll DOWN (uv.y=0 is the top of the canvas).
+    let y = fract(uv.y * 3.4 - t * speed + hash21(vec2<f32>(col, 3.0)));
     let line = smoothstep(0.09, 0.0, abs(fx));
-    let head = smoothstep(0.0, 0.10, y) * smoothstep(0.85, 0.30, y);
+    let head = smoothstep(0.85, 0.30, y) * smoothstep(0.0, 0.10, y);
     return line * head * (0.4 + 0.7 * intensity);
 }
 // One parallax snow layer: soft round flakes on a drifting grid.
+// -t*speed so flakes fall DOWN (uv.y=0 is the top of the canvas).
 fn snow_layer(uv: vec2<f32>, t: f32, scale: f32, speed: f32, seed: f32) -> f32 {
-    let p = uv * scale + vec2<f32>(sin(t * 0.3 + seed) * 0.5, t * speed);
+    let p = uv * scale + vec2<f32>(sin(t * 0.3 + seed) * 0.5, -t * speed);
     let g = floor(p);
     let f = fract(p) - 0.5;
     let h = hash21(g + seed);
@@ -173,21 +175,71 @@ fn snow_c(uv: vec2<f32>, t: f32, day: f32, intensity: f32) -> vec3<f32> {
     col = col + vec3<f32>(1.0) * flakes * (0.35 + 0.4 * intensity) * bloom;
     return col;
 }
+// Shared lightning-strike state so the bolt, the background shockwave, and the window-edge
+// jolt all fire together. Returns (flash_env, bolt_x, life, seed). env is 0 when no strike.
+fn storm_strike(t: f32) -> vec4<f32> {
+    let rate = 0.7;
+    let seed = floor(t * rate);
+    let life = fract(t * rate);
+    let strike_on = step(0.72, hash21(vec2<f32>(seed, 11.0)));
+    let env = strike_on * smoothstep(0.0, 0.04, life) * smoothstep(0.55, 0.08, life);
+    let bx = 0.32 + 0.4 * hash21(vec2<f32>(seed, 7.0));
+    return vec4<f32>(env, bx, life, seed);
+}
+// Forked lightning: a noise-perturbed vertical bolt + a branch fork, gated by the strike env.
+fn lightning(uv: vec2<f32>, t: f32, st: vec4<f32>) -> f32 {
+    let seed = st.w;
+    let path = st.y + (fbm(vec2<f32>(uv.y * 4.5, seed)) - 0.5) * 0.28;
+    let main = smoothstep(0.018, 0.0, abs(uv.x - path)) * step(uv.y, 0.72);
+    let fork = smoothstep(0.013, 0.0, abs(uv.x - (path + (uv.y - 0.4) * 0.6)))
+             * step(0.4, uv.y) * step(uv.y, 0.66);
+    return st.x * (main + fork * 0.7);
+}
+// Rolling volumetric fog bands (two counter-scrolling fbm layers).
+fn fog_banks(uv: vec2<f32>, t: f32) -> f32 {
+    let n1 = fbm(uv * vec2<f32>(3.0, 1.6) + vec2<f32>(t * 0.06, 0.0));
+    let n2 = fbm(uv * vec2<f32>(2.0, 1.1) + vec2<f32>(-t * 0.04, 1.7));
+    return 0.5 * (n1 + n2);
+}
 fn storm_c(uv: vec2<f32>, t: f32, day: f32, intensity: f32) -> vec3<f32> {
-    // Faster, higher-contrast churn (extra warp) + darker palette.
-    let w2 = warp(uv * 2.2 + vec2<f32>(t * 0.08, 0.0), t);
+    let st = storm_strike(t);
+    // Shockwave: an expanding ring from the strike's ground contact deforms the background.
+    let asp = u.res.y / u.res.x;
+    let impact = vec2<f32>(st.y, 0.70);
+    let dvec = (uv - impact) * vec2<f32>(1.0, asp);
+    let dist = length(dvec);
+    let ringR = st.z * 1.1;
+    let ring = smoothstep(0.09, 0.0, abs(dist - ringR));
+    let disp = normalize(dvec + vec2<f32>(0.0001, 0.0001)) * ring * st.x * 0.06;
+    let duv = uv + disp;
+    // Faster, higher-contrast churn (extra warp) + darker palette, sampled at the rippled coord.
+    let w2 = warp(duv * 2.2 + vec2<f32>(t * 0.08, 0.0), t);
     let c0 = mix(vec3<f32>(0.04, 0.05, 0.09), vec3<f32>(0.20, 0.24, 0.32), day);
     let c1 = mix(vec3<f32>(0.07, 0.08, 0.13), vec3<f32>(0.30, 0.34, 0.42), day);
     let c2 = mix(vec3<f32>(0.05, 0.06, 0.11), vec3<f32>(0.24, 0.28, 0.36), day);
     let c3 = mix(vec3<f32>(0.02, 0.03, 0.07), vec3<f32>(0.14, 0.17, 0.24), day);
-    return mesh_gradient(w2, t, c0, c1, c2, c3);
+    var col = mesh_gradient(w2, t, c0, c1, c2, c3);
+    // Driving rain sheets.
+    col = col + vec3<f32>(0.35, 0.40, 0.52) * rain_streaks(uv, t, 1.0) * 0.18;
+    // Shockwave ring highlight + whole-sky ambient flash on strike.
+    col = col + vec3<f32>(0.55, 0.60, 0.75) * ring * st.x * 0.5;
+    col = col + vec3<f32>(0.60, 0.63, 0.78) * st.x * 0.18;
+    // Forked lightning bolt.
+    col = col + vec3<f32>(0.90, 0.92, 1.0) * lightning(uv, t, st);
+    return col;
 }
 fn fog_c(uv: vec2<f32>, t: f32, day: f32, intensity: f32) -> vec3<f32> {
     let c0 = mix(vec3<f32>(0.16, 0.17, 0.19), vec3<f32>(0.66, 0.68, 0.71), day);
     let c1 = mix(vec3<f32>(0.19, 0.20, 0.22), vec3<f32>(0.74, 0.76, 0.79), day);
     let c2 = mix(vec3<f32>(0.17, 0.18, 0.20), vec3<f32>(0.70, 0.72, 0.75), day);
     let c3 = mix(vec3<f32>(0.14, 0.15, 0.17), vec3<f32>(0.62, 0.64, 0.67), day);
-    return mesh_gradient(uv, t, c0, c1, c2, c3);
+    var col = mesh_gradient(uv, t, c0, c1, c2, c3);
+    let fogc = mix(vec3<f32>(0.55, 0.57, 0.60), vec3<f32>(0.86, 0.88, 0.90), day);
+    let banks = fog_banks(uv, t);
+    // Denser fog low and rolling; reduces visibility toward the horizon.
+    let dens = clamp(banks * (0.5 + 0.7 * intensity) + smoothstep(0.3, 1.0, uv.y) * 0.35, 0.0, 0.85);
+    col = mix(col, fogc, dens);
+    return col;
 }
 
 // ---- Subtle season tint (multiplier, mixed at low strength) ----
@@ -238,6 +290,10 @@ fn silhouette_alpha(uv: vec2<f32>, t: f32, cond: i32, intensity: f32) -> f32 {
     } else if (cond == 4) {
         let j = fbm(vec2<f32>(x * 20.0 + t * 1.5, t));
         edge = 0.35 + amp * 1.6 * (j - 0.5) * 2.0;
+        // Lightning strike jolts/tears the window's bottom edge inward at the bolt's x.
+        let st = storm_strike(t);
+        let near = smoothstep(0.14, 0.0, abs(x - st.y));
+        edge = edge - st.x * near * 0.7;
         soft = 0.03;
     } else {
         let n = fbm(vec2<f32>(x * 4.0 + t * 0.2, uv.y * 6.0));
