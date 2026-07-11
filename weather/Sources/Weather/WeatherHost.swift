@@ -5,6 +5,8 @@ import Foundation
 final class WeatherHost {
     private var _model: WeatherModel
     private var _conditionOverride: Double?
+    private var _isDayOverride: Double?
+    private var _seasonOverride: Double?
     private let lock = NSLock()
     init(model: WeatherModel) { self._model = model }
 
@@ -26,6 +28,20 @@ final class WeatherHost {
         set { lock.lock(); _conditionOverride = newValue; lock.unlock() }
     }
 
+    /// Presenter override for the shader day/night uniform only (the `D` key). Lock-guarded like
+    /// `model`; `nil` = live. Forces only `wx_is_day`.
+    var isDayOverride: Double? {
+        get { lock.lock(); defer { lock.unlock() }; return _isDayOverride }
+        set { lock.lock(); _isDayOverride = newValue; lock.unlock() }
+    }
+
+    /// Presenter override for the shader season uniform only (the `S` key). Lock-guarded like
+    /// `model`; `nil` = live. Forces only `wx_season`.
+    var seasonOverride: Double? {
+        get { lock.lock(); defer { lock.unlock() }; return _seasonOverride }
+        set { lock.lock(); _seasonOverride = newValue; lock.unlock() }
+    }
+
     /// Parse the `i` out of "wx_hour_<i>_<suffix>", or nil.
     private func hourIndex(_ key: String, suffix: String) -> Int? {
         let prefix = "wx_hour_"
@@ -39,10 +55,10 @@ final class WeatherHost {
     func num(_ key: String) -> Double? {
         switch key {
         case "wx_condition": return conditionOverride ?? model.condition
-        case "wx_is_day":    return model.isDay
+        case "wx_is_day":    return isDayOverride ?? model.isDay
         case "wx_temp":      return model.temp
         case "wx_intensity": return model.intensity
-        case "wx_season":    return model.season
+        case "wx_season":    return seasonOverride ?? model.season
         default:             return nil
         }
     }
