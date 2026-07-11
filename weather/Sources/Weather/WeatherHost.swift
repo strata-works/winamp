@@ -10,8 +10,9 @@ final class WeatherHost {
 
     /// The current weather state. Thread-safe: the engine reads via the host vtable on the
     /// RENDER thread (num/str/rowCount/rowString) while the app mutates from the MAIN thread
-    /// (the debug condition-cycle now; M2's live data updates later). All access is lock-guarded,
-    /// so a full-model swap is atomic w.r.t. the render thread's reads.
+    /// (the live WeatherService refresh swaps the whole model). All access is lock-guarded,
+    /// so a full-model swap is atomic w.r.t. the render thread's reads. The →/← demo cycle
+    /// uses `conditionOverride` (below), not this, so it survives a refresh.
     var model: WeatherModel {
         get { lock.lock(); defer { lock.unlock() }; return _model }
         set { lock.lock(); _model = newValue; lock.unlock() }

@@ -113,9 +113,11 @@ struct WeatherService {
     }
 
     static func hourlyCells(_ h: Response.Hourly, currentTime: String) -> [HourCell] {
-        let n = min(h.time.count, min(h.temperature_2m.count, 12_000))
+        let n = min(h.time.count, h.temperature_2m.count)
         guard n > 0 else { return [] }
-        // First hourly slot at/after the current hour; clamp so a 12-wide window always fits.
+        // First hourly slot at/after the current hour, then clamp so a 12-wide window always fits.
+        // The lexicographic compare is exact only because Open-Meteo emits identical offset-free,
+        // minute-resolution ISO timestamps ("2026-07-11T12:00") for both current.time and hourly.time.
         let firstAtOrAfter = h.time.firstIndex(where: { $0 >= currentTime }) ?? 0
         let start = min(firstAtOrAfter, max(0, n - 12))
         let end = min(start + 12, n)
