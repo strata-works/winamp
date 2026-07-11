@@ -1,6 +1,6 @@
-// Hash/noise helpers (value noise).
+// ---- Noise helpers (value noise + fbm) ----
 fn hash21(p: vec2<f32>) -> f32 {
-    var h = dot(p, vec2<f32>(127.1, 311.7));
+    let h = dot(p, vec2<f32>(127.1, 311.7));
     return fract(sin(h) * 43758.5453123);
 }
 fn noise2(p: vec2<f32>) -> f32 {
@@ -19,25 +19,33 @@ fn fbm(p: vec2<f32>) -> f32 {
     return v;
 }
 
-// Sky gradient tinted by day/night.
+// ---- Sky gradient tinted by day/night ----
 fn sky(uv: vec2<f32>, day: f32) -> vec3<f32> {
-    let top_day = vec3<f32>(0.30, 0.55, 0.9);
+    let top_day = vec3<f32>(0.30, 0.55, 0.90);
     let bot_day = vec3<f32>(0.75, 0.85, 0.95);
-    let top_night = vec3<f32>(0.03, 0.04, 0.12);
-    let bot_night = vec3<f32>(0.08, 0.10, 0.20);
+    let top_night = vec3<f32>(0.02, 0.03, 0.10);
+    let bot_night = vec3<f32>(0.06, 0.08, 0.18);
     let top = mix(top_night, top_day, day);
     let bot = mix(bot_night, bot_day, day);
     return mix(top, bot, uv.y);
 }
 
+// Faint stars for clear/less-cloudy night skies.
+fn stars(uv: vec2<f32>, t: f32) -> f32 {
+    let g = hash21(floor(uv * 120.0));
+    let tw = 0.5 + 0.5 * sin(t * 3.0 + g * 40.0);
+    return step(0.985, g) * tw;
+}
+
 fn clear_c(uv: vec2<f32>, t: f32, day: f32) -> vec3<f32> {
     var col = sky(uv, day);
-    // A soft sun/moon disc drifting slightly.
+    col = col + vec3<f32>(0.9, 0.92, 1.0) * stars(uv, t) * (1.0 - day) * 0.8;
+    // Sun by day / moon by night, drifting slightly.
     let c = vec2<f32>(0.72, 0.24 + 0.02 * sin(t * 0.3));
     let d = distance(uv, c);
     let disc = smoothstep(0.14, 0.10, d);
     let glow = smoothstep(0.5, 0.0, d) * 0.35;
-    let sun = mix(vec3<f32>(1.0, 0.95, 0.75), vec3<f32>(0.85, 0.9, 1.0), 1.0 - day);
+    let sun = mix(vec3<f32>(0.85, 0.90, 1.0), vec3<f32>(1.0, 0.95, 0.75), day);
     col = col + sun * (disc + glow);
     return col;
 }
@@ -46,22 +54,24 @@ fn cloud_c(uv: vec2<f32>, t: f32, day: f32, intensity: f32) -> vec3<f32> {
     var col = sky(uv, day) * 0.9;
     let n = fbm(uv * vec2<f32>(3.0, 2.0) + vec2<f32>(t * 0.05, 0.0));
     let cover = smoothstep(0.4, 0.8, n) * (0.5 + 0.5 * intensity);
-    let cloud = mix(vec3<f32>(0.6, 0.62, 0.68), vec3<f32>(0.85, 0.87, 0.9), day);
+    let cloud_day = vec3<f32>(0.82, 0.85, 0.90);
+    let cloud_night = vec3<f32>(0.18, 0.20, 0.26);
+    let cloud = mix(cloud_night, cloud_day, day);
     return mix(col, cloud, cover);
 }
 
 fn rain_c(uv: vec2<f32>, t: f32, day: f32, intensity: f32) -> vec3<f32> {
-    var col = cloud_c(uv, t, day, 0.8) * 0.8;
-    // Streaks: repeated diagonal lines scrolling down.
+    var col = cloud_c(uv, t, day, 0.8) * mix(0.55, 0.8, day);
     let sc = uv * vec2<f32>(60.0, 30.0) + vec2<f32>(uv.y * 8.0, -t * 12.0);
     let line = fract(sc.x + floor(sc.y) * 0.5);
     let streak = smoothstep(0.96, 1.0, 1.0 - abs(line - 0.5) * 2.0) * (0.3 + intensity);
-    col = col + vec3<f32>(0.6, 0.7, 0.85) * streak * 0.25;
+    col = col + vec3<f32>(0.6, 0.7, 0.85) * streak * 0.28;
     return col;
 }
 
 fn snow_c(uv: vec2<f32>, t: f32, day: f32, intensity: f32) -> vec3<f32> {
-    var col = cloud_c(uv, t, day, 0.5) * vec3<f32>(0.9, 0.93, 1.0);
+    let tintv = mix(vec3<f32>(0.55, 0.62, 0.85), vec3<f32>(0.9, 0.93, 1.0), day);
+    var col = cloud_c(uv, t, day, 0.5) * tintv;
     var flakes = 0.0;
     for (var k = 0; k < 3; k = k + 1) {
         let fk = f32(k);
@@ -70,12 +80,11 @@ fn snow_c(uv: vec2<f32>, t: f32, day: f32, intensity: f32) -> vec3<f32> {
         let f = fract(p) - 0.5;
         flakes = flakes + smoothstep(0.08, 0.0, length(f)) * step(0.85, g);
     }
-    return col + vec3<f32>(1.0) * flakes * (0.4 + intensity);
+    return col + vec3<f32>(1.0) * flakes * (0.4 + intensity) * mix(0.7, 1.0, day);
 }
 
 fn storm_c(uv: vec2<f32>, t: f32, day: f32, intensity: f32) -> vec3<f32> {
     var col = rain_c(uv, t, day, 1.0) * 0.5;
-    // Occasional lightning flash: a fast pulse gating on a time hash.
     let strike = step(0.985, hash21(vec2<f32>(floor(t * 2.0), 3.0)));
     let flash = strike * (0.5 + 0.5 * sin(t * 40.0)) * 0.6;
     col = col + vec3<f32>(0.9, 0.9, 1.0) * flash;
@@ -83,9 +92,50 @@ fn storm_c(uv: vec2<f32>, t: f32, day: f32, intensity: f32) -> vec3<f32> {
 }
 
 fn fog_c(uv: vec2<f32>, t: f32, day: f32, intensity: f32) -> vec3<f32> {
-    let base = mix(vec3<f32>(0.5, 0.52, 0.55), vec3<f32>(0.8, 0.82, 0.85), day);
+    let base = mix(vec3<f32>(0.30, 0.32, 0.36), vec3<f32>(0.80, 0.82, 0.85), day);
     let n = fbm(uv * 2.0 + vec2<f32>(t * 0.03, t * 0.01));
     return mix(base * 0.9, base, n);
+}
+
+// ---- Subtle season tint (multiplier, mixed at low strength) ----
+fn season_tint(season: f32) -> vec3<f32> {
+    let s = i32(round(clamp(season, 0.0, 3.0)));
+    if (s == 0) { return vec3<f32>(0.86, 0.93, 1.06); }   // winter: cool
+    if (s == 1) { return vec3<f32>(0.93, 1.05, 0.95); }   // spring: fresh green
+    if (s == 2) { return vec3<f32>(1.08, 1.00, 0.90); }   // summer: warm
+    return vec3<f32>(1.08, 0.95, 0.80);                    // autumn: amber
+}
+
+// ---- Bottom-flowing silhouette: window alpha 1 above the band, ramping to 0 below an
+//      animated, condition-reactive edge. ----
+fn silhouette_alpha(uv: vec2<f32>, t: f32, cond: i32, intensity: f32) -> f32 {
+    let band_top = 0.82;
+    if (uv.y < band_top) { return 1.0; }
+    let x = uv.x;
+    let b = (uv.y - band_top) / (1.0 - band_top);   // 0 at band top, 1 at canvas bottom
+    let amp = 0.10 + 0.10 * intensity;
+    var edge = 0.4;
+    var soft = 0.10;
+    if (cond == 0) {                                 // clear: gentle sine waves
+        edge = 0.42 + amp * sin(x * 8.0 + t * 0.8);
+    } else if (cond == 1) {                          // cloud: soft low swells
+        edge = 0.46 + amp * 0.7 * sin(x * 5.0 + t * 0.5);
+    } else if (cond == 2) {                          // rain: downward drips
+        let drip = fbm(vec2<f32>(x * 12.0, t * 0.6));
+        edge = 0.30 + amp * 1.4 * drip;
+        soft = 0.05;
+    } else if (cond == 3) {                          // snow: crystalline scallops
+        edge = 0.42 + amp * 0.8 * abs(sin(x * 10.0 + t * 0.3));
+        soft = 0.08;
+    } else if (cond == 4) {                          // storm: jagged/erratic
+        let j = fbm(vec2<f32>(x * 20.0 + t * 1.5, t));
+        edge = 0.35 + amp * 1.6 * (j - 0.5) * 2.0;
+        soft = 0.03;
+    } else {                                         // fog (5): soft dissolve, no hard edge
+        let n = fbm(vec2<f32>(x * 4.0 + t * 0.2, uv.y * 6.0));
+        return clamp(1.0 - b * (0.7 + 0.6 * n), 0.0, 1.0);
+    }
+    return 1.0 - smoothstep(edge - soft, edge + soft, b);
 }
 
 @fragment
@@ -94,8 +144,9 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
     let t = u.time;
     let day = clamp(u.is_day, 0.0, 1.0);
     let intensity = clamp(u.intensity, 0.0, 1.0);
+    let cond = i32(u.condition);
     var col: vec3<f32>;
-    switch (i32(u.condition)) {
+    switch (cond) {
         case 0: { col = clear_c(uv, t, day); }
         case 1: { col = cloud_c(uv, t, day, intensity); }
         case 2: { col = rain_c(uv, t, day, intensity); }
@@ -104,9 +155,13 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
         case 5: { col = fog_c(uv, t, day, intensity); }
         default: { col = clear_c(uv, t, day); }
     }
-    // Warm/cool tint from temperature (raw °C): cold → blue, hot → amber.
+    // Warm/cool tint from temperature (raw °C).
     let warmth = clamp((u.temp - 10.0) / 25.0, -0.3, 0.3);
     col = col + vec3<f32>(warmth, 0.0, -warmth) * 0.15;
-    // Opaque background (premultiplied by alpha = 1).
-    return vec4<f32>(clamp(col, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
+    // Subtle season tint.
+    col = mix(col, col * season_tint(u.season), 0.08);
+    col = clamp(col, vec3<f32>(0.0), vec3<f32>(1.0));
+    // Bottom-flowing silhouette → premultiplied alpha shapes the transparent window.
+    let a = silhouette_alpha(uv, t, cond, intensity);
+    return vec4<f32>(col * a, a);
 }
