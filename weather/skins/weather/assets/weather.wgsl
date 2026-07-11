@@ -288,18 +288,32 @@ fn silhouette_alpha(uv: vec2<f32>, t: f32, cond: i32, intensity: f32) -> f32 {
         edge = 0.42 + amp * 0.8 * abs(sin(x * 10.0 + t * 0.3));
         soft = 0.08;
     } else if (cond == 4) {
-        let j = fbm(vec2<f32>(x * 20.0 + t * 1.5, t));
-        edge = 0.35 + amp * 1.6 * (j - 0.5) * 2.0;
-        // Lightning strike jolts/tears the window's bottom edge inward at the bolt's x.
+        // Broader, less needle-sharp churn for the storm edge.
+        let j = fbm(vec2<f32>(x * 14.0 + t * 1.5, t));
+        edge = 0.35 + amp * 1.2 * (j - 0.5) * 2.0;
+        // Lightning strike jolts the window's bottom edge inward at the bolt's x — a soft,
+        // rounded dip rather than a sharp notch.
         let st = storm_strike(t);
-        let near = smoothstep(0.14, 0.0, abs(x - st.y));
-        edge = edge - st.x * near * 0.7;
-        soft = 0.03;
+        let near = smoothstep(0.24, 0.0, abs(x - st.y));
+        edge = edge - st.x * near * 0.42;
+        soft = 0.06;
     } else {
         let n = fbm(vec2<f32>(x * 4.0 + t * 0.2, uv.y * 6.0));
         return clamp(1.0 - b * (0.7 + 0.6 * n), 0.0, 1.0);
     }
     return 1.0 - smoothstep(edge - soft, edge + soft, b);
+}
+
+// Rounded-window mask: softens the hard rectangle corners (a circle in uv is oval on the
+// tall canvas, so distances are aspect-corrected to keep the radius round in pixels).
+fn corner_alpha(uv: vec2<f32>) -> f32 {
+    let asp = u.res.y / u.res.x;
+    let p = (uv - vec2<f32>(0.5, 0.5)) * vec2<f32>(1.0, asp);
+    let b = vec2<f32>(0.5, 0.5 * asp);
+    let r = 0.065;   // corner radius (x-uv units ~ 26 px)
+    let q = abs(p) - b + vec2<f32>(r, r);
+    let sd = length(max(q, vec2<f32>(0.0, 0.0))) + min(max(q.x, q.y), 0.0) - r;
+    return smoothstep(0.006, -0.006, sd);
 }
 
 @fragment
@@ -326,6 +340,6 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
     col = mix(col, col * season_tint(u.season), 0.08);
     col = clamp(col, vec3<f32>(0.0), vec3<f32>(1.0));
     col = col * ui_scrim(uv);
-    let a = silhouette_alpha(uv, t, cond, intensity);
+    let a = silhouette_alpha(uv, t, cond, intensity) * corner_alpha(uv);
     return vec4<f32>(col * a, a);
 }
