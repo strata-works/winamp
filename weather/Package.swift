@@ -11,6 +11,7 @@ let package = Package(
         .executableTarget(
             name: "Weather",
             dependencies: ["CCarapace"],
+            resources: [.copy("mock.json")],
             swiftSettings: [
                 .swiftLanguageMode(.v5),
                 // carapace.h gates its Apple-only API behind `#if defined(CARAPACE_APPLE)`; the C
