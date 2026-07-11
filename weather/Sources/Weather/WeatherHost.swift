@@ -4,6 +4,7 @@ import Foundation
 /// `WeatherModel`. Held by the HostCallbacks vtable; mutate `model` to change what the skin shows.
 final class WeatherHost {
     private var _model: WeatherModel
+    private var _conditionOverride: Double?
     private let lock = NSLock()
     init(model: WeatherModel) { self._model = model }
 
@@ -14,6 +15,14 @@ final class WeatherHost {
     var model: WeatherModel {
         get { lock.lock(); defer { lock.unlock() }; return _model }
         set { lock.lock(); _model = newValue; lock.unlock() }
+    }
+
+    /// Presenter demo override for the shader condition only. Set from the MAIN thread
+    /// (the →/← keys); read from the RENDER thread in `num("wx_condition")`. Lock-guarded
+    /// like `model`. `nil` = show the live condition.
+    var conditionOverride: Double? {
+        get { lock.lock(); defer { lock.unlock() }; return _conditionOverride }
+        set { lock.lock(); _conditionOverride = newValue; lock.unlock() }
     }
 
     /// Parse the `i` out of "wx_hour_<i>_<suffix>", or nil.
@@ -28,7 +37,7 @@ final class WeatherHost {
 
     func num(_ key: String) -> Double? {
         switch key {
-        case "wx_condition": return model.condition
+        case "wx_condition": return conditionOverride ?? model.condition
         case "wx_is_day":    return model.isDay
         case "wx_temp":      return model.temp
         case "wx_intensity": return model.intensity
