@@ -112,6 +112,22 @@ fn season_tint(season: f32) -> vec3<f32> {
     return vec3<f32>(1.08, 0.95, 0.80);                    // autumn: amber
 }
 
+// Softly darkens the shader behind the 2D UI so text stays legible. The engine has
+// no text-shadow/scrim primitive, so legibility is baked here. Zones (canvas 400x680,
+// uv normalized): hero top-left, hourly strip band, daily column. Returns a luminance
+// multiplier in [~0.5, 1.0].
+fn ui_scrim(uv: vec2<f32>) -> f32 {
+    var s = 1.0;
+    // Hero block (top-left ~ x<0.62, y<0.30): strongest darkening.
+    s = s - 0.42 * smoothstep(0.62, 0.30, uv.x) * smoothstep(0.34, 0.02, uv.y);
+    // Hourly strip band (~ y 0.33..0.40, full width): gentle.
+    s = s - 0.22 * smoothstep(0.32, 0.36, uv.y) * smoothstep(0.42, 0.38, uv.y);
+    // Daily column labels + temps (left third and right third, y 0.45..0.82): gentle.
+    let band = smoothstep(0.44, 0.48, uv.y) * smoothstep(0.83, 0.79, uv.y);
+    s = s - 0.20 * band * (smoothstep(0.32, 0.06, uv.x) + smoothstep(0.68, 0.95, uv.x));
+    return clamp(s, 0.5, 1.0);
+}
+
 // ---- Bottom-flowing silhouette (window alpha). Carried forward from M3. ----
 fn silhouette_alpha(uv: vec2<f32>, t: f32, cond: i32, intensity: f32) -> f32 {
     let band_top = 0.82;
@@ -166,6 +182,7 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
     // Subtle season tint.
     col = mix(col, col * season_tint(u.season), 0.08);
     col = clamp(col, vec3<f32>(0.0), vec3<f32>(1.0));
+    col = col * ui_scrim(uv);
     let a = silhouette_alpha(uv, t, cond, intensity);
     return vec4<f32>(col * a, a);
 }
