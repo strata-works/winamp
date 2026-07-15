@@ -443,20 +443,19 @@ fn season_tint(season: f32) -> vec3<f32> {
     return vec3<f32>(1.08, 0.95, 0.80);                    // autumn: amber
 }
 
-// Softly darkens the shader behind the 2D UI so text stays legible. The engine has
-// no text-shadow/scrim primitive, so legibility is baked here. Zones (canvas 400x680,
-// uv normalized): hero top-left, hourly strip band, daily column. Returns a luminance
-// multiplier in [~0.5, 1.0].
+// Softly darkens the shader behind the 2D UI so text stays legible (the engine has no
+// text-shadow/scrim primitive). Retuned for the graded palettes: shallower, wider falloffs
+// so the scrim disappears into the scene. Zones (canvas 400x680, uv normalized).
 fn ui_scrim(uv: vec2<f32>) -> f32 {
     var s = 1.0;
-    // Hero block (top-left ~ x<0.62, y<0.30): strongest darkening.
-    s = s - 0.42 * smoothstep(0.62, 0.30, uv.x) * smoothstep(0.34, 0.02, uv.y);
-    // Hourly strip band (~ y 0.33..0.40, full width): gentle.
-    s = s - 0.22 * smoothstep(0.32, 0.36, uv.y) * smoothstep(0.42, 0.38, uv.y);
-    // Daily column labels + temps (left third and right third, y 0.45..0.82): gentle.
-    let band = smoothstep(0.44, 0.48, uv.y) * smoothstep(0.83, 0.79, uv.y);
-    s = s - 0.20 * band * (smoothstep(0.32, 0.06, uv.x) + smoothstep(0.68, 0.95, uv.x));
-    return clamp(s, 0.5, 1.0);
+    // Hero block (top-left): strongest, with a long soft tail reaching the hi_lo/feels row.
+    s = s - 0.44 * smoothstep(0.66, 0.24, uv.x) * smoothstep(0.42, 0.0, uv.y);
+    // Hourly strip band: gentle.
+    s = s - 0.24 * smoothstep(0.30, 0.355, uv.y) * smoothstep(0.43, 0.375, uv.y);
+    // Daily columns (left + right thirds).
+    let band = smoothstep(0.43, 0.49, uv.y) * smoothstep(0.84, 0.78, uv.y);
+    s = s - 0.14 * band * (smoothstep(0.34, 0.04, uv.x) + smoothstep(0.66, 0.96, uv.x));
+    return clamp(s, 0.55, 1.0);
 }
 
 // ---- Bottom-flowing silhouette (window alpha). Carried forward from M3. ----
