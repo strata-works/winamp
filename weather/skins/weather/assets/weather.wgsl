@@ -343,14 +343,48 @@ fn storm_strike(t: f32) -> vec4<f32> {
     let bx = 0.32 + 0.4 * hash21(vec2<f32>(slot, 7.0));
     return vec4<f32>(env, bx, m.y, slot);
 }
-// Forked lightning: a noise-perturbed vertical bolt + a branch fork, gated by the strike env.
+// Piecewise-linear jagged bolt path: y quantized into segments, joints displaced by hash —
+// sharp kinks, not the smooth fbm squiggle of the first version.
+fn bolt_path(y: f32, seed: f32, bx: f32) -> f32 {
+    let segs = 14.0;
+    let fy = y * segs;
+    let i0 = floor(fy);
+    let f = fract(fy);
+    let o0 = (hash21(vec2<f32>(i0, seed)) - 0.5) * 0.12
+           + (hash21(vec2<f32>(i0, seed + 50.0)) - 0.5) * 0.04;
+    let o1 = (hash21(vec2<f32>(i0 + 1.0, seed)) - 0.5) * 0.12
+           + (hash21(vec2<f32>(i0 + 1.0, seed + 50.0)) - 0.5) * 0.04;
+    return bx + mix(o0, o1, f);
+}
+// Forked lightning: thin brilliant core + tight inner glow + faint corona, with 3 tapering
+// hash-placed branches, gated by the strike env. Fast flicker for the electric feel.
 fn lightning(uv: vec2<f32>, t: f32, st: vec4<f32>) -> f32 {
+    if (st.x <= 0.0) { return 0.0; }
     let seed = st.w;
-    let path = st.y + (fbm(vec2<f32>(uv.y * 4.5, seed)) - 0.5) * 0.28;
-    let main = smoothstep(0.018, 0.0, abs(uv.x - path)) * step(uv.y, 0.72);
-    let fork = smoothstep(0.013, 0.0, abs(uv.x - (path + (uv.y - 0.4) * 0.6)))
-             * step(0.4, uv.y) * step(uv.y, 0.66);
-    return st.x * (main + fork * 0.7);
+    let ground = 0.70;                    // strike terminus = the shockwave impact row
+    if (uv.y > ground) { return 0.0; }
+    let path = bolt_path(uv.y, seed, st.y);
+    let d = abs(uv.x - path);
+    let core = smoothstep(0.0035, 0.0008, d);
+    let inner = exp(-d * 220.0) * 0.55;
+    let corona = exp(-d * 60.0) * 0.18;
+    var b = core + inner + corona;
+    // Branches: short diagonal offshoots leaving the trunk at hash-picked joints.
+    for (var k = 0; k < 3; k = k + 1) {
+        let fk = f32(k);
+        let jy = (floor(hash21(vec2<f32>(seed, 60.0 + fk)) * 8.0) + 2.0) / 14.0;
+        let sgn = sign(hash21(vec2<f32>(seed, 70.0 + fk)) - 0.5);
+        let dy = uv.y - jy;
+        if (dy > 0.0 && dy < 0.07) {
+            let slope = 0.9 + 0.6 * hash21(vec2<f32>(seed, 80.0 + fk));
+            let bp = bolt_path(jy, seed, st.y) + sgn * dy * slope;
+            let bd = abs(uv.x - bp);
+            let taper = 1.0 - dy / 0.07;
+            b = b + (smoothstep(0.0022, 0.0005, bd) * 0.65 + exp(-bd * 260.0) * 0.22) * taper;
+        }
+    }
+    let flick = 0.75 + 0.25 * step(0.4, hash21(vec2<f32>(floor(t * 48.0), seed)));
+    return st.x * b * flick;
 }
 // Second bolt of an occasional double-strike: same slot as the primary, delayed ~10% of the
 // slot, offset x. Gated on the PRIMARY slot being active (m.w) so a double never fires alone.
