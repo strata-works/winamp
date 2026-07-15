@@ -248,8 +248,9 @@ fn cloud_c(uv: vec2<f32>, t: f32, sky: Sky, intensity: f32) -> vec3<f32> {
         col = col + sky.key * rim * cover * 0.35;
     }
     // Cloud-break moment: a god-ray shaft sweeps across during the event (day only).
+    // Gain kept modest — at noon the scene is already bright and a hot shaft washes it out.
     let mb = moment(t, 0.05, 0.6, 9.0);
-    col = col + sky.key * god_rays(uv, vec2<f32>(0.2 + 0.6 * mb.y, 0.18), t) * mb.x * 0.5 * day;
+    col = col + sky.key * god_rays(uv, vec2<f32>(0.2 + 0.6 * mb.y, 0.18), t) * mb.x * 0.28 * day;
     return col;
 }
 // Falling rain streaks, per-column randomized, broken into short segments so they read as
