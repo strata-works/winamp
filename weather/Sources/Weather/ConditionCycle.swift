@@ -20,4 +20,12 @@ enum ConditionCycle {
 
     static func next(_ current: Double?) -> Double? { next(current, upTo: 5) }
     static func prev(_ current: Double?) -> Double? { prev(current, upTo: 5) }
+
+    /// Cycle through an explicit stops array: nil (live) -> stops[0] -> ... -> last -> nil.
+    /// Used by the D key over `SunMath.presenterStops`. Matches on exact stored values.
+    static func next(_ current: Double?, stops: [Double]) -> Double? {
+        guard let c = current else { return stops.first }
+        guard let i = stops.firstIndex(of: c), i + 1 < stops.count else { return nil }
+        return stops[i + 1]
+    }
 }

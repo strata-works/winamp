@@ -80,12 +80,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // Presenter controls (overrides force only the shader; hero/hourly/daily text stays live):
-    //   →/← tour condition · D toggles day/night · S cycles season · R refetches.
+    //   →/← tour condition · D cycles dawn/noon/dusk/night · S cycles season · R refetches.
     private func handleKey(_ code: UInt16) {
         switch code {
         case 124: host.conditionOverride = ConditionCycle.next(host.conditionOverride)          // →
         case 123: host.conditionOverride = ConditionCycle.prev(host.conditionOverride)          // ←
-        case 2:   host.isDayOverride = ConditionCycle.next(host.isDayOverride, upTo: 1)          // D
+        case 2:   host.sunOverride = ConditionCycle.next(host.sunOverride, stops: SunMath.presenterStops) // D
         case 1:   host.seasonOverride = ConditionCycle.next(host.seasonOverride, upTo: 3)        // S
         case 15:  refresh()                                                                       // R
         default:  break

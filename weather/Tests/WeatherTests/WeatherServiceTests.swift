@@ -12,7 +12,8 @@ final class WeatherServiceTests: XCTestCase {
         XCTAssertEqual(m.location, "Accra")
         XCTAssertEqual(m.condition, 1)          // code 3 -> cloud
         XCTAssertEqual(m.conditionText, "Partly cloudy")
-        XCTAssertEqual(m.isDay, 1)
+        XCTAssertEqual(m.sunrise, WeatherService.parseLocal("2026-07-11T05:58", offsetSeconds: 0))
+        XCTAssertEqual(m.sunset, WeatherService.parseLocal("2026-07-11T18:13", offsetSeconds: 0))
         XCTAssertEqual(m.temp, 27, accuracy: 0.001)
         XCTAssertEqual(m.tempNow, "27°")
         XCTAssertEqual(m.feels, "Feels 30°")
@@ -79,7 +80,7 @@ final class WeatherServiceTests: XCTestCase {
         XCTAssertTrue(u.contains("longitude=-0.2"))
         XCTAssertTrue(u.contains("current=temperature_2m,is_day,weather_code,apparent_temperature,precipitation,cloud_cover"))
         XCTAssertTrue(u.contains("hourly=temperature_2m,weather_code"))
-        XCTAssertTrue(u.contains("daily=weather_code,temperature_2m_max,temperature_2m_min"))
+        XCTAssertTrue(u.contains("daily=weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset"))
         XCTAssertTrue(u.contains("timezone=auto"))
         XCTAssertTrue(u.contains("forecast_days=7"))
     }

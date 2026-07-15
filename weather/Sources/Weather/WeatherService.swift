@@ -35,7 +35,10 @@ struct WeatherService {
             let weather_code: [Int]
             let temperature_2m_max: [Double]
             let temperature_2m_min: [Double]
+            let sunrise: [String]
+            let sunset: [String]
         }
+        let utc_offset_seconds: Int
         let current: Current
         let hourly: Hourly
         let daily: Daily
@@ -50,7 +53,7 @@ struct WeatherService {
             .init(name: "longitude", value: String(longitude)),
             .init(name: "current", value: "temperature_2m,is_day,weather_code,apparent_temperature,precipitation,cloud_cover"),
             .init(name: "hourly", value: "temperature_2m,weather_code"),
-            .init(name: "daily", value: "weather_code,temperature_2m_max,temperature_2m_min"),
+            .init(name: "daily", value: "weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset"),
             .init(name: "timezone", value: "auto"),
             .init(name: "forecast_days", value: "7"),
         ]
@@ -94,16 +97,20 @@ struct WeatherService {
         let month = monthOf(r.current.time)
         let hours = hourlyCells(r.hourly, currentTime: r.current.time)
         let days = dailyRows(r.daily)
+        // Degenerate fallback (missing/unparseable): sunrise==sunset -> sunElevation returns 0 (horizon).
+        let sunrise = parseLocal(r.daily.sunrise.first ?? "", offsetSeconds: r.utc_offset_seconds) ?? Date()
+        let sunset = parseLocal(r.daily.sunset.first ?? "", offsetSeconds: r.utc_offset_seconds) ?? Date()
         return WeatherModel(
             location: locationName,
             conditionText: conditionText(bucket: bucket),
             condition: bucket,
-            isDay: Double(r.current.is_day),
             temp: r.current.temperature_2m,
             intensity: intensity(bucket: bucket,
                                  precipitation: r.current.precipitation,
                                  cloudCover: r.current.cloud_cover),
             season: seasonForMonth(month),
+            sunrise: sunrise,
+            sunset: sunset,
             tempNow: "\(round(r.current.temperature_2m))°",
             hiLo: "H:\(round(r.daily.temperature_2m_max.first ?? 0))° L:\(round(r.daily.temperature_2m_min.first ?? 0))°",
             feels: "Feels \(round(r.current.apparent_temperature))°",
@@ -191,6 +198,16 @@ struct WeatherService {
         case 5: return "🌫"
         default: return "⛅"
         }
+    }
+
+    /// "2026-07-11T05:52" in the location's utc-offset -> Date. Open-Meteo emits offset-free
+    /// local timestamps when timezone=auto; the top-level utc_offset_seconds locates them.
+    static func parseLocal(_ isoTime: String, offsetSeconds: Int) -> Date? {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(secondsFromGMT: offsetSeconds)
+        f.dateFormat = "yyyy-MM-dd'T'HH:mm"
+        return f.date(from: isoTime)
     }
 
     /// "2026-07-11T14:00" -> 14 (the hour as an Int; drops leading zero).

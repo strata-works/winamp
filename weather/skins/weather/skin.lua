@@ -2,7 +2,7 @@ local W, H = 400, 680
 
 -- Animated WGSL background (renders UNDER the 2D UI). Host-bound numeric uniforms.
 shader{ src = "weather.wgsl", x = 0, y = 0, w = W, h = H,
-        uniforms = { condition = "wx_condition", is_day = "wx_is_day",
+        uniforms = { condition = "wx_condition", sun = "wx_sun",
                      temp = "wx_temp", intensity = "wx_intensity", season = "wx_season" } }
 
 -- Whole-window drag (the skin IS the window). Controls drawn later win hit-testing.

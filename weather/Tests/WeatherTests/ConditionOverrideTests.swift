@@ -30,14 +30,14 @@ final class ConditionOverrideTests: XCTestCase {
         XCTAssertEqual(ConditionCycle.prev(0), nil)   // 0 -> live
     }
 
-    func testIsDayOverrideForcesOnlyWxIsDay() {
-        let host = WeatherHost(model: .sample)   // sample.isDay == 1
-        XCTAssertEqual(host.num("wx_is_day"), 1)
-        host.isDayOverride = 0
-        XCTAssertEqual(host.num("wx_is_day"), 0)          // override wins
+    func testSunOverrideForcesOnlyWxSun() {
+        let host = WeatherHost(model: .sample)
+        host.sunOverride = -1.0
+        XCTAssertEqual(host.num("wx_sun"), -1.0)           // override wins
         XCTAssertEqual(host.num("wx_condition"), WeatherModel.sample.condition) // others live
-        host.isDayOverride = nil
-        XCTAssertEqual(host.num("wx_is_day"), 1)          // back to live
+        host.sunOverride = nil
+        let live = host.num("wx_sun")!
+        XCTAssertTrue(live >= -1 && live <= 1)             // back to live (wall-clock value)
     }
 
     func testSeasonOverrideForcesOnlyWxSeason() {

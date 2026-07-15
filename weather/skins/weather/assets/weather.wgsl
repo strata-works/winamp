@@ -320,7 +320,8 @@ fn corner_alpha(uv: vec2<f32>) -> f32 {
 fn fs(in: VsOut) -> @location(0) vec4<f32> {
     let uv = in.uv;
     let t = u.time;
-    let day = clamp(u.is_day, 0.0, 1.0);
+    // Temporary until Task 2 introduces sky_grade: soft day factor from continuous elevation.
+    let day = smoothstep(-0.12, 0.3, u.sun);
     let intensity = clamp(u.intensity, 0.0, 1.0);
     let cond = i32(u.condition);
     var col: vec3<f32>;
