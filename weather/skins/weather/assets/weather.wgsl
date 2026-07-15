@@ -351,22 +351,35 @@ fn lightning(uv: vec2<f32>, t: f32, st: vec4<f32>) -> f32 {
              * step(0.4, uv.y) * step(uv.y, 0.66);
     return st.x * (main + fork * 0.7);
 }
-// Rolling volumetric fog bands (two counter-scrolling fbm layers).
+// Second bolt of an occasional double-strike: same slot as the primary, delayed ~10% of the
+// slot, offset x. Gated on the PRIMARY slot being active (m.w) so a double never fires alone.
+fn storm_strike2(t: f32) -> vec4<f32> {
+    let m = moment(t, 0.7, 0.28, 4.0);            // same channel as storm_strike's gate
+    let slot = floor(t * 0.7);
+    let dbl = m.w * step(0.6, hash21(vec2<f32>(slot, 23.0)));
+    let phase2 = m.y - 0.10;                      // smoothstep(0, 0.04, x) is 0 for x < 0
+    let env = dbl * smoothstep(0.0, 0.04, phase2) * smoothstep(0.45, 0.06, phase2);
+    let bx = clamp(0.32 + 0.4 * hash21(vec2<f32>(slot, 7.0)) + 0.10, 0.05, 0.95);
+    return vec4<f32>(env, bx, phase2, slot + 101.0);
+}
+// Three counter-scrolling banks: sharp/fast -> soft/slow, at distinct scales.
 fn fog_banks(uv: vec2<f32>, t: f32) -> f32 {
     let n1 = fbm(uv * vec2<f32>(3.0, 1.6) + vec2<f32>(t * 0.06, 0.0));
-    let n2 = fbm(uv * vec2<f32>(2.0, 1.1) + vec2<f32>(-t * 0.04, 1.7));
-    return 0.5 * (n1 + n2);
+    let n2 = fbm3(uv * vec2<f32>(1.8, 1.0) + vec2<f32>(-t * 0.04, 1.7));
+    let n3 = fbm3(uv * vec2<f32>(1.1, 0.7) + vec2<f32>(t * 0.02, 3.9));
+    return 0.42 * n1 + 0.33 * n2 + 0.25 * n3;
 }
 fn storm_c(uv: vec2<f32>, t: f32, sky: Sky, intensity: f32) -> vec3<f32> {
     let day = sky.daylight;
     let st = storm_strike(t);
-    // Shockwave: an expanding ring from the strike's ground contact deforms the background.
+    let st2 = storm_strike2(t);
+    let flash = st.x + st2.x;
+    // Shockwave: an expanding ring from the primary strike's ground contact deforms the background.
     let asp = u.res.y / u.res.x;
     let impact = vec2<f32>(st.y, 0.70);
     let dvec = (uv - impact) * vec2<f32>(1.0, asp);
     let dist = length(dvec);
-    let ringR = st.z * 1.1;
-    let ring = smoothstep(0.09, 0.0, abs(dist - ringR));
+    let ring = smoothstep(0.09, 0.0, abs(dist - st.z * 1.1));
     let disp = normalize(dvec + vec2<f32>(0.0001, 0.0001)) * ring * st.x * 0.06;
     let duv = uv + disp;
     // Faster, higher-contrast churn (extra warp) + darker palette, sampled at the rippled coord.
@@ -376,13 +389,25 @@ fn storm_c(uv: vec2<f32>, t: f32, sky: Sky, intensity: f32) -> vec3<f32> {
     let c2 = mix(vec3<f32>(0.05, 0.06, 0.11), vec3<f32>(0.24, 0.28, 0.36), day);
     let c3 = mix(vec3<f32>(0.02, 0.03, 0.07), vec3<f32>(0.14, 0.17, 0.24), day);
     var col = mesh_gradient(w2, t, c0, c1, c2, c3);
-    // Driving rain sheets. (Neutral slant/speed until the Task-5 storm rework.)
-    col = col + vec3<f32>(0.35, 0.40, 0.52) * rain_streaks(uv, t, 1.0, 0.06, 1.0) * 0.18;
-    // Shockwave ring highlight + whole-sky ambient flash on strike.
+    // Churning cloud planes in the upper sky, lit by strikes from within.
+    for (var k = 0; k < 2; k = k + 1) {
+        let fk = f32(k);
+        let n = fbm3(uv * vec2<f32>(2.5 + fk, 1.8) + vec2<f32>(t * (0.10 + 0.05 * fk), fk * 7.0));
+        let cover = smoothstep(0.45, 0.8, n) * (0.5 + 0.3 * fk) * smoothstep(0.55, 0.1, uv.y);
+        let dark = mix(vec3<f32>(0.05, 0.06, 0.10), vec3<f32>(0.16, 0.18, 0.24), day);
+        col = mix(col, dark * (1.0 + flash * 0.8), cover);
+    }
+    // Driving rain sheets in two depths (storm-locked slant/speed).
+    col = col + vec3<f32>(0.35, 0.40, 0.52) * rain_streaks(uv, t, 1.0, 0.10, 1.3) * 0.18;
+    col = col + vec3<f32>(0.30, 0.34, 0.46) * rain_streaks(uv * vec2<f32>(1.6, 1.3), t * 0.6, 1.0, 0.08, 1.3) * 0.10;
+    // Shockwave highlight + whole-sky flash (primary + double + distant sheet flashes).
+    let df = moment(t, 0.5, 0.2, 12.0);
     col = col + vec3<f32>(0.55, 0.60, 0.75) * ring * st.x * 0.5;
-    col = col + vec3<f32>(0.60, 0.63, 0.78) * st.x * 0.18;
-    // Forked lightning bolt.
+    col = col + vec3<f32>(0.60, 0.63, 0.78) * (flash * 0.18 + df.x * 0.08);
+    // Bolts: primary + occasional double, with a soft afterglow trailing the primary.
     col = col + vec3<f32>(0.90, 0.92, 1.0) * lightning(uv, t, st);
+    col = col + vec3<f32>(0.85, 0.88, 1.0) * lightning(uv, t, st2) * 0.8;
+    col = col + vec3<f32>(0.70, 0.74, 0.95) * lightning(uv, t, vec4<f32>(sqrt(st.x) * 0.25, st.y, st.z, st.w));
     return col;
 }
 fn fog_c(uv: vec2<f32>, t: f32, sky: Sky, intensity: f32) -> vec3<f32> {
@@ -394,9 +419,18 @@ fn fog_c(uv: vec2<f32>, t: f32, sky: Sky, intensity: f32) -> vec3<f32> {
     var col = mesh_gradient(uv, t, c0, c1, c2, c3);
     let fogc = mix(vec3<f32>(0.55, 0.57, 0.60), vec3<f32>(0.86, 0.88, 0.90), day);
     let banks = fog_banks(uv, t);
-    // Denser fog low and rolling; reduces visibility toward the horizon.
-    let dens = clamp(banks * (0.5 + 0.7 * intensity) + smoothstep(0.3, 1.0, uv.y) * 0.35, 0.0, 0.85);
+    // Fog-roll moment: a dense bank drifts across; visibility drops then recovers.
+    let mr = moment(t, 0.06, 0.5, 13.0);
+    let roll = mr.x * smoothstep(0.35, 0.0, abs(uv.x - (mr.y * 1.4 - 0.2))) * 0.35;
+    // Denser low + toward the horizon; distant content fades hardest.
+    var dens = banks * (0.5 + 0.7 * intensity) + smoothstep(0.3, 1.0, uv.y) * 0.35 + roll;
+    dens = clamp(dens, 0.0, 0.92);
     col = mix(col, fogc, dens);
+    // Light-diffusion halo where the sun sits behind the fog (day only).
+    let lp = light_pos(t, u.sun);
+    let asp = u.res.y / u.res.x;
+    let pd = length((uv - lp) * vec2<f32>(1.0, asp));
+    col = col + sky.key * smoothstep(0.5, 0.0, pd) * 0.10 * day;
     return col;
 }
 
