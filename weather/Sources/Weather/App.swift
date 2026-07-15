@@ -13,7 +13,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var view: SkinView!
     private var host: WeatherHost!
     private var bridge: CarapaceBridge!
-    private var trafficLightButtons: [NSButton] = []
     private let service = WeatherService()
     private var refreshTimer: Timer?
 
@@ -38,7 +37,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                             backing: .buffered, defer: false)
         window.isOpaque = false
         window.backgroundColor = .clear
-        window.hasShadow = true
+        window.hasShadow = false
         window.contentView = view
         windowBox.window = window
 
@@ -52,7 +51,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         bridge = b
         view.bridge = b
 
-        installTrafficLights()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
 
@@ -81,35 +79,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .appendingPathComponent("skins/weather").path
     }
 
-    // Presenter controls: →/← tour the six shader looks via a condition override (text stays
-    // live); R refetches now.
+    // Presenter controls (overrides force only the shader; hero/hourly/daily text stays live):
+    //   →/← tour condition · D toggles day/night · S cycles season · R refetches.
     private func handleKey(_ code: UInt16) {
         switch code {
-        case 124: host.conditionOverride = ConditionCycle.next(host.conditionOverride)  // →
-        case 123: host.conditionOverride = ConditionCycle.prev(host.conditionOverride)  // ←
-        case 15:  refresh()                                                             // R
+        case 124: host.conditionOverride = ConditionCycle.next(host.conditionOverride)          // →
+        case 123: host.conditionOverride = ConditionCycle.prev(host.conditionOverride)          // ←
+        case 2:   host.isDayOverride = ConditionCycle.next(host.isDayOverride, upTo: 1)          // D
+        case 1:   host.seasonOverride = ConditionCycle.next(host.seasonOverride, upTo: 3)        // S
+        case 15:  refresh()                                                                       // R
         default:  break
-        }
-    }
-
-    private func installTrafficLights() {
-        let mask: NSWindow.StyleMask = [.titled, .closable, .miniaturizable, .resizable]
-        let specs: [(NSWindow.ButtonType, Selector?)] = [
-            (.closeButton, #selector(NSWindow.performClose(_:))),
-            (.miniaturizeButton, #selector(NSWindow.miniaturize(_:))),
-            (.zoomButton, nil),  // greyed: a fixed-canvas borderless skin can't zoom
-        ]
-        for (type, action) in specs {
-            guard let b = NSWindow.standardWindowButton(type, for: mask) else { continue }
-            if let action { b.target = window; b.action = action } else { b.isEnabled = false }
-            b.autoresizingMask = []
-            view.addSubview(b)
-            trafficLightButtons.append(b)
-        }
-        let ox: CGFloat = 16, oy: CGFloat = 14
-        for (i, b) in trafficLightButtons.enumerated() {
-            b.setFrameOrigin(NSPoint(x: ox + CGFloat(i) * 20,
-                                     y: view.bounds.height - oy - b.frame.height))
         }
     }
 

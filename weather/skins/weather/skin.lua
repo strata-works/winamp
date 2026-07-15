@@ -29,11 +29,12 @@ for i = 0, n - 1 do
         halign = "center", color = { r = 245, g = 247, b = 252 } }
 end
 
--- Vertical daily forecast list (collection = "daily").
-list{ collection = "daily", x = 24, y = 320, w = W - 48, h = 300, row_height = 40,
+-- Vertical daily forecast list (collection = "daily"). Ends above the shader's bottom
+-- silhouette band (uv.y > 0.82 ≈ y 558); shorter row_height keeps all 7 rows in the opaque zone.
+list{ collection = "daily", x = 24, y = 312, w = W - 48, h = 238, row_height = 34,
       template = {
-        { bind = "day",   x = 8,        y = 10, size = 16, color = { r = 240, g = 244, b = 252 } },
-        { bind = "glyph", x = 120,      y = 8,  size = 18, color = { r = 245, g = 240, b = 220 } },
-        { bind = "hi",    right = 70,   y = 10, size = 16, color = { r = 245, g = 247, b = 252 } },
-        { bind = "lo",    right = 10,   y = 10, size = 16, halign = "right", color = { r = 190, g = 198, b = 214 } },
+        { bind = "day",   x = 8,        y = 8, size = 15, color = { r = 240, g = 244, b = 252 } },
+        { bind = "glyph", x = 120,      y = 6, size = 17, color = { r = 245, g = 240, b = 220 } },
+        { bind = "hi",    right = 70,   y = 8, size = 15, color = { r = 245, g = 247, b = 252 } },
+        { bind = "lo",    right = 10,   y = 8, size = 15, halign = "right", color = { r = 214, g = 222, b = 236 } },
       } }

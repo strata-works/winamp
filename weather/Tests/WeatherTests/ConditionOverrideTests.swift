@@ -29,4 +29,36 @@ final class ConditionOverrideTests: XCTestCase {
         XCTAssertEqual(ConditionCycle.prev(1), 0)
         XCTAssertEqual(ConditionCycle.prev(0), nil)   // 0 -> live
     }
+
+    func testIsDayOverrideForcesOnlyWxIsDay() {
+        let host = WeatherHost(model: .sample)   // sample.isDay == 1
+        XCTAssertEqual(host.num("wx_is_day"), 1)
+        host.isDayOverride = 0
+        XCTAssertEqual(host.num("wx_is_day"), 0)          // override wins
+        XCTAssertEqual(host.num("wx_condition"), WeatherModel.sample.condition) // others live
+        host.isDayOverride = nil
+        XCTAssertEqual(host.num("wx_is_day"), 1)          // back to live
+    }
+
+    func testSeasonOverrideForcesOnlyWxSeason() {
+        let host = WeatherHost(model: .sample)   // sample.season == 2
+        XCTAssertEqual(host.num("wx_season"), 2)
+        host.seasonOverride = 0
+        XCTAssertEqual(host.num("wx_season"), 0)
+        XCTAssertEqual(host.num("wx_temp"), WeatherModel.sample.temp)  // others live
+        host.seasonOverride = nil
+        XCTAssertEqual(host.num("wx_season"), 2)
+    }
+
+    func testGeneralizedCycleBounds() {
+        XCTAssertEqual(ConditionCycle.next(nil, upTo: 1), 0)
+        XCTAssertEqual(ConditionCycle.next(0, upTo: 1), 1)
+        XCTAssertEqual(ConditionCycle.next(1, upTo: 1), nil)   // day/night wraps at 1
+        XCTAssertEqual(ConditionCycle.next(3, upTo: 3), nil)   // season wraps at 3
+        XCTAssertEqual(ConditionCycle.prev(nil, upTo: 3), 3)
+        XCTAssertEqual(ConditionCycle.prev(0, upTo: 3), nil)
+        // Existing 1-arg condition cycle still works (upTo 5):
+        XCTAssertEqual(ConditionCycle.next(5), nil)
+        XCTAssertEqual(ConditionCycle.next(nil), 0)
+    }
 }
