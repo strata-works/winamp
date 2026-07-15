@@ -252,45 +252,60 @@ fn cloud_c(uv: vec2<f32>, t: f32, sky: Sky, intensity: f32) -> vec3<f32> {
     col = col + sky.key * god_rays(uv, vec2<f32>(0.2 + 0.6 * mb.y, 0.18), t) * mb.x * 0.5 * day;
     return col;
 }
-// Falling rain: thin, slightly-diagonal streaks scrolling down, per-column randomized,
-// broken into short segments so they read as rain rather than static pinstripes.
-fn rain_streaks(uv: vec2<f32>, t: f32, intensity: f32) -> f32 {
-    let slant = uv + vec2<f32>(uv.y * 0.06, 0.0);
+// Falling rain streaks, per-column randomized, broken into short segments so they read as
+// rain rather than static pinstripes. slant = diagonal lean (gusts push it), speedm = fall-
+// speed multiplier. -t so streaks scroll DOWN (uv.y=0 is the top of the canvas).
+fn rain_streaks(uv: vec2<f32>, t: f32, intensity: f32, slant: f32, speedm: f32) -> f32 {
+    let sl = uv + vec2<f32>(uv.y * slant, 0.0);
     let cols = 55.0;
-    let x = slant.x * cols;
+    let x = sl.x * cols;
     let col = floor(x);
     let fx = fract(x) - 0.5;
-    let speed = 0.8 + hash21(vec2<f32>(col, 1.0)) * 1.0;
-    // -t so streaks scroll DOWN (uv.y=0 is the top of the canvas).
+    let speed = (0.8 + hash21(vec2<f32>(col, 1.0)) * 1.0) * speedm;
     let y = fract(uv.y * 3.4 - t * speed + hash21(vec2<f32>(col, 3.0)));
     let line = smoothstep(0.09, 0.0, abs(fx));
     let head = smoothstep(0.85, 0.30, y) * smoothstep(0.0, 0.10, y);
     return line * head * (0.4 + 0.7 * intensity);
 }
-// One parallax snow layer: soft round flakes on a drifting grid.
-// -t*speed so flakes fall DOWN (uv.y=0 is the top of the canvas).
-fn snow_layer(uv: vec2<f32>, t: f32, scale: f32, speed: f32, seed: f32) -> f32 {
-    let p = uv * scale + vec2<f32>(sin(t * 0.3 + seed) * 0.5, -t * speed);
+// One parallax snow layer: soft round flakes with coherent sway and per-flake size jitter.
+// -t*speed falls DOWN (uv.y = 0 is the top). `soft` widens the flake; `boost` lowers the
+// density threshold (flurries).
+fn snow_layer2(uv: vec2<f32>, t: f32, scale: f32, speed: f32, seed: f32, soft: f32, boost: f32) -> f32 {
+    var p = uv * scale + vec2<f32>(0.0, -t * speed);
+    p.x = p.x + sin(t * (0.4 + seed * 0.2) + p.y * 1.5) * 0.35;   // coherent sway
     let g = floor(p);
     let f = fract(p) - 0.5;
     let h = hash21(g + seed);
-    return smoothstep(0.14, 0.0, length(f)) * step(0.86, h);
+    let sz = mix(0.10, 0.10 + soft, hash21(g + seed + 7.0));       // per-flake size jitter
+    return smoothstep(sz, 0.0, length(f)) * step(0.84 - boost, h);
+}
+// Legacy 5-arg form (kept for rain's "big drops" near layer).
+fn snow_layer(uv: vec2<f32>, t: f32, scale: f32, speed: f32, seed: f32) -> f32 {
+    return snow_layer2(uv, t, scale, speed, seed, 0.06, 0.0);
 }
 fn rain_c(uv: vec2<f32>, t: f32, sky: Sky, intensity: f32) -> vec3<f32> {
     let day = sky.daylight;
+    // Wind gust: slant + speed + brightness surge together over the event.
+    let g = moment(t, 0.18, 0.45, 10.0);
+    let slant = 0.06 + g.x * 0.22;
+    let speedm = 1.0 + g.x * 0.9;
     let c0 = mix(vec3<f32>(0.06, 0.09, 0.14), vec3<f32>(0.30, 0.40, 0.52), day);
     let c1 = mix(vec3<f32>(0.08, 0.11, 0.17), vec3<f32>(0.38, 0.48, 0.60), day);
     let c2 = mix(vec3<f32>(0.10, 0.13, 0.19), vec3<f32>(0.46, 0.56, 0.68), day);
     let c3 = mix(vec3<f32>(0.05, 0.08, 0.13), vec3<f32>(0.28, 0.38, 0.50), day);
-    // Slight refraction: sample the mesh at a streak-perturbed coord for a wet-glass warp.
-    let streak = rain_streaks(uv, t, intensity);
-    let ruv = uv + vec2<f32>(streak * 0.01, 0.0);
+    // Depth: far misty rain sheet behind the glass streaks.
+    let far = rain_streaks(uv * vec2<f32>(1.7, 1.4), t * 0.55, intensity, slant * 0.7, speedm) * 0.5;
+    let streak = rain_streaks(uv, t, intensity, slant, speedm);
+    // Wet-glass refraction, slightly stronger than before.
+    let ruv = uv + vec2<f32>(streak * 0.014, 0.0);
     var col = mesh_gradient(ruv, t, c0, c1, c2, c3);
-    // Bright streak highlight.
-    col = col + vec3<f32>(0.65, 0.74, 0.88) * streak * 0.3;
-    // Overall wet sheen toward the bottom.
+    col = col + vec3<f32>(0.45, 0.54, 0.68) * far * 0.15;
+    col = col + vec3<f32>(0.65, 0.74, 0.88) * streak * 0.3 * (1.0 + g.x * 0.6);
+    // Near depth: occasional large soft drops streaking past.
+    let big = snow_layer(uv, t * 3.2, 5.0, 0.9, 5.0);
+    col = col + vec3<f32>(0.55, 0.64, 0.80) * big * 0.18;
+    // Wet sheen + pooling ripples near the silhouette band.
     col = col + vec3<f32>(0.10, 0.13, 0.18) * smoothstep(0.4, 1.0, uv.y) * (0.4 + 0.4 * day);
-    // Ripples pooling near the silhouette band.
     let pool = smoothstep(0.78, 0.9, uv.y) * (0.5 + 0.5 * sin(uv.x * 40.0 - t * 4.0 + fbm(uv * 8.0) * 6.0));
     col = col + vec3<f32>(0.5, 0.6, 0.75) * pool * 0.12 * (0.5 + intensity);
     return col;
@@ -302,13 +317,19 @@ fn snow_c(uv: vec2<f32>, t: f32, sky: Sky, intensity: f32) -> vec3<f32> {
     let c2 = mix(vec3<f32>(0.24, 0.27, 0.36), vec3<f32>(0.90, 0.93, 0.99), day);
     let c3 = mix(vec3<f32>(0.18, 0.21, 0.30), vec3<f32>(0.78, 0.84, 0.93), day);
     var col = mesh_gradient(uv, t, c0, c1, c2, c3);
-    // Far (small/sharp) -> near (big/soft) parallax flake layers.
+    // Flurry moment: density surge + gentle swirl of the whole field.
+    let f = moment(t, 0.14, 0.4, 11.0);
+    let suv = (uv - vec2<f32>(0.5, 0.5)) * rot(f.x * 0.35 * sin(t * 0.8)) + vec2<f32>(0.5, 0.5);
+    let boost = f.x * 0.06;
+    // Far (small/sharp) -> near (big/soft/swaying) parallax layers.
     var flakes = 0.0;
-    flakes = flakes + snow_layer(uv, t, 22.0, 0.10, 1.0) * 0.6;
-    flakes = flakes + snow_layer(uv, t, 15.0, 0.16, 2.0) * 0.8;
-    flakes = flakes + snow_layer(uv, t,  9.0, 0.24, 3.0) * 1.0;
+    flakes = flakes + snow_layer2(suv, t, 22.0, 0.10, 1.0, 0.04, boost) * 0.6;
+    flakes = flakes + snow_layer2(suv, t, 15.0, 0.16, 2.0, 0.06, boost) * 0.8;
+    flakes = flakes + snow_layer2(suv, t,  6.0, 0.26, 3.0, 0.16, boost) * 1.0;
     let bloom = mix(0.75, 1.0, day);
     col = col + vec3<f32>(1.0) * flakes * (0.35 + 0.4 * intensity) * bloom;
+    // Faint ground-glow where snow gathers near the silhouette band.
+    col = col + vec3<f32>(0.9, 0.93, 1.0) * smoothstep(0.75, 0.98, uv.y) * 0.08 * (0.4 + 0.6 * intensity);
     return col;
 }
 // Shared lightning-strike state so the bolt, shockwave, and window-edge jolt fire together.
@@ -355,8 +376,8 @@ fn storm_c(uv: vec2<f32>, t: f32, sky: Sky, intensity: f32) -> vec3<f32> {
     let c2 = mix(vec3<f32>(0.05, 0.06, 0.11), vec3<f32>(0.24, 0.28, 0.36), day);
     let c3 = mix(vec3<f32>(0.02, 0.03, 0.07), vec3<f32>(0.14, 0.17, 0.24), day);
     var col = mesh_gradient(w2, t, c0, c1, c2, c3);
-    // Driving rain sheets.
-    col = col + vec3<f32>(0.35, 0.40, 0.52) * rain_streaks(uv, t, 1.0) * 0.18;
+    // Driving rain sheets. (Neutral slant/speed until the Task-5 storm rework.)
+    col = col + vec3<f32>(0.35, 0.40, 0.52) * rain_streaks(uv, t, 1.0, 0.06, 1.0) * 0.18;
     // Shockwave ring highlight + whole-sky ambient flash on strike.
     col = col + vec3<f32>(0.55, 0.60, 0.75) * ring * st.x * 0.5;
     col = col + vec3<f32>(0.60, 0.63, 0.78) * st.x * 0.18;
