@@ -22,13 +22,6 @@ fn rot(a: f32) -> mat2x2<f32> {
     let s = sin(a); let c = cos(a);
     return mat2x2<f32>(c, -s, s, c);
 }
-// fbm domain warp — bends the sample coordinate so gradients flow organically.
-fn warp(p: vec2<f32>, t: f32) -> vec2<f32> {
-    let q = vec2<f32>(fbm(p + vec2<f32>(0.0, t * 0.05)),
-                      fbm(p + vec2<f32>(5.2, 1.3 - t * 0.04)));
-    return p + 0.6 * q;
-}
-
 // ---- 3D value noise (pure ALU — shader{} has no texture bindings) ----
 fn hash13(p: vec3<f32>) -> f32 {
     var q = fract(p * 0.1031);
@@ -67,6 +60,31 @@ fn sun_dir(sun: f32) -> vec3<f32> {
     let el = clamp(sun, -1.0, 1.0) * 1.1;
     let az = 0.32;                            // fixed right-of-center, like the old light_pos
     return normalize(vec3<f32>(cos(el) * sin(az), sin(el), cos(el) * cos(az)));
+}
+
+// ---- Analytic scattering sky: Rayleigh-ish gradient + mie halo + sun disc.
+// The base field for every condition (replaces the mesh-gradient wallpaper). ----
+fn sky_dome(rd: vec3<f32>, sd: vec3<f32>, sun: f32) -> vec3<f32> {
+    let day = smoothstep(-0.12, 0.35, sun);
+    let up = clamp(rd.y, 0.0, 1.0);
+    // Zenith -> horizon gradients, day and night.
+    let day_col = mix(vec3<f32>(0.58, 0.72, 0.94), vec3<f32>(0.10, 0.34, 0.80), pow(up, 0.55));
+    let ngt_col = mix(vec3<f32>(0.05, 0.05, 0.13), vec3<f32>(0.012, 0.018, 0.055), pow(up, 0.7));
+    var col = mix(ngt_col, day_col, day);
+    // Golden hour: warm band hugging the horizon, strongest when the sun is low.
+    let golden = (1.0 - smoothstep(0.0, 0.4, abs(sun))) * exp(-max(rd.y, 0.0) * 5.0);
+    col = mix(col, vec3<f32>(1.0, 0.52, 0.24), golden * 0.55);
+    // Mie forward-scatter halo around the sun + the disc itself (tonemap shoulders it).
+    let mu = clamp(dot(rd, sd), 0.0, 1.0);
+    col = col + vec3<f32>(1.0, 0.82, 0.55) * pow(mu, 32.0) * mix(0.06, 0.30, day);
+    col = col + vec3<f32>(1.0, 0.95, 0.85) * smoothstep(0.99930, 0.99985, mu) * day * 2.0;
+    return col;
+}
+// The dome sun's position projected back to screen uv (for god-rays/flare anchoring).
+// Inverse of view_ray: el = mix(0.85, 0.02, uv.y), az = (uv.x - 0.5) * 0.9.
+fn sun_screen(sun: f32) -> vec2<f32> {
+    let el = clamp(sun, -1.0, 1.0) * 1.1;
+    return vec2<f32>(0.5 + 0.32 / 0.9, (0.85 - el) / 0.83);
 }
 
 // ---- Bounded volumetric cloud march. Slab y ∈ [1.5, 3.6] world units, camera at y=0.2.
@@ -206,24 +224,6 @@ fn grade(col_in: vec3<f32>, uv: vec2<f32>, t: f32) -> vec3<f32> {
     return clamp(col, vec3<f32>(0.0), vec3<f32>(1.0));
 }
 
-// ---- paper.design-style flowing 4-point mesh gradient ----
-// Four color anchors near the corners, each drifting on a slow path; blended by
-// inverse-distance-power weights over a domain-warped coordinate.
-fn mesh_gradient(uv: vec2<f32>, t: f32, c0: vec3<f32>, c1: vec3<f32>, c2: vec3<f32>, c3: vec3<f32>) -> vec3<f32> {
-    let w = warp(uv * 1.5, t);
-    let p0 = vec2<f32>(0.20 + 0.10 * sin(t * 0.11),        0.20 + 0.10 * cos(t * 0.13));
-    let p1 = vec2<f32>(0.80 + 0.10 * sin(t * 0.10 + 1.7),  0.25 + 0.10 * cos(t * 0.09 + 2.1));
-    let p2 = vec2<f32>(0.25 + 0.10 * sin(t * 0.08 + 3.1),  0.80 + 0.10 * cos(t * 0.12 + 0.7));
-    let p3 = vec2<f32>(0.80 + 0.10 * sin(t * 0.09 + 4.2),  0.80 + 0.10 * cos(t * 0.10 + 1.1));
-    let e = 2.0;
-    let d0 = 1.0 / (pow(distance(w, p0), e) + 0.03);
-    let d1 = 1.0 / (pow(distance(w, p1), e) + 0.03);
-    let d2 = 1.0 / (pow(distance(w, p2), e) + 0.03);
-    let d3 = 1.0 / (pow(distance(w, p3), e) + 0.03);
-    let acc = c0 * d0 + c1 * d1 + c2 * d2 + c3 * d3;
-    return acc / (d0 + d1 + d2 + d3);
-}
-
 // Shared directional light. Elevation maps to screen height: horizon -> low, noon/deep night -> high.
 // (uv.y = 0 is the TOP of the canvas.)
 fn light_pos(t: f32, sun: f32) -> vec2<f32> {
@@ -278,46 +278,33 @@ fn shooting_star(uv: vec2<f32>, t: f32) -> f32 {
 
 fn clear_c(uv: vec2<f32>, t: f32, sky: Sky, intensity: f32) -> vec3<f32> {
     let day = sky.daylight;
-    let golden = 1.0 - smoothstep(0.0, 0.45, abs(u.sun));
-    // Palette anchors; the horizon anchor comes from the sky grade (golden hour lives there).
-    let c0 = mix(vec3<f32>(0.03, 0.04, 0.14), vec3<f32>(0.15, 0.42, 0.88), day);
-    let c1 = mix(vec3<f32>(0.05, 0.07, 0.20), vec3<f32>(0.28, 0.55, 0.93), day);
-    let c2 = mix(vec3<f32>(0.09, 0.08, 0.20), vec3<f32>(0.42, 0.64, 0.94), day);
-    // Bottom-right anchor: saturated blue at noon, giving way to the sky-grade horizon
-    // (pale/gold) only near the horizon hours.
-    let day_c3 = mix(vec3<f32>(0.50, 0.70, 0.96), sky.horizon, 0.35 + 0.65 * golden);
-    let c3 = mix(vec3<f32>(0.15, 0.10, 0.19), day_c3, max(day, 0.35));
-    var col = mesh_gradient(uv, t, c0, c1, c2, c3);
-    // Horizon glow band — a golden-hour feature; nearly invisible at noon/deep night.
-    col = col + sky.horizon * smoothstep(0.45, 0.95, uv.y) * (0.06 + 0.22 * golden);
+    let rd = view_ray(uv);
+    let sd = sun_dir(u.sun);
+    var col = sky_dome(rd, sd, u.sun);
     // Two-layer starfield: far = dim + dense (offset/scaled grid), near = bright + sparse.
     let starvis = smoothstep(0.15, -0.25, u.sun);
     col = col + vec3<f32>(0.85, 0.88, 1.0) * stars(uv * 1.9 + vec2<f32>(3.7, 1.3), t * 0.7) * starvis * 0.35;
     col = col + vec3<f32>(0.92, 0.94, 1.0) * stars(uv, t) * starvis * 0.75;
     col = col + vec3<f32>(1.0, 1.0, 1.0) * shooting_star(uv, t) * starvis;
-    // Sun/moon disc, elevation-tracking, aspect-corrected so the disc is round.
+    // Moon disc (NIGHT only — the dome draws the day sun), crater noise, halo + glow.
     let lp = light_pos(t, u.sun);
     let asp = u.res.y / u.res.x;
     let pd = length((uv - lp) * vec2<f32>(1.0, asp));
     var disc = smoothstep(0.070, 0.045, pd);
-    // Moon surface: faint crater noise, night only.
-    disc = disc * mix(0.92 + 0.14 * fbm3(uv * 30.0), 1.0, day);
-    // Halo ring + broad glow; sun-flare pulse moment surges both by day.
-    let flare = moment(t, 0.08, 0.5, 8.0).x * day;
-    let glow = smoothstep(0.40, 0.0, pd) * mix(0.16, 0.19, day) * (1.0 + flare * 0.8);
+    disc = disc * (0.92 + 0.14 * fbm3(uv * 30.0));
+    let glow = smoothstep(0.40, 0.0, pd) * 0.16;
     let halo = smoothstep(0.16, 0.0, pd) * 0.10;
-    col = col + sky.key * (disc + glow + halo);
-    // God-rays (subtle; surge with the flare pulse).
-    col = col + sky.key * god_rays(uv, lp, t) * (0.10 + 0.20 * day) * (1.0 + flare);
+    col = col + sky.key * (disc + glow + halo) * (1.0 - day);
+    // God-rays from the dome sun's screen position; flare-pulse moment surges them by day.
+    let flare = moment(t, 0.08, 0.5, 8.0).x * day;
+    col = col + sky.key * god_rays(uv, sun_screen(u.sun), t) * (0.10 + 0.20 * day) * (1.0 + flare);
     return col;
 }
 fn cloud_c(uv: vec2<f32>, t: f32, sky: Sky, intensity: f32) -> vec3<f32> {
     let day = sky.daylight;
-    let c0 = mix(vec3<f32>(0.10, 0.11, 0.16), vec3<f32>(0.55, 0.62, 0.74), day);
-    let c1 = mix(vec3<f32>(0.13, 0.14, 0.20), vec3<f32>(0.68, 0.73, 0.82), day);
-    let c2 = mix(vec3<f32>(0.16, 0.17, 0.23), vec3<f32>(0.80, 0.83, 0.89), day);
-    let c3 = mix(vec3<f32>(0.12, 0.13, 0.18), vec3<f32>(0.60, 0.66, 0.78), day);
-    var col = mesh_gradient(uv, t, c0, c1, c2, c3);
+    let rd = view_ray(uv);
+    let sd = sun_dir(u.sun);
+    var col = sky_dome(rd, sd, u.sun);
     let skybg = col;
     let lp = light_pos(t, u.sun);
     let to_light = normalize(lp - uv + vec2<f32>(0.0001, 0.0001));
@@ -386,16 +373,15 @@ fn rain_c(uv: vec2<f32>, t: f32, sky: Sky, intensity: f32) -> vec3<f32> {
     let g = moment(t, 0.18, 0.45, 10.0);
     let slant = 0.06 + g.x * 0.22;
     let speedm = 1.0 + g.x * 0.9;
-    let c0 = mix(vec3<f32>(0.06, 0.09, 0.14), vec3<f32>(0.30, 0.40, 0.52), day);
-    let c1 = mix(vec3<f32>(0.08, 0.11, 0.17), vec3<f32>(0.38, 0.48, 0.60), day);
-    let c2 = mix(vec3<f32>(0.10, 0.13, 0.19), vec3<f32>(0.46, 0.56, 0.68), day);
-    let c3 = mix(vec3<f32>(0.05, 0.08, 0.13), vec3<f32>(0.28, 0.38, 0.50), day);
     // Depth: far misty rain sheet behind the glass streaks.
     let far = rain_streaks(uv * vec2<f32>(1.7, 1.4), t * 0.55, intensity, slant * 0.7, speedm) * 0.5;
     let streak = rain_streaks(uv, t, intensity, slant, speedm);
-    // Wet-glass refraction, slightly stronger than before.
+    // Wet-glass refraction: sample the dome at a streak-perturbed ray.
     let ruv = uv + vec2<f32>(streak * 0.014, 0.0);
-    var col = mesh_gradient(ruv, t, c0, c1, c2, c3);
+    let sd = sun_dir(u.sun);
+    var col = sky_dome(view_ray(ruv), sd, u.sun);
+    // Overcast wash: rain skies are grey and dim.
+    col = col * mix(vec3<f32>(1.0, 1.0, 1.0), vec3<f32>(0.45, 0.52, 0.62), 0.75) + vec3<f32>(0.02, 0.03, 0.05);
     col = col + vec3<f32>(0.45, 0.54, 0.68) * far * 0.15;
     col = col + vec3<f32>(0.65, 0.74, 0.88) * streak * 0.3 * (1.0 + g.x * 0.6);
     // Near depth: occasional large soft drops streaking past.
@@ -409,11 +395,9 @@ fn rain_c(uv: vec2<f32>, t: f32, sky: Sky, intensity: f32) -> vec3<f32> {
 }
 fn snow_c(uv: vec2<f32>, t: f32, sky: Sky, intensity: f32) -> vec3<f32> {
     let day = sky.daylight;
-    let c0 = mix(vec3<f32>(0.16, 0.19, 0.28), vec3<f32>(0.74, 0.80, 0.90), day);
-    let c1 = mix(vec3<f32>(0.20, 0.23, 0.32), vec3<f32>(0.82, 0.87, 0.95), day);
-    let c2 = mix(vec3<f32>(0.24, 0.27, 0.36), vec3<f32>(0.90, 0.93, 0.99), day);
-    let c3 = mix(vec3<f32>(0.18, 0.21, 0.30), vec3<f32>(0.78, 0.84, 0.93), day);
-    var col = mesh_gradient(uv, t, c0, c1, c2, c3);
+    var col = sky_dome(view_ray(uv), sun_dir(u.sun), u.sun);
+    // Bright snow overcast on top of the dome.
+    col = mix(col, vec3<f32>(0.78, 0.82, 0.90), 0.55 * mix(0.4, 1.0, day));
     // Flurry moment: density surge + gentle swirl of the whole field.
     let f = moment(t, 0.14, 0.4, 11.0);
     let suv = (uv - vec2<f32>(0.5, 0.5)) * rot(f.x * 0.35 * sin(t * 0.8)) + vec2<f32>(0.5, 0.5);
@@ -513,16 +497,11 @@ fn storm_c(uv: vec2<f32>, t: f32, sky: Sky, intensity: f32) -> vec3<f32> {
     let ring = smoothstep(0.09, 0.0, abs(dist - st.z * 1.1));
     let disp = normalize(dvec + vec2<f32>(0.0001, 0.0001)) * ring * st.x * 0.06;
     let duv = uv + disp;
-    // Faster, higher-contrast churn (extra warp) + darker palette, sampled at the rippled coord.
-    let w2 = warp(duv * 2.2 + vec2<f32>(t * 0.08, 0.0), t);
-    let c0 = mix(vec3<f32>(0.04, 0.05, 0.09), vec3<f32>(0.20, 0.24, 0.32), day);
-    let c1 = mix(vec3<f32>(0.07, 0.08, 0.13), vec3<f32>(0.30, 0.34, 0.42), day);
-    let c2 = mix(vec3<f32>(0.05, 0.06, 0.11), vec3<f32>(0.24, 0.28, 0.36), day);
-    let c3 = mix(vec3<f32>(0.02, 0.03, 0.07), vec3<f32>(0.14, 0.17, 0.24), day);
-    var col = mesh_gradient(w2, t, c0, c1, c2, c3);
+    // Very dark dome base, sampled at the shockwave-rippled coordinate.
+    let sd = sun_dir(u.sun);
+    var col = sky_dome(view_ray(duv), sd, u.sun) * vec3<f32>(0.30, 0.32, 0.38);
     // Volumetric storm cell, lit from inside by strikes (bolt x mapped into slab space).
     let rd = view_ray(uv);
-    let sd = sun_dir(u.sun);
     let cp = CloudParams(0.85, 0.9, 0.14, 0.55, 22);
     let flash_pos = vec3<f32>((st.y - 0.5) * 5.0, 2.4, 7.0);
     let amb = mix(vec3<f32>(0.06, 0.07, 0.11), vec3<f32>(0.30, 0.33, 0.42), day);
@@ -543,11 +522,7 @@ fn storm_c(uv: vec2<f32>, t: f32, sky: Sky, intensity: f32) -> vec3<f32> {
 }
 fn fog_c(uv: vec2<f32>, t: f32, sky: Sky, intensity: f32) -> vec3<f32> {
     let day = sky.daylight;
-    let c0 = mix(vec3<f32>(0.16, 0.17, 0.19), vec3<f32>(0.66, 0.68, 0.71), day);
-    let c1 = mix(vec3<f32>(0.19, 0.20, 0.22), vec3<f32>(0.74, 0.76, 0.79), day);
-    let c2 = mix(vec3<f32>(0.17, 0.18, 0.20), vec3<f32>(0.70, 0.72, 0.75), day);
-    let c3 = mix(vec3<f32>(0.14, 0.15, 0.17), vec3<f32>(0.62, 0.64, 0.67), day);
-    var col = mesh_gradient(uv, t, c0, c1, c2, c3);
+    var col = sky_dome(view_ray(uv), sun_dir(u.sun), u.sun);
     let fogc = mix(vec3<f32>(0.55, 0.57, 0.60), vec3<f32>(0.86, 0.88, 0.90), day);
     let banks = fog_banks(uv, t);
     // Fog-roll moment: a dense bank drifts across; visibility drops then recovers.
