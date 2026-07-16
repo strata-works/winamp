@@ -573,7 +573,7 @@ fn ui_scrim(uv: vec2<f32>) -> f32 {
 // Returns (spring, edge_x, edge_y, converge) — spring > 0 only just after contact (phase
 // 0.70 of the slot); converge ∈ (0,1] only during the approach (phase 0.55..0.70).
 fn impact_event(t: f32) -> vec4<f32> {
-    let m = moment(t, 0.08, 0.7, 21.0);
+    let m = moment(t, 0.14, 0.75, 21.0);
     if (m.w < 0.5) { return vec4<f32>(0.0, 0.0, 0.0, 0.0); }
     let side = step(0.5, hash21(vec2<f32>(m.z, 2.0)));            // 0 = left edge, 1 = right
     let ey = 0.15 + 0.60 * hash21(vec2<f32>(m.z, 3.0));
@@ -593,18 +593,23 @@ fn wind_c(uv: vec2<f32>, t: f32, sky: Sky, intensity: f32) -> vec3<f32> {
     let sd = sun_dir(u.sun);
     var col = sky_dome(rd, sd, u.sun);
     let g = moment(t, 0.15, 0.6, 20.0);        // gusts (shared with window_alpha case 6)
+    // Whole scene leans downwind in gusts (shear grows with height).
+    let uvs = uv + vec2<f32>((0.5 - uv.y) * g.x * 0.10, 0.0);
     // Shredded racing clouds: horizontally-elongated 2D noise scrolling FAST.
-    let shred = fbm(vec2<f32>(uv.x * 1.4 - t * (0.9 + g.x * 0.6), uv.y * 7.0));
+    let shred = fbm(vec2<f32>(uvs.x * 1.4 - t * (1.6 + g.x * 1.2), uvs.y * 7.0));
     let cover = smoothstep(0.55, 0.75, shred) * smoothstep(0.75, 0.15, uv.y);
     let cloudc = mix(vec3<f32>(0.35, 0.38, 0.45), vec3<f32>(0.95, 0.96, 0.99), day);
     col = mix(col, cloudc, cover * 0.75);
     // Debris: rain_streaks TRANSPOSED (columns -> rows, y-scroll -> x-scroll), ochre-tinted,
     // two depths, speed surging with gusts.
-    let spd = 2.2 * (1.0 + g.x * 1.5);
+    let spd = 3.4 * (1.0 + g.x * 2.2);
     let d1 = rain_streaks(vec2<f32>(uv.y, uv.x), t, 0.8, 0.15, spd);
     let d2 = rain_streaks(vec2<f32>(uv.y * 1.6, uv.x * 1.4), t * 0.7, 0.8, 0.10, spd);
     col = col + vec3<f32>(0.55, 0.45, 0.28) * d1 * 0.30 * mix(0.5, 1.0, day);
     col = col + vec3<f32>(0.45, 0.38, 0.25) * d2 * 0.18 * mix(0.5, 1.0, day);
+    // White speed-lines whipping through during gusts.
+    let d3 = rain_streaks(vec2<f32>(uv.y * 0.7, uv.x * 0.8), t * 1.6, 1.0, 0.05, spd * 1.6);
+    col = col + vec3<f32>(0.9, 0.93, 0.98) * d3 * 0.22 * g.x;
     // Converging impact streak: a bright dash flying toward the strike point.
     let ie = impact_event(t);
     if (ie.w > 0.001) {
@@ -613,7 +618,7 @@ fn wind_c(uv: vec2<f32>, t: f32, sky: Sky, intensity: f32) -> vec3<f32> {
         let pos = mix(origin, tgt, ie.w);
         let asp = u.res.y / u.res.x;
         let dd = length((uv - pos) * vec2<f32>(1.0, asp));
-        col = col + vec3<f32>(0.75, 0.62, 0.40) * smoothstep(0.020, 0.004, dd);
+        col = col + vec3<f32>(0.85, 0.72, 0.48) * smoothstep(0.026, 0.005, dd);
     }
     return col;
 }
@@ -629,11 +634,16 @@ fn tsunami_c(uv: vec2<f32>, t: f32, sky: Sky, intensity: f32) -> vec3<f32> {
     var col = sky_dome(view_ray(uv), sun_dir(u.sun), u.sun);
     // Sea level (uv.y of the surface): calm 0.80 -> swell 0.70 -> wall to ~0.05 -> restore.
     var level = 0.80;
-    level = level - smoothstep(0.0, 0.45, ph) * 0.10;
-    level = level - smoothstep(0.45, 0.62, ph) * 0.75;
+    level = level - smoothstep(0.0, 0.45, ph) * 0.12;
+    // The wall LURCHES up in ~3s (0.52..0.61), with a jerk overshoot at the top.
+    let lurch = smoothstep(0.52, 0.61, ph);
+    level = level - lurch * 0.75 - sin(clamp(lurch, 0.0, 1.0) * 3.14159) * 0.05;
     level = level + smoothstep(0.74, 0.86, ph) * 0.85;   // fast drain — text returns as the hero zone clears
+    // Crash quake: violent high-frequency shake through the impact.
+    let quake = smoothstep(0.56, 0.61, ph) * (1.0 - smoothstep(0.80, 0.85, ph));
+    level = level + sin(t * 47.0) * 0.012 * quake;
     // 4 parallax wave bands stacked below `level`, each fbm-displaced, nearer = darker + wilder.
-    let chop = 1.0 + smoothstep(0.30, 0.60, ph) * 2.0;            // seas roughen as it builds
+    let chop = 1.0 + smoothstep(0.30, 0.58, ph) * 3.5;            // seas turn violent as it builds
     for (var k = 0; k < 4; k = k + 1) {
         let fk = f32(k);
         let wob = (fbm(vec2<f32>(uv.x * (2.0 + fk * 1.3) + t * (0.25 + fk * 0.18), fk * 3.7)) - 0.5) * chop;
@@ -646,18 +656,23 @@ fn tsunami_c(uv: vec2<f32>, t: f32, sky: Sky, intensity: f32) -> vec3<f32> {
                   * smoothstep(0.010, 0.0, abs(uv.y - surf)) * (0.25 + 0.5 * chop * abs(wob));
     }
     // Spray during rise/crash: fast upward-streaking particles above the surface.
-    let spray_amt = smoothstep(0.45, 0.60, ph) * (1.0 - smoothstep(0.74, 0.80, ph));
+    let spray_amt = smoothstep(0.50, 0.60, ph) * (1.0 - smoothstep(0.74, 0.80, ph));
     if (spray_amt > 0.0) {
         let sp = snow_layer2(vec2<f32>(uv.x, 1.0 - uv.y), t * 2.5, 16.0, 0.8, 6.0, 0.05, 0.06);
-        col = col + vec3<f32>(0.85, 0.92, 0.97) * sp * spray_amt * 0.6;
+        col = col + vec3<f32>(0.85, 0.92, 0.97) * sp * spray_amt * 1.1;
+        // Foam explosion at the moment of impact.
+        let burst = smoothstep(0.595, 0.615, ph) * (1.0 - smoothstep(0.63, 0.70, ph));
+        col = col + vec3<f32>(0.95, 0.97, 1.0) * fbm(uv * 8.0 + vec2<f32>(t * 3.0, -t * 2.0)) * burst * 0.9;
     }
     // Engulf: full-screen underwater — deep teal, caustic shimmer, rising bubbles.
     let uw = smoothstep(0.58, 0.62, ph) * (1.0 - smoothstep(0.78, 0.82, ph));
     if (uw > 0.0) {
-        let caust = fbm(uv * 6.0 + vec2<f32>(t * 0.8, -t * 0.5))
-                  * fbm(uv * 9.0 - vec2<f32>(t * 0.6, t * 0.4));
+        let churn = (fbm(uv * 3.0 - vec2<f32>(t * 0.7, t * 0.3)) - 0.5) * 0.10;
+        let cuv = uv + vec2<f32>(churn, -churn);
+        let caust = fbm(cuv * 6.0 + vec2<f32>(t * 1.2, -t * 0.8))
+                  * fbm(cuv * 9.0 - vec2<f32>(t * 0.9, t * 0.6));
         var deep = vec3<f32>(0.03, 0.17, 0.25) + vec3<f32>(0.18, 0.45, 0.50) * caust;
-        let bub = snow_layer2(vec2<f32>(uv.x, 1.0 - uv.y), t, 14.0, 0.5, 9.0, 0.05, 0.0);
+        let bub = snow_layer2(vec2<f32>(uv.x, 1.0 - uv.y), t, 14.0, 1.1, 9.0, 0.05, 0.04);
         deep = deep + vec3<f32>(0.7, 0.85, 0.9) * bub * 0.5;
         col = mix(col, deep * mix(0.5, 1.0, day), uw);
     }
@@ -754,12 +769,12 @@ fn window_alpha(uv: vec2<f32>, t: f32, cond: i32, intensity: f32) -> f32 {
     } else if (cond == 6) {
         // High winds: tremble + gust jolts + top-edge fabric flap + debris-impact dents.
         let g = moment(t, 0.15, 0.6, 20.0);
-        let jit = (hash21(vec2<f32>(floor(t * 30.0), 1.0)) - 0.5) * 0.003;
-        let jolt = g.x * 0.008;                                    // shove downwind (-x)
+        let jit = (hash21(vec2<f32>(floor(t * 30.0), 1.0)) - 0.5) * 0.005;
+        let jolt = g.x * 0.018;                                    // shove downwind (-x)
         let uvw = uv + vec2<f32>(jit - jolt, jit * 0.6);
         a = base_mask(uvw, 0.0);
         // Top edge luffs like fabric: a traveling ripple, gust-enveloped.
-        let flap = (0.5 + 0.5 * sin(uv.x * 30.0 - t * 18.0)) * 0.010 * (0.3 + g.x);
+        let flap = (0.5 + 0.5 * sin(uv.x * 30.0 - t * 26.0)) * 0.018 * (0.4 + 1.2 * g.x);
         a = a * smoothstep(0.0, 0.010, uvw.y - flap * smoothstep(0.15, 0.0, uv.y));
         // Bottom: gentle clear-style wave.
         let b = smoothstep(0.86, 1.0, uv.y);
@@ -769,13 +784,15 @@ fn window_alpha(uv: vec2<f32>, t: f32, cond: i32, intensity: f32) -> f32 {
         if (abs(ie.x) > 0.001) {
             let asp2 = u.res.y / u.res.x;
             let dd = length((uv - vec2<f32>(ie.y, ie.z)) * vec2<f32>(1.0, asp2));
-            a = a * (1.0 - clamp(ie.x, 0.0, 1.0) * 0.9 * smoothstep(0.06, 0.0, dd));
+            a = a * (1.0 - clamp(ie.x, 0.0, 1.0) * smoothstep(0.085, 0.0, dd));
         }
     } else if (cond == 7) {
         let ph = tsunami_phase();
         // Impact bulge: the window swells outward as the wall arrives, peaking at the crash.
-        let bulge = smoothstep(0.45, 0.62, ph) * (1.0 - smoothstep(0.66, 0.74, ph)) * 0.012;
-        a = base_mask(uv, -bulge);
+        let bulge = smoothstep(0.52, 0.61, ph) * (1.0 - smoothstep(0.68, 0.76, ph)) * 0.030;
+        let quake = smoothstep(0.56, 0.61, ph) * (1.0 - smoothstep(0.80, 0.85, ph));
+        let sh = vec2<f32>(sin(t * 47.0), cos(t * 39.0)) * 0.006 * quake;
+        a = base_mask(uv + sh, -bulge);
         // Recede: water sheets off — heavy streams hanging below the bottom edge + side runs.
         let shed = smoothstep(0.74, 0.78, ph) * (1.0 - smoothstep(0.92, 1.0, ph));
         if (shed > 0.0) {
