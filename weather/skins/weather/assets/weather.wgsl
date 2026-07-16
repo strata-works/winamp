@@ -568,6 +568,63 @@ fn ui_scrim(uv: vec2<f32>) -> f32 {
     return clamp(s, 0.55, 1.0);
 }
 
+// Debris-impact event (winds): a moment channel picks an edge point; the scene draws a
+// streak CONVERGING on it, then the window takes a dent with a damped spring-back.
+// Returns (spring, edge_x, edge_y, converge) — spring > 0 only just after contact (phase
+// 0.70 of the slot); converge ∈ (0,1] only during the approach (phase 0.55..0.70).
+fn impact_event(t: f32) -> vec4<f32> {
+    let m = moment(t, 0.08, 0.7, 21.0);
+    if (m.w < 0.5) { return vec4<f32>(0.0, 0.0, 0.0, 0.0); }
+    let side = step(0.5, hash21(vec2<f32>(m.z, 2.0)));            // 0 = left edge, 1 = right
+    let ey = 0.15 + 0.60 * hash21(vec2<f32>(m.z, 3.0));
+    var spring = 0.0;
+    if (m.y > 0.70) {
+        let p = m.y - 0.70;
+        spring = exp(-p * 9.0) * sin(p * 55.0);                    // damped wobble
+    }
+    let converge = smoothstep(0.55, 0.70, m.y) * step(m.y, 0.70);
+    return vec4<f32>(spring, side, ey, converge);
+}
+
+// ---- High winds (demo condition 6): clear gale — racing shredded clouds + gusting debris. ----
+fn wind_c(uv: vec2<f32>, t: f32, sky: Sky, intensity: f32) -> vec3<f32> {
+    let day = sky.daylight;
+    let rd = view_ray(uv);
+    let sd = sun_dir(u.sun);
+    var col = sky_dome(rd, sd, u.sun);
+    let g = moment(t, 0.15, 0.6, 20.0);        // gusts (shared with window_alpha case 6)
+    // Shredded racing clouds: horizontally-elongated 2D noise scrolling FAST.
+    let shred = fbm(vec2<f32>(uv.x * 1.4 - t * (0.9 + g.x * 0.6), uv.y * 7.0));
+    let cover = smoothstep(0.55, 0.75, shred) * smoothstep(0.75, 0.15, uv.y);
+    let cloudc = mix(vec3<f32>(0.35, 0.38, 0.45), vec3<f32>(0.95, 0.96, 0.99), day);
+    col = mix(col, cloudc, cover * 0.75);
+    // Debris: rain_streaks TRANSPOSED (columns -> rows, y-scroll -> x-scroll), ochre-tinted,
+    // two depths, speed surging with gusts.
+    let spd = 2.2 * (1.0 + g.x * 1.5);
+    let d1 = rain_streaks(vec2<f32>(uv.y, uv.x), t, 0.8, 0.15, spd);
+    let d2 = rain_streaks(vec2<f32>(uv.y * 1.6, uv.x * 1.4), t * 0.7, 0.8, 0.10, spd);
+    col = col + vec3<f32>(0.55, 0.45, 0.28) * d1 * 0.30 * mix(0.5, 1.0, day);
+    col = col + vec3<f32>(0.45, 0.38, 0.25) * d2 * 0.18 * mix(0.5, 1.0, day);
+    // Converging impact streak: a bright dash flying toward the strike point.
+    let ie = impact_event(t);
+    if (ie.w > 0.001) {
+        let tgt = vec2<f32>(ie.y, ie.z);   // ("target"/"from" are reserved WGSL keywords)
+        let origin = vec2<f32>(1.0 - ie.y, ie.z - 0.25);          // enters from the far side, above
+        let pos = mix(origin, tgt, ie.w);
+        let asp = u.res.y / u.res.x;
+        let dd = length((uv - pos) * vec2<f32>(1.0, asp));
+        col = col + vec3<f32>(0.75, 0.62, 0.40) * smoothstep(0.020, 0.004, dd);
+    }
+    return col;
+}
+
+// SYNC: 32s period and the 0.60..0.74 engulf window mirror Tsunami.swift. Change together.
+fn tsunami_phase() -> f32 { return fract(u.cond_age / 32.0); }
+// Task-3 placeholder: real ocean arc replaces this.
+fn tsunami_c(uv: vec2<f32>, t: f32, sky: Sky, intensity: f32) -> vec3<f32> {
+    return sky_dome(view_ray(uv), sun_dir(u.sun), u.sun);
+}
+
 // Snow pile height in uv units at column x. Grows linearly to full size over 150s.
 // SYNC: mean height (0.21 * growth) crosses the last daily row's bottom (uv 0.809,
 // i.e. height 0.191) at age ≈ 135s == SnowPile.buryAgeLastRow in Swift. Change together.
@@ -648,13 +705,35 @@ fn window_alpha(uv: vec2<f32>, t: f32, cond: i32, intensity: f32) -> f32 {
                 a = a * (1.0 - on_line * crack_env);
             }
         }
-    } else {
+    } else if (cond == 5) {
         // Fog: erosion — edge noise eats inward on ALL edges; peak = ghost window.
         let mr = moment(t, 0.06, 0.5, 13.0);
         let breathe = 0.5 + 0.5 * sin(t * 0.15) + mr.x;
         let edge_d = min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y));
         let eat = (0.02 + 0.030 * breathe) * fbm(vec2<f32>(uv.x * 6.0 + t * 0.1, uv.y * 6.0 - t * 0.07));
         a = a * smoothstep(0.0, 0.02, edge_d - eat);
+    } else if (cond == 6) {
+        // High winds: tremble + gust jolts + top-edge fabric flap + debris-impact dents.
+        let g = moment(t, 0.15, 0.6, 20.0);
+        let jit = (hash21(vec2<f32>(floor(t * 30.0), 1.0)) - 0.5) * 0.003;
+        let jolt = g.x * 0.008;                                    // shove downwind (-x)
+        let uvw = uv + vec2<f32>(jit - jolt, jit * 0.6);
+        a = base_mask(uvw, 0.0);
+        // Top edge luffs like fabric: a traveling ripple, gust-enveloped.
+        let flap = (0.5 + 0.5 * sin(uv.x * 30.0 - t * 18.0)) * 0.010 * (0.3 + g.x);
+        a = a * smoothstep(0.0, 0.010, uvw.y - flap * smoothstep(0.15, 0.0, uv.y));
+        // Bottom: gentle clear-style wave.
+        let b = smoothstep(0.86, 1.0, uv.y);
+        a = a * (1.0 - smoothstep(0.45 + 0.06 * sin(x * 7.0 + t * 1.2), 1.0, b));
+        // Impact dent with damped spring-back.
+        let ie = impact_event(t);
+        if (abs(ie.x) > 0.001) {
+            let asp2 = u.res.y / u.res.x;
+            let dd = length((uv - vec2<f32>(ie.y, ie.z)) * vec2<f32>(1.0, asp2));
+            a = a * (1.0 - clamp(ie.x, 0.0, 1.0) * 0.9 * smoothstep(0.06, 0.0, dd));
+        }
+    } else if (cond == 7) {
+        // Tsunami window work arrives with the ocean (Task 3); base mask until then.
     }
     return clamp(a, 0.0, 1.0);
 }
@@ -674,6 +753,8 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
         case 3: { col = snow_c(uv, t, sky, intensity); }
         case 4: { col = storm_c(uv, t, sky, intensity); }
         case 5: { col = fog_c(uv, t, sky, intensity); }
+        case 6: { col = wind_c(uv, t, sky, intensity); }
+        case 7: { col = tsunami_c(uv, t, sky, intensity); }
         default: { col = clear_c(uv, t, sky, intensity); }
     }
     // Snow pile is drawn scenery: bright mound with faint sparkle, graded with the scene.
