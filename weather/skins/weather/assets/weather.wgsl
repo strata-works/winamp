@@ -29,6 +29,102 @@ fn warp(p: vec2<f32>, t: f32) -> vec2<f32> {
     return p + 0.6 * q;
 }
 
+// ---- 3D value noise (pure ALU — shader{} has no texture bindings) ----
+fn hash13(p: vec3<f32>) -> f32 {
+    var q = fract(p * 0.1031);
+    q = q + dot(q, q.zyx + 31.32);
+    return fract((q.x + q.y) * q.z);
+}
+fn noise3(p: vec3<f32>) -> f32 {
+    let i = floor(p);
+    let f = fract(p);
+    let u3 = f * f * (3.0 - 2.0 * f);
+    let n000 = hash13(i);
+    let n100 = hash13(i + vec3<f32>(1.0, 0.0, 0.0));
+    let n010 = hash13(i + vec3<f32>(0.0, 1.0, 0.0));
+    let n110 = hash13(i + vec3<f32>(1.0, 1.0, 0.0));
+    let n001 = hash13(i + vec3<f32>(0.0, 0.0, 1.0));
+    let n101 = hash13(i + vec3<f32>(1.0, 0.0, 1.0));
+    let n011 = hash13(i + vec3<f32>(0.0, 1.0, 1.0));
+    let n111 = hash13(i + vec3<f32>(1.0, 1.0, 1.0));
+    return mix(mix(mix(n000, n100, u3.x), mix(n010, n110, u3.x), u3.y),
+               mix(mix(n001, n101, u3.x), mix(n011, n111, u3.x), u3.y), u3.z);
+}
+fn fbm3d(p: vec3<f32>) -> f32 {
+    var v = 0.0; var amp = 0.5; var q = p;
+    for (var k = 0; k < 3; k = k + 1) { v = v + amp * noise3(q); q = q * 2.15; amp = amp * 0.5; }
+    return v;
+}
+
+// ---- View camera: each pixel is a ray into a sky dome. Camera near the ground, looking
+// forward+up; azimuth spreads across the window width. uv.y=0 is the TOP of the canvas. ----
+fn view_ray(uv: vec2<f32>) -> vec3<f32> {
+    let el = mix(0.85, 0.02, uv.y);          // radians: top of window looks well up
+    let az = (uv.x - 0.5) * 0.9;
+    return normalize(vec3<f32>(cos(el) * sin(az), sin(el), cos(el) * cos(az)));
+}
+fn sun_dir(sun: f32) -> vec3<f32> {
+    let el = clamp(sun, -1.0, 1.0) * 1.1;
+    let az = 0.32;                            // fixed right-of-center, like the old light_pos
+    return normalize(vec3<f32>(cos(el) * sin(az), sin(el), cos(el) * cos(az)));
+}
+
+// ---- Bounded volumetric cloud march. Slab y ∈ [1.5, 3.6] world units, camera at y=0.2.
+// rgb returned premultiplied by opacity; caller composites: col = col * (1-a) + rgb. ----
+struct CloudParams {
+    coverage: f32,   // 0..1 how much of the field is cloud
+    dark: f32,       // 0 = white cumulus, 1 = storm-black albedo
+    speed: f32,      // wind drift
+    scale: f32,      // noise domain scale
+    steps: i32,      // march steps (perf knob #1)
+}
+fn cloud_density(p: vec3<f32>, t: f32, cp: CloudParams) -> f32 {
+    let q = p * cp.scale + vec3<f32>(t * cp.speed, 0.0, t * cp.speed * 0.35);
+    let base = fbm3d(q);
+    // Vertical profile: densest mid-slab, feathered top/bottom.
+    let hprof = smoothstep(1.5, 1.9, p.y) * smoothstep(3.6, 2.7, p.y);
+    return clamp((base - (1.0 - cp.coverage)) * 2.4, 0.0, 1.0) * hprof;
+}
+fn march_clouds(uv: vec2<f32>, rd: vec3<f32>, t: f32, sd: vec3<f32>,
+                key_col: vec3<f32>, amb_col: vec3<f32>, cp: CloudParams,
+                flash_pos: vec3<f32>, flash_amt: f32) -> vec4<f32> {
+    if (rd.y < 0.03) { return vec4<f32>(0.0, 0.0, 0.0, 0.0); }
+    let ro = vec3<f32>(0.0, 0.2, 0.0);
+    let t0 = (1.5 - ro.y) / rd.y;
+    let t1 = (3.6 - ro.y) / rd.y;
+    let n = cp.steps;
+    let dt = (t1 - t0) / f32(n);
+    // Per-pixel dithered start (grain pass hides the stepping).
+    var tt = t0 + dt * hash21(uv * u.res);
+    var trans = 1.0;
+    var acc = vec3<f32>(0.0);
+    let albedo = mix(vec3<f32>(1.0, 1.0, 1.0), vec3<f32>(0.22, 0.24, 0.30), cp.dark);
+    let mu = clamp(dot(rd, sd), 0.0, 1.0);
+    let phase = 0.55 + 1.1 * pow(mu, 8.0);   // HG-ish forward lobe -> silver linings
+    for (var i = 0; i < n; i = i + 1) {
+        if (trans < 0.05) { break; }
+        let p = ro + rd * tt;
+        let dens = cloud_density(p, t, cp);
+        if (dens > 0.012) {
+            // 1-tap sun shadow (Beer's law) + powder darkening in thick cores.
+            let ldens = cloud_density(p + sd * 0.5, t, cp);
+            let shadow = exp(-ldens * 2.4);
+            let powder = 1.0 - exp(-dens * 4.5);
+            var lit = albedo * (key_col * shadow * phase * powder + amb_col * 0.4);
+            // Storm interior flash: point light inside the cell during a strike.
+            if (flash_amt > 0.001) {
+                let fd = p - flash_pos;
+                lit = lit + vec3<f32>(0.85, 0.88, 1.0) * flash_amt / (1.0 + dot(fd, fd) * 1.6);
+            }
+            let a = 1.0 - exp(-dens * dt * 5.5);
+            acc = acc + trans * a * lit;
+            trans = trans * (1.0 - a);
+        }
+        tt = tt + dt;
+    }
+    return vec4<f32>(acc, 1.0 - trans);
+}
+
 // 3-octave fbm for far/cheap layers (perf budget: far planes never use the 5-octave fbm).
 fn fbm3(p: vec2<f32>) -> f32 {
     var v = 0.0; var amp = 0.5; var q = p;
@@ -424,14 +520,14 @@ fn storm_c(uv: vec2<f32>, t: f32, sky: Sky, intensity: f32) -> vec3<f32> {
     let c2 = mix(vec3<f32>(0.05, 0.06, 0.11), vec3<f32>(0.24, 0.28, 0.36), day);
     let c3 = mix(vec3<f32>(0.02, 0.03, 0.07), vec3<f32>(0.14, 0.17, 0.24), day);
     var col = mesh_gradient(w2, t, c0, c1, c2, c3);
-    // Churning cloud planes in the upper sky, lit by strikes from within.
-    for (var k = 0; k < 2; k = k + 1) {
-        let fk = f32(k);
-        let n = fbm3(uv * vec2<f32>(2.5 + fk, 1.8) + vec2<f32>(t * (0.10 + 0.05 * fk), fk * 7.0));
-        let cover = smoothstep(0.45, 0.8, n) * (0.5 + 0.3 * fk) * smoothstep(0.55, 0.1, uv.y);
-        let dark = mix(vec3<f32>(0.05, 0.06, 0.10), vec3<f32>(0.16, 0.18, 0.24), day);
-        col = mix(col, dark * (1.0 + flash * 0.8), cover);
-    }
+    // Volumetric storm cell, lit from inside by strikes (bolt x mapped into slab space).
+    let rd = view_ray(uv);
+    let sd = sun_dir(u.sun);
+    let cp = CloudParams(0.85, 0.9, 0.14, 0.55, 22);
+    let flash_pos = vec3<f32>((st.y - 0.5) * 5.0, 2.4, 7.0);
+    let amb = mix(vec3<f32>(0.06, 0.07, 0.11), vec3<f32>(0.30, 0.33, 0.42), day);
+    let cl = march_clouds(uv, rd, t, sd, sky.key, amb, cp, flash_pos, flash * 3.0);
+    col = col * (1.0 - cl.a) + cl.rgb;
     // Driving rain sheets in two depths (storm-locked slant/speed).
     col = col + vec3<f32>(0.35, 0.40, 0.52) * rain_streaks(uv, t, 1.0, 0.10, 1.3) * 0.18;
     col = col + vec3<f32>(0.30, 0.34, 0.46) * rain_streaks(uv * vec2<f32>(1.6, 1.3), t * 0.6, 1.0, 0.08, 1.3) * 0.10;
