@@ -83,6 +83,11 @@ final class WeatherHost {
     }
     private var _intensityOverride: Double?
 
+    /// True while the tsunami demo condition has the window engulfed — the whole UI drowns.
+    private var uiDrowned: Bool {
+        (conditionOverride ?? model.condition) == 7 && Tsunami.isEngulfed(age: conditionAge())
+    }
+
     /// Parse the `i` out of "wx_hour_<i>_<suffix>", or nil.
     private func hourIndex(_ key: String, suffix: String) -> Int? {
         let prefix = "wx_hour_"
@@ -108,6 +113,7 @@ final class WeatherHost {
     }
 
     func str(_ key: String) -> String? {
+        if uiDrowned { return "" }   // empty strings skip rendering — the forecast is underwater
         // Snapshot once so the count-check and the index read below see the SAME model — two
         // separate `model` reads could observe different snapshots (TOCTOU → out-of-bounds) once
         // M2 mutates array lengths from another thread.
@@ -132,6 +138,7 @@ final class WeatherHost {
     /// Daily row count, minus any rows the snow pile has buried (snow condition only).
     /// The default `now` keeps the vtable call site (`rowCount()`) unchanged.
     func rowCount(now: Date = Date()) -> Int {
+        if uiDrowned { return 0 }
         let m = model
         let cond = conditionOverride ?? m.condition
         let buried = cond == 3 ? SnowPile.buriedRows(age: conditionAge(now: now)) : 0
