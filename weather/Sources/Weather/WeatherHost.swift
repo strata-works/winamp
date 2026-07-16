@@ -7,8 +7,21 @@ final class WeatherHost {
     private var _conditionOverride: Double?
     private var _sunOverride: Double?
     private var _seasonOverride: Double?
+    private var _condChangedAt = Date()
     private let lock = NSLock()
     init(model: WeatherModel) { self._model = model }
+
+    /// Reset the condition-age clock when the EFFECTIVE condition value changes.
+    /// Callers must hold `lock`.
+    private func noteEffectiveCondition(from old: Double, to new: Double) {
+        if old != new { _condChangedAt = Date() }
+    }
+
+    /// Seconds since the effective condition last changed. `now` injected for testability.
+    func conditionAge(now: Date = Date()) -> Double {
+        lock.lock(); defer { lock.unlock() }
+        return now.timeIntervalSince(_condChangedAt)
+    }
 
     /// The current weather state. Thread-safe: the engine reads via the host vtable on the
     /// RENDER thread (num/str/rowCount/rowString) while the app mutates from the MAIN thread
@@ -17,7 +30,14 @@ final class WeatherHost {
     /// uses `conditionOverride` (below), not this, so it survives a refresh.
     var model: WeatherModel {
         get { lock.lock(); defer { lock.unlock() }; return _model }
-        set { lock.lock(); _model = newValue; lock.unlock() }
+        set {
+            lock.lock()
+            let old = _conditionOverride ?? _model.condition
+            let new = _conditionOverride ?? newValue.condition
+            noteEffectiveCondition(from: old, to: new)
+            _model = newValue
+            lock.unlock()
+        }
     }
 
     /// Presenter demo override for the shader condition only. Set from the MAIN thread
@@ -25,7 +45,14 @@ final class WeatherHost {
     /// like `model`. `nil` = show the live condition.
     var conditionOverride: Double? {
         get { lock.lock(); defer { lock.unlock() }; return _conditionOverride }
-        set { lock.lock(); _conditionOverride = newValue; lock.unlock() }
+        set {
+            lock.lock()
+            let old = _conditionOverride ?? _model.condition
+            let new = newValue ?? _model.condition
+            noteEffectiveCondition(from: old, to: new)
+            _conditionOverride = newValue
+            lock.unlock()
+        }
     }
 
     /// Presenter override for the shader sun-elevation uniform only (the `D` key cycles
@@ -61,6 +88,7 @@ final class WeatherHost {
         case "wx_temp":      return model.temp
         case "wx_intensity": return model.intensity
         case "wx_season":    return seasonOverride ?? model.season
+        case "wx_cond_age":  return conditionAge()
         default:             return nil
         }
     }
@@ -87,7 +115,14 @@ final class WeatherHost {
         }
     }
 
-    func rowCount() -> Int { model.days.count }
+    /// Daily row count, minus any rows the snow pile has buried (snow condition only).
+    /// The default `now` keeps the vtable call site (`rowCount()`) unchanged.
+    func rowCount(now: Date = Date()) -> Int {
+        let m = model
+        let cond = conditionOverride ?? m.condition
+        let buried = cond == 3 ? SnowPile.buriedRows(age: conditionAge(now: now)) : 0
+        return max(0, m.days.count - buried)
+    }
 
     func rowString(_ index: Int, field: String) -> String? {
         // Single snapshot so the bounds check and the index read below can't race (see `str`).
