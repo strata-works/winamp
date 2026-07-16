@@ -776,6 +776,12 @@ fn window_alpha(uv: vec2<f32>, t: f32, cond: i32, intensity: f32) -> f32 {
         // Top edge luffs like fabric: a traveling ripple, gust-enveloped.
         let flap = (0.5 + 0.5 * sin(uv.x * 30.0 - t * 26.0)) * 0.018 * (0.4 + 1.2 * g.x);
         a = a * smoothstep(0.0, 0.010, uvw.y - flap * smoothstep(0.15, 0.0, uv.y));
+        // Side tatter: the windward (right) edge ripples hard, leeward lighter — both
+        // eaten by fast traveling noise that surges with the gusts.
+        let ripR = (fbm(vec2<f32>(uv.y * 9.0 - t * 8.0, 2.0)) - 0.30) * (0.012 + 0.022 * g.x);
+        a = a * smoothstep(0.0, 0.008, (1.0 - uv.x) - max(ripR, 0.0));
+        let ripL = (fbm(vec2<f32>(uv.y * 7.0 - t * 6.0, 5.0)) - 0.35) * (0.008 + 0.014 * g.x);
+        a = a * smoothstep(0.0, 0.008, uv.x - max(ripL, 0.0));
         // Bottom: gentle clear-style wave.
         let b = smoothstep(0.86, 1.0, uv.y);
         a = a * (1.0 - smoothstep(0.45 + 0.06 * sin(x * 7.0 + t * 1.2), 1.0, b));
@@ -793,6 +799,15 @@ fn window_alpha(uv: vec2<f32>, t: f32, cond: i32, intensity: f32) -> f32 {
         let quake = smoothstep(0.56, 0.61, ph) * (1.0 - smoothstep(0.80, 0.85, ph));
         let sh = vec2<f32>(sin(t * 47.0), cos(t * 39.0)) * 0.006 * quake;
         a = base_mask(uv + sh, -bulge);
+        // Sides warp with the water: pressure undulation grows through the build, turns
+        // violent in the quake, and wavers like refraction while engulfed.
+        let press = smoothstep(0.30, 0.60, ph);
+        let uwm = smoothstep(0.58, 0.62, ph) * (1.0 - smoothstep(0.78, 0.82, ph));
+        let side_amp = 0.005 + press * 0.014 + quake * 0.020 + uwm * 0.012;
+        let wobL = (fbm(vec2<f32>(uv.y * 6.0 + t * 1.5, 1.0)) - 0.40) * side_amp;
+        let wobR = (fbm(vec2<f32>(uv.y * 6.0 - t * 1.3, 4.0)) - 0.40) * side_amp;
+        a = a * smoothstep(0.0, 0.010, uv.x - max(wobL, 0.0));
+        a = a * smoothstep(0.0, 0.010, (1.0 - uv.x) - max(wobR, 0.0));
         // Recede: water sheets off — heavy streams hanging below the bottom edge + side runs.
         let shed = smoothstep(0.74, 0.78, ph) * (1.0 - smoothstep(0.92, 1.0, ph));
         if (shed > 0.0) {
