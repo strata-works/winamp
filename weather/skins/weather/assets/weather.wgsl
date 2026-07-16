@@ -820,10 +820,10 @@ fn window_alpha(uv: vec2<f32>, t: f32, cond: i32, intensity: f32) -> f32 {
         // The window rests slightly inset ("bracing") so the bulge/rock/shake have room to
         // move WITHIN the canvas — a mask pushed past the canvas squares off the corners
         // and reveals the raw window rectangle. Scene shake carries the raw violence.
-        let rest = 0.020;
+        let rest = 0.024;
         let bulge = smoothstep(0.52, 0.61, ph) * (1.0 - smoothstep(0.68, 0.76, ph)) * rest;
         let quake = smoothstep(0.56, 0.61, ph) * (1.0 - smoothstep(0.80, 0.85, ph));
-        let ang = sin(t * 33.0) * 0.02 * quake;
+        let ang = sin(t * 33.0) * 0.015 * quake;
         let uvr = (uv - vec2<f32>(0.5, 0.5)) * rot(ang) + vec2<f32>(0.5, 0.5);
         let jmp = vec2<f32>(hash21(vec2<f32>(floor(t * 24.0), 3.0)) - 0.5,
                             hash21(vec2<f32>(floor(t * 24.0), 8.0)) - 0.5);
