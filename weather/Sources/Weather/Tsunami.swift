@@ -6,7 +6,7 @@ import Foundation
 enum Tsunami {
     static let period: Double = 32
     static let engulfStart = 0.60   // phase fraction
-    static let engulfEnd = 0.74
+    static let engulfEnd = 0.80
 
     static func phase(age: Double) -> Double {
         let m = age.truncatingRemainder(dividingBy: period)

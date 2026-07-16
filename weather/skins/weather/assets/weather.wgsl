@@ -618,7 +618,7 @@ fn wind_c(uv: vec2<f32>, t: f32, sky: Sky, intensity: f32) -> vec3<f32> {
     return col;
 }
 
-// SYNC: 32s period and the 0.60..0.74 engulf window mirror Tsunami.swift. Change together.
+// SYNC: 32s period and the 0.60..0.80 engulf window mirror Tsunami.swift. Change together.
 fn tsunami_phase() -> f32 { return fract(u.cond_age / 32.0); }
 
 // ---- Tsunami (demo condition 7): a 32s arc — calm ocean, swell, wall, CRASH (full
@@ -631,7 +631,7 @@ fn tsunami_c(uv: vec2<f32>, t: f32, sky: Sky, intensity: f32) -> vec3<f32> {
     var level = 0.80;
     level = level - smoothstep(0.0, 0.45, ph) * 0.10;
     level = level - smoothstep(0.45, 0.62, ph) * 0.75;
-    level = level + smoothstep(0.74, 0.95, ph) * 0.85;
+    level = level + smoothstep(0.74, 0.86, ph) * 0.85;   // fast drain — text returns as the hero zone clears
     // 4 parallax wave bands stacked below `level`, each fbm-displaced, nearer = darker + wilder.
     let chop = 1.0 + smoothstep(0.30, 0.60, ph) * 2.0;            // seas roughen as it builds
     for (var k = 0; k < 4; k = k + 1) {
@@ -652,7 +652,7 @@ fn tsunami_c(uv: vec2<f32>, t: f32, sky: Sky, intensity: f32) -> vec3<f32> {
         col = col + vec3<f32>(0.85, 0.92, 0.97) * sp * spray_amt * 0.6;
     }
     // Engulf: full-screen underwater — deep teal, caustic shimmer, rising bubbles.
-    let uw = smoothstep(0.58, 0.62, ph) * (1.0 - smoothstep(0.72, 0.76, ph));
+    let uw = smoothstep(0.58, 0.62, ph) * (1.0 - smoothstep(0.78, 0.82, ph));
     if (uw > 0.0) {
         let caust = fbm(uv * 6.0 + vec2<f32>(t * 0.8, -t * 0.5))
                   * fbm(uv * 9.0 - vec2<f32>(t * 0.6, t * 0.4));

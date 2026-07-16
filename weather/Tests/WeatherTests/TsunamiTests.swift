@@ -12,8 +12,8 @@ final class TsunamiTests: XCTestCase {
     func testEngulfWindow() {
         XCTAssertFalse(Tsunami.isEngulfed(age: 0.60 * 32 - 0.1))
         XCTAssertTrue(Tsunami.isEngulfed(age: 0.60 * 32 + 0.1))
-        XCTAssertTrue(Tsunami.isEngulfed(age: 0.74 * 32 - 0.1))
-        XCTAssertFalse(Tsunami.isEngulfed(age: 0.74 * 32 + 0.1))
+        XCTAssertTrue(Tsunami.isEngulfed(age: 0.80 * 32 - 0.1))
+        XCTAssertFalse(Tsunami.isEngulfed(age: 0.80 * 32 + 0.1))
         XCTAssertTrue(Tsunami.isEngulfed(age: 32 + 0.60 * 32 + 0.1))   // second cycle
     }
 
