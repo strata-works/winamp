@@ -48,6 +48,10 @@ fn fbm3d(p: vec3<f32>) -> f32 {
     for (var k = 0; k < 3; k = k + 1) { v = v + amp * noise3(q); q = q * 2.15; amp = amp * 0.5; }
     return v;
 }
+// 2-octave variant for the per-step sun tap (half the cost, shadows don't need detail).
+fn fbm3d2(p: vec3<f32>) -> f32 {
+    return 0.5 * noise3(p) + 0.25 * noise3(p * 2.15);
+}
 
 // ---- View camera: each pixel is a ray into a sky dome. Camera near the ground, looking
 // forward+up; azimuth spreads across the window width. uv.y=0 is the TOP of the canvas. ----
@@ -103,6 +107,12 @@ fn cloud_density(p: vec3<f32>, t: f32, cp: CloudParams) -> f32 {
     let hprof = smoothstep(1.5, 1.9, p.y) * smoothstep(3.6, 2.7, p.y);
     return clamp((base - (1.0 - cp.coverage)) * 2.4, 0.0, 1.0) * hprof;
 }
+// Cheap 2-octave density for the per-step sun tap (shadow term needs no fine detail).
+fn cloud_density_lo(p: vec3<f32>, t: f32, cp: CloudParams) -> f32 {
+    let q = p * cp.scale + vec3<f32>(t * cp.speed, 0.0, t * cp.speed * 0.35);
+    let hprof = smoothstep(1.5, 1.9, p.y) * smoothstep(3.6, 2.7, p.y);
+    return clamp((fbm3d2(q) - (1.0 - cp.coverage)) * 2.4, 0.0, 1.0) * hprof;
+}
 fn march_clouds(uv: vec2<f32>, rd: vec3<f32>, t: f32, sd: vec3<f32>,
                 key_col: vec3<f32>, amb_col: vec3<f32>, cp: CloudParams,
                 flash_pos: vec3<f32>, flash_amt: f32) -> vec4<f32> {
@@ -120,12 +130,15 @@ fn march_clouds(uv: vec2<f32>, rd: vec3<f32>, t: f32, sd: vec3<f32>,
     let mu = clamp(dot(rd, sd), 0.0, 1.0);
     let phase = 0.55 + 1.1 * pow(mu, 8.0);   // HG-ish forward lobe -> silver linings
     for (var i = 0; i < n; i = i + 1) {
-        if (trans < 0.05) { break; }
+        if (trans < 0.10) { break; }
         let p = ro + rd * tt;
+        // Two-tier sampling: a cheap 2-octave probe rejects empty space before paying
+        // for the full-detail density (cloud fields are ~half empty).
+        if (cloud_density_lo(p, t, cp) < 0.015) { tt = tt + dt; continue; }
         let dens = cloud_density(p, t, cp);
         if (dens > 0.012) {
-            // 1-tap sun shadow (Beer's law) + powder darkening in thick cores.
-            let ldens = cloud_density(p + sd * 0.5, t, cp);
+            // 1-tap sun shadow (Beer's law, 2-octave density) + powder darkening in cores.
+            let ldens = cloud_density_lo(p + sd * 0.5, t, cp);
             let shadow = exp(-ldens * 2.4);
             let powder = 1.0 - exp(-dens * 4.5);
             var lit = albedo * (key_col * shadow * phase * powder + amb_col * 0.4);
@@ -281,6 +294,12 @@ fn clear_c(uv: vec2<f32>, t: f32, sky: Sky, intensity: f32) -> vec3<f32> {
     let rd = view_ray(uv);
     let sd = sun_dir(u.sun);
     var col = sky_dome(rd, sd, u.sun);
+    // Sparse fair-weather wisps: short march, low coverage (drawn under the stars/moon).
+    let cpw = CloudParams(0.18 + intensity * 0.3, 0.05, 0.03, 0.5, 8);
+    let clw = march_clouds(uv, rd, t, sd, sky.key,
+                           mix(vec3<f32>(0.08, 0.09, 0.15), vec3<f32>(0.6, 0.68, 0.8), day),
+                           cpw, vec3<f32>(0.0, 0.0, 0.0), 0.0);
+    col = col * (1.0 - clw.a) + clw.rgb;
     // Two-layer starfield: far = dim + dense (offset/scaled grid), near = bright + sparse.
     let starvis = smoothstep(0.15, -0.25, u.sun);
     col = col + vec3<f32>(0.85, 0.88, 1.0) * stars(uv * 1.9 + vec2<f32>(3.7, 1.3), t * 0.7) * starvis * 0.35;
@@ -305,34 +324,14 @@ fn cloud_c(uv: vec2<f32>, t: f32, sky: Sky, intensity: f32) -> vec3<f32> {
     let rd = view_ray(uv);
     let sd = sun_dir(u.sun);
     var col = sky_dome(rd, sd, u.sun);
-    let skybg = col;
-    let lp = light_pos(t, u.sun);
-    let to_light = normalize(lp - uv + vec2<f32>(0.0001, 0.0001));
-    let litd = mix(vec3<f32>(0.20, 0.22, 0.28), vec3<f32>(0.92, 0.94, 0.98), day);
-    let shad = mix(vec3<f32>(0.10, 0.11, 0.15), vec3<f32>(0.52, 0.56, 0.64), day);
-    // Three parallax planes, far -> near. Far plane: 3-octave fbm + atmospheric fade.
-    for (var k = 0; k < 3; k = k + 1) {
-        let fk = f32(k);
-        let far = 1.0 - fk / 2.0;                 // 1 far .. 0 near
-        let sc = 2.0 + fk * 1.6;
-        let sp = 0.04 + fk * 0.03;
-        let q = uv * vec2<f32>(sc, sc * 0.7) + vec2<f32>(t * sp, fk * 3.1);
-        // Billow: light second-octave warp of the sample coordinate.
-        let bw = vec2<f32>(fbm3(q * 1.7 + vec2<f32>(t * 0.02, 0.0)), fbm3(q * 1.7 + vec2<f32>(2.7, 1.1)));
-        var n = 0.0;
-        if (k == 0) { n = fbm3(q + 0.35 * bw); } else { n = fbm(q + 0.35 * bw); }
-        let cover = smoothstep(0.55, 0.85, n) * (0.35 + 0.25 * fk) * (0.6 + 0.5 * intensity);
-        // Directional lighting + sun-side rim (gradient of the field toward the light).
-        let nlit = fbm3(q + 0.35 * bw + to_light * 0.10);
-        let rim = clamp(n - nlit, 0.0, 1.0) * 2.2;
-        var plane = mix(shad, litd, clamp(0.5 + (lp.x - uv.x) * 0.8, 0.0, 1.0));
-        plane = atmo(plane, skybg, far);
-        col = mix(col, plane, cover);
-        col = col + sky.key * rim * cover * 0.35;
-    }
-    // Cloud-break moment: a god-ray shaft sweeps across during the event (day only).
-    // Gain kept modest — at noon the scene is already bright and a hot shaft washes it out.
+    // Cloud-break moment: a real coverage gap sweeps through (drives coverage down),
+    // letting a god-ray shaft cross the scene.
     let mb = moment(t, 0.05, 0.6, 9.0);
+    let cover = clamp(0.45 + 0.35 * intensity - mb.x * 0.25, 0.05, 0.9);
+    let cp = CloudParams(cover, 0.12, 0.05, 0.42, 16);
+    let amb = mix(vec3<f32>(0.10, 0.11, 0.17), vec3<f32>(0.55, 0.62, 0.75), day);
+    let cl = march_clouds(uv, rd, t, sd, sky.key, amb, cp, vec3<f32>(0.0, 0.0, 0.0), 0.0);
+    col = col * (1.0 - cl.a) + cl.rgb;
     col = col + sky.key * god_rays(uv, vec2<f32>(0.2 + 0.6 * mb.y, 0.18), t) * mb.x * 0.28 * day;
     return col;
 }
@@ -488,6 +487,7 @@ fn storm_c(uv: vec2<f32>, t: f32, sky: Sky, intensity: f32) -> vec3<f32> {
     let day = sky.daylight;
     let st = storm_strike(t);
     let st2 = storm_strike2(t);
+    let df = moment(t, 0.5, 0.2, 12.0);   // distant sheet flash (no bolt)
     let flash = st.x + st2.x;
     // Shockwave: an expanding ring from the primary strike's ground contact deforms the background.
     let asp = u.res.y / u.res.x;
@@ -505,13 +505,13 @@ fn storm_c(uv: vec2<f32>, t: f32, sky: Sky, intensity: f32) -> vec3<f32> {
     let cp = CloudParams(0.85, 0.9, 0.14, 0.55, 22);
     let flash_pos = vec3<f32>((st.y - 0.5) * 5.0, 2.4, 7.0);
     let amb = mix(vec3<f32>(0.06, 0.07, 0.11), vec3<f32>(0.30, 0.33, 0.42), day);
-    let cl = march_clouds(uv, rd, t, sd, sky.key, amb, cp, flash_pos, flash * 3.0);
+    // Even boltless sheet flashes glow inside the cell (df at lower gain).
+    let cl = march_clouds(uv, rd, t, sd, sky.key, amb, cp, flash_pos, flash * 3.0 + df.x * 0.8);
     col = col * (1.0 - cl.a) + cl.rgb;
     // Driving rain sheets in two depths (storm-locked slant/speed).
     col = col + vec3<f32>(0.35, 0.40, 0.52) * rain_streaks(uv, t, 1.0, 0.10, 1.3) * 0.18;
     col = col + vec3<f32>(0.30, 0.34, 0.46) * rain_streaks(uv * vec2<f32>(1.6, 1.3), t * 0.6, 1.0, 0.08, 1.3) * 0.10;
     // Shockwave highlight + whole-sky flash (primary + double + distant sheet flashes).
-    let df = moment(t, 0.5, 0.2, 12.0);
     col = col + vec3<f32>(0.55, 0.60, 0.75) * ring * st.x * 0.5;
     col = col + vec3<f32>(0.60, 0.63, 0.78) * (flash * 0.18 + df.x * 0.08);
     // Bolts: primary + occasional double, with a soft afterglow trailing the primary.
@@ -564,53 +564,95 @@ fn ui_scrim(uv: vec2<f32>) -> f32 {
     return clamp(s, 0.55, 1.0);
 }
 
-// ---- Bottom-flowing silhouette (window alpha). Carried forward from M3. ----
-fn silhouette_alpha(uv: vec2<f32>, t: f32, cond: i32, intensity: f32) -> f32 {
-    let band_top = 0.82;
-    if (uv.y < band_top) { return 1.0; }
-    let x = uv.x;
-    let b = (uv.y - band_top) / (1.0 - band_top);
-    let amp = 0.10 + 0.10 * intensity;
-    var edge = 0.4;
-    var soft = 0.10;
-    if (cond == 0) {
-        edge = 0.42 + amp * sin(x * 8.0 + t * 0.8);
-    } else if (cond == 1) {
-        edge = 0.46 + amp * 0.7 * sin(x * 5.0 + t * 0.5);
-    } else if (cond == 2) {
-        let drip = fbm(vec2<f32>(x * 12.0, t * 0.6));
-        edge = 0.30 + amp * 1.4 * drip;
-        soft = 0.05;
-    } else if (cond == 3) {
-        edge = 0.42 + amp * 0.8 * abs(sin(x * 10.0 + t * 0.3));
-        soft = 0.08;
-    } else if (cond == 4) {
-        // Broader, less needle-sharp churn for the storm edge.
-        let j = fbm(vec2<f32>(x * 14.0 + t * 1.5, t));
-        edge = 0.35 + amp * 1.2 * (j - 0.5) * 2.0;
-        // Lightning strike jolts the window's bottom edge inward at the bolt's x — a soft,
-        // rounded dip rather than a sharp notch.
-        let st = storm_strike(t);
-        let near = smoothstep(0.24, 0.0, abs(x - st.y));
-        edge = edge - st.x * near * 0.42;
-        soft = 0.06;
-    } else {
-        let n = fbm(vec2<f32>(x * 4.0 + t * 0.2, uv.y * 6.0));
-        return clamp(1.0 - b * (0.7 + 0.6 * n), 0.0, 1.0);
-    }
-    return 1.0 - smoothstep(edge - soft, edge + soft, b);
+// Snow pile height in uv units at column x. Grows linearly to full size over 150s.
+// SYNC: mean height (0.21 * growth) crosses the last daily row's bottom (uv 0.809,
+// i.e. height 0.191) at age ≈ 135s == SnowPile.buryAgeLastRow in Swift. Change together.
+fn pile_height(x: f32, age: f32) -> f32 {
+    let growth = clamp(age / 150.0, 0.0, 1.0);
+    return growth * (0.16 + 0.10 * fbm(vec2<f32>(x * 3.5, 7.7)));
 }
 
-// Rounded-window mask: softens the hard rectangle corners (a circle in uv is oval on the
-// tall canvas, so distances are aspect-corrected to keep the radius round in pixels).
-fn corner_alpha(uv: vec2<f32>) -> f32 {
+// ---- Theatrical window mask: rounded-rect base, deformed per condition on ALL edges.
+// Replaces the M3 bottom-band silhouette + corner mask. ----
+fn base_mask(uv: vec2<f32>, inset: f32) -> f32 {
     let asp = u.res.y / u.res.x;
     let p = (uv - vec2<f32>(0.5, 0.5)) * vec2<f32>(1.0, asp);
-    let b = vec2<f32>(0.5, 0.5 * asp);
+    let b = vec2<f32>(0.5 - inset, (0.5 - inset) * asp);
     let r = 0.065;   // corner radius (x-uv units ~ 26 px)
     let q = abs(p) - b + vec2<f32>(r, r);
     let sd = length(max(q, vec2<f32>(0.0, 0.0))) + min(max(q.x, q.y), 0.0) - r;
     return smoothstep(0.006, -0.006, sd);
+}
+fn window_alpha(uv: vec2<f32>, t: f32, cond: i32, intensity: f32) -> f32 {
+    var a = base_mask(uv, 0.0);
+    let x = uv.x;
+    if (cond == 0) {
+        // Clear: gentle bottom wave (restraint is the contrast).
+        let b = smoothstep(0.86, 1.0, uv.y);
+        a = a * (1.0 - smoothstep(0.42 + 0.08 * sin(x * 8.0 + t * 0.8), 1.0, b));
+    } else if (cond == 1) {
+        // Cloud: TOP edge takes soft cumulus-profile bumps (silhouette cut by the clouds).
+        let bump = fbm(vec2<f32>(x * 5.0 + t * 0.05, 3.3)) * 0.045;
+        a = a * smoothstep(0.0, 0.012, uv.y - (0.012 + bump) * smoothstep(0.2, 0.0, uv.y));
+    } else if (cond == 2) {
+        // Rain: whole outline undulates (sheeting water), drips at the bottom,
+        // moment-gated droplet detaching from the bottom-right corner.
+        let g = moment(t, 0.18, 0.45, 10.0);
+        let amp = (0.006 + 0.010 * intensity) * (1.0 + g.x);
+        let wob = fbm(vec2<f32>(uv.y * 9.0 + t * 1.2, x * 9.0 - t)) - 0.5;
+        a = a * base_mask(uv + vec2<f32>(wob, wob) * amp, -0.004);
+        let drip = fbm(vec2<f32>(x * 12.0, t * 0.6));
+        a = a * (1.0 - smoothstep(0.30 + 0.24 * drip, 1.0, smoothstep(0.85, 1.0, uv.y) * 1.4));
+        let md = moment(t, 0.10, 0.5, 14.0);
+        if (md.w > 0.5) {
+            let c = vec2<f32>(0.88, 0.965 + md.y * 0.08);
+            let asp2 = u.res.y / u.res.x;
+            let dd = length((uv - c) * vec2<f32>(1.0, asp2));
+            a = max(a, smoothstep(0.016, 0.010, dd) * (1.0 - md.y));   // detaching blob
+        }
+    } else if (cond == 3) {
+        // Snow: soft scalloped bottom + the accumulating pile (full alpha inside the mound).
+        let b = (uv.y - 0.86) / 0.14;
+        a = a * (1.0 - smoothstep(0.35 + 0.12 * abs(sin(x * 10.0 + t * 0.3)), 1.2, max(b, 0.0)));
+        let ph = pile_height(x, u.cond_age);
+        if (uv.y > 1.0 - ph) { a = base_mask(uv, 0.0); }   // pile restores the full mask
+    } else if (cond == 4) {
+        // Storm: jagged churned bottom + strike edge-jolt + WINDOW CRACKS from the impact.
+        let st = storm_strike(t);
+        let b = (uv.y - 0.84) / 0.16;
+        let j = fbm(vec2<f32>(x * 14.0 + t * 1.5, t));
+        var edge = 0.38 + 0.22 * (j - 0.5) * 2.0;
+        edge = edge - st.x * smoothstep(0.24, 0.0, abs(x - st.y)) * 0.42;
+        a = a * (1.0 - smoothstep(edge, edge + 0.06, max(b, 0.0)));
+        // Cracks: 4 jagged transparent fractures radiating from the impact, healing with
+        // the strike envelope (~0.7s visible). Transient text crossing is accepted theater.
+        let crack_env = st.x;
+        if (crack_env > 0.02) {
+            let asp2 = u.res.y / u.res.x;
+            let impact = vec2<f32>(st.y, 0.70);
+            for (var k = 0; k < 4; k = k + 1) {
+                let fk = f32(k);
+                let ang = (hash21(vec2<f32>(st.w, 30.0 + fk)) - 0.5) * 2.6 - 1.57;
+                let dirv = normalize(vec2<f32>(cos(ang), sin(ang) / asp2));
+                let rel = uv - impact;
+                let along = dot(rel, dirv);
+                let across = abs(rel.x * dirv.y - rel.y * dirv.x);
+                let jag = (fbm(vec2<f32>(along * 18.0, st.w + fk)) - 0.5) * 0.02;
+                let reach = 0.05 + 0.30 * hash21(vec2<f32>(st.w, 40.0 + fk));
+                let on_line = smoothstep(0.0035, 0.0012, abs(across + jag))
+                            * step(0.0, along) * step(along, reach) * (1.0 - along / reach);
+                a = a * (1.0 - on_line * crack_env);
+            }
+        }
+    } else {
+        // Fog: erosion — edge noise eats inward on ALL edges; peak = ghost window.
+        let mr = moment(t, 0.06, 0.5, 13.0);
+        let breathe = 0.5 + 0.5 * sin(t * 0.15) + mr.x;
+        let edge_d = min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y));
+        let eat = (0.02 + 0.030 * breathe) * fbm(vec2<f32>(uv.x * 6.0 + t * 0.1, uv.y * 6.0 - t * 0.07));
+        a = a * smoothstep(0.0, 0.02, edge_d - eat);
+    }
+    return clamp(a, 0.0, 1.0);
 }
 
 @fragment
@@ -630,9 +672,18 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
         case 5: { col = fog_c(uv, t, sky, intensity); }
         default: { col = clear_c(uv, t, sky, intensity); }
     }
+    // Snow pile is drawn scenery: bright mound with faint sparkle, graded with the scene.
+    if (cond == 3) {
+        let ph = pile_height(uv.x, u.cond_age);
+        if (uv.y > 1.0 - ph) {
+            let depth_in = (uv.y - (1.0 - ph)) / max(ph, 0.001);
+            col = mix(vec3<f32>(0.92, 0.94, 0.99), vec3<f32>(0.70, 0.75, 0.86), depth_in);
+            col = col + vec3<f32>(1.0, 1.0, 1.0) * step(0.985, hash21(floor(uv * u.res / 3.0))) * 0.25;
+        }
+    }
     col = depth_grade(col, uv);
     col = grade(col, uv, t);   // tints + tone curve + vignette + grain
     col = col * ui_scrim(uv);
-    let a = silhouette_alpha(uv, t, cond, intensity) * corner_alpha(uv);
+    let a = window_alpha(uv, t, cond, intensity);
     return vec4<f32>(col * a, a);
 }

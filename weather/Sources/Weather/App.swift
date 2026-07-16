@@ -51,8 +51,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         bridge = b
         view.bridge = b
 
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        // Launch-time presenter/automation overrides (also used by scripted verification):
+        //   WX_COND=0..5 forces the condition · WX_SUN=-1..1 forces sun elevation ·
+        //   WX_POS="x,y" positions the window (screen points, top-left origin).
+        let env = ProcessInfo.processInfo.environment
+        if let c = env["WX_COND"].flatMap(Double.init) { host.conditionOverride = c }
+        if let s = env["WX_SUN"].flatMap(Double.init) { host.sunOverride = s }
+        if let p = env["WX_POS"] {
+            let parts = p.split(separator: ",").compactMap { Double($0) }
+            if parts.count == 2, let screen = NSScreen.main {
+                let topLeftY = screen.frame.maxY - parts[1] - CGFloat(canvasH)
+                window.setFrameOrigin(NSPoint(x: parts[0], y: topLeftY))
+            }
+        }
+
+        if env["WX_SHY"] != nil {
+            // Verification/automation mode: show the window without stealing focus.
+            window.orderFrontRegardless()
+        } else {
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+        }
 
         refresh()  // launch fetch
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 15 * 60, repeats: true) { [weak self] _ in
