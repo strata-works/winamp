@@ -788,10 +788,13 @@ fn window_alpha(uv: vec2<f32>, t: f32, cond: i32, intensity: f32) -> f32 {
         // ferocious during gusts, plus a bigger downwind shove.
         let j2 = vec2<f32>(hash21(vec2<f32>(floor(t * 30.0), 1.0)) - 0.5,
                            hash21(vec2<f32>(floor(t * 30.0), 6.0)) - 0.5);
-        let jit = j2 * (0.006 + 0.014 * g.x);
-        let jolt = g.x * 0.030;                                    // shove downwind (-x)
+        // Mask motion is CAPPED to the resting inset — the mask cannot leave the canvas,
+        // or the raw rectangular window boundary squares off and shows. The violent judder
+        // lives in the SCENE (sj/uvs); the mask carries a restrained echo of it.
+        let jit = j2 * (0.004 + 0.006 * g.x);
+        let jolt = g.x * 0.010;                                    // shove downwind (-x)
         let uvw = uv + vec2<f32>(jit.x - jolt, jit.y * 0.8);
-        a = base_mask(uvw, 0.0);
+        a = base_mask(uvw, 0.015);
         // Top edge luffs like fabric: a traveling ripple, gust-enveloped.
         let flap = (0.5 + 0.5 * sin(uv.x * 30.0 - t * 26.0)) * 0.018 * (0.4 + 1.2 * g.x);
         a = a * smoothstep(0.0, 0.010, uvw.y - flap * smoothstep(0.15, 0.0, uv.y));
@@ -814,15 +817,18 @@ fn window_alpha(uv: vec2<f32>, t: f32, cond: i32, intensity: f32) -> f32 {
     } else if (cond == 7) {
         let ph = tsunami_phase();
         // Impact bulge: the window swells outward as the wall arrives, peaking at the crash.
-        let bulge = smoothstep(0.52, 0.61, ph) * (1.0 - smoothstep(0.68, 0.76, ph)) * 0.045;
+        // The window rests slightly inset ("bracing") so the bulge/rock/shake have room to
+        // move WITHIN the canvas — a mask pushed past the canvas squares off the corners
+        // and reveals the raw window rectangle. Scene shake carries the raw violence.
+        let rest = 0.020;
+        let bulge = smoothstep(0.52, 0.61, ph) * (1.0 - smoothstep(0.68, 0.76, ph)) * rest;
         let quake = smoothstep(0.56, 0.61, ph) * (1.0 - smoothstep(0.80, 0.85, ph));
-        // The window ROCKS through the crash: rotation about center + hard 2-axis shake.
-        let ang = sin(t * 33.0) * 0.045 * quake;
+        let ang = sin(t * 33.0) * 0.02 * quake;
         let uvr = (uv - vec2<f32>(0.5, 0.5)) * rot(ang) + vec2<f32>(0.5, 0.5);
         let jmp = vec2<f32>(hash21(vec2<f32>(floor(t * 24.0), 3.0)) - 0.5,
                             hash21(vec2<f32>(floor(t * 24.0), 8.0)) - 0.5);
-        let sh = (vec2<f32>(sin(t * 47.0), cos(t * 39.0)) * 0.022 + jmp * 0.030) * quake;
-        a = base_mask(uvr + sh, -bulge);
+        let sh = (vec2<f32>(sin(t * 47.0), cos(t * 39.0)) * 0.008 + jmp * 0.008) * quake;
+        a = base_mask(uvr + sh, rest - bulge);
         // Pieces tear off the top edge and are flung during the crash.
         if (quake > 0.3) {
             for (var k = 0; k < 2; k = k + 1) {
