@@ -594,7 +594,9 @@ fn wind_c(uv: vec2<f32>, t: f32, sky: Sky, intensity: f32) -> vec3<f32> {
     var col = sky_dome(rd, sd, u.sun);
     let g = moment(t, 0.15, 0.6, 20.0);        // gusts (shared with window_alpha case 6)
     // Whole scene leans downwind in gusts (shear grows with height).
-    let uvs = uv + vec2<f32>((0.5 - uv.y) * g.x * 0.10, 0.0);
+    let sj = vec2<f32>(hash21(vec2<f32>(floor(t * 24.0), 4.0)) - 0.5,
+                       hash21(vec2<f32>(floor(t * 24.0), 9.0)) - 0.5) * 0.006 * g.x;
+    let uvs = uv + vec2<f32>((0.5 - uv.y) * g.x * 0.10, 0.0) + sj;
     // Shredded racing clouds: horizontally-elongated 2D noise scrolling FAST.
     let shred = fbm(vec2<f32>(uvs.x * 1.4 - t * (1.6 + g.x * 1.2), uvs.y * 7.0));
     let cover = smoothstep(0.55, 0.75, shred) * smoothstep(0.75, 0.15, uv.y);
@@ -641,8 +643,9 @@ fn tsunami_c(uv: vec2<f32>, t: f32, sky: Sky, intensity: f32) -> vec3<f32> {
     level = level + smoothstep(0.74, 0.86, ph) * 0.85;   // fast drain — text returns as the hero zone clears
     // Crash quake: violent high-frequency shake through the impact.
     let quake = smoothstep(0.56, 0.61, ph) * (1.0 - smoothstep(0.80, 0.85, ph));
-    level = level + sin(t * 47.0) * 0.022 * quake
-                  + sin(t * 31.0 + uv.x * 3.0) * 0.015 * quake;   // traveling slosh-rock
+    level = level + sin(t * 47.0) * 0.034 * quake
+                  + sin(t * 31.0 + uv.x * 3.0) * 0.026 * quake    // traveling slosh-rock
+                  + (hash21(vec2<f32>(floor(t * 24.0), 5.0)) - 0.5) * 0.018 * quake;   // judder
     // 4 parallax wave bands stacked below `level`, each fbm-displaced, nearer = darker + wilder.
     let chop = 1.0 + smoothstep(0.30, 0.58, ph) * 3.5;            // seas turn violent as it builds
     for (var k = 0; k < 4; k = k + 1) {
@@ -781,9 +784,13 @@ fn window_alpha(uv: vec2<f32>, t: f32, cond: i32, intensity: f32) -> f32 {
     } else if (cond == 6) {
         // High winds: tremble + gust jolts + top-edge fabric flap + debris-impact dents.
         let g = moment(t, 0.15, 0.6, 20.0);
-        let jit = (hash21(vec2<f32>(floor(t * 30.0), 1.0)) - 0.5) * 0.005;
-        let jolt = g.x * 0.018;                                    // shove downwind (-x)
-        let uvw = uv + vec2<f32>(jit - jolt, jit * 0.6);
+        // 2-axis hash judder (discrete 30Hz jumps read violent; sine reads gentle),
+        // ferocious during gusts, plus a bigger downwind shove.
+        let j2 = vec2<f32>(hash21(vec2<f32>(floor(t * 30.0), 1.0)) - 0.5,
+                           hash21(vec2<f32>(floor(t * 30.0), 6.0)) - 0.5);
+        let jit = j2 * (0.006 + 0.014 * g.x);
+        let jolt = g.x * 0.030;                                    // shove downwind (-x)
+        let uvw = uv + vec2<f32>(jit.x - jolt, jit.y * 0.8);
         a = base_mask(uvw, 0.0);
         // Top edge luffs like fabric: a traveling ripple, gust-enveloped.
         let flap = (0.5 + 0.5 * sin(uv.x * 30.0 - t * 26.0)) * 0.018 * (0.4 + 1.2 * g.x);
@@ -810,9 +817,11 @@ fn window_alpha(uv: vec2<f32>, t: f32, cond: i32, intensity: f32) -> f32 {
         let bulge = smoothstep(0.52, 0.61, ph) * (1.0 - smoothstep(0.68, 0.76, ph)) * 0.045;
         let quake = smoothstep(0.56, 0.61, ph) * (1.0 - smoothstep(0.80, 0.85, ph));
         // The window ROCKS through the crash: rotation about center + hard 2-axis shake.
-        let ang = sin(t * 33.0) * 0.02 * quake;
+        let ang = sin(t * 33.0) * 0.045 * quake;
         let uvr = (uv - vec2<f32>(0.5, 0.5)) * rot(ang) + vec2<f32>(0.5, 0.5);
-        let sh = vec2<f32>(sin(t * 47.0), cos(t * 39.0)) * 0.016 * quake;
+        let jmp = vec2<f32>(hash21(vec2<f32>(floor(t * 24.0), 3.0)) - 0.5,
+                            hash21(vec2<f32>(floor(t * 24.0), 8.0)) - 0.5);
+        let sh = (vec2<f32>(sin(t * 47.0), cos(t * 39.0)) * 0.022 + jmp * 0.030) * quake;
         a = base_mask(uvr + sh, -bulge);
         // Pieces tear off the top edge and are flung during the crash.
         if (quake > 0.3) {
