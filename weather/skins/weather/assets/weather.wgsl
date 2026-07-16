@@ -620,9 +620,48 @@ fn wind_c(uv: vec2<f32>, t: f32, sky: Sky, intensity: f32) -> vec3<f32> {
 
 // SYNC: 32s period and the 0.60..0.74 engulf window mirror Tsunami.swift. Change together.
 fn tsunami_phase() -> f32 { return fract(u.cond_age / 32.0); }
-// Task-3 placeholder: real ocean arc replaces this.
+
+// ---- Tsunami (demo condition 7): a 32s arc — calm ocean, swell, wall, CRASH (full
+// engulf; the host blanks the UI in sync), recede. Layered 2D ocean, no ray-march. ----
 fn tsunami_c(uv: vec2<f32>, t: f32, sky: Sky, intensity: f32) -> vec3<f32> {
-    return sky_dome(view_ray(uv), sun_dir(u.sun), u.sun);
+    let ph = tsunami_phase();
+    let day = sky.daylight;
+    var col = sky_dome(view_ray(uv), sun_dir(u.sun), u.sun);
+    // Sea level (uv.y of the surface): calm 0.80 -> swell 0.70 -> wall to ~0.05 -> restore.
+    var level = 0.80;
+    level = level - smoothstep(0.0, 0.45, ph) * 0.10;
+    level = level - smoothstep(0.45, 0.62, ph) * 0.75;
+    level = level + smoothstep(0.74, 0.95, ph) * 0.85;
+    // 4 parallax wave bands stacked below `level`, each fbm-displaced, nearer = darker + wilder.
+    let chop = 1.0 + smoothstep(0.30, 0.60, ph) * 2.0;            // seas roughen as it builds
+    for (var k = 0; k < 4; k = k + 1) {
+        let fk = f32(k);
+        let wob = (fbm(vec2<f32>(uv.x * (2.0 + fk * 1.3) + t * (0.25 + fk * 0.18), fk * 3.7)) - 0.5) * chop;
+        let surf = level + fk * 0.030 + wob * (0.025 + fk * 0.012);
+        let m = smoothstep(surf, surf + 0.012, uv.y);
+        let water = mix(vec3<f32>(0.10, 0.34, 0.44), vec3<f32>(0.02, 0.13, 0.21), fk / 3.0);
+        col = mix(col, water * mix(0.35, 1.0, day), m * 0.85);
+        // Foam crest on each band, brightest when seas are rough.
+        col = col + vec3<f32>(0.90, 0.95, 1.0)
+                  * smoothstep(0.010, 0.0, abs(uv.y - surf)) * (0.25 + 0.5 * chop * abs(wob));
+    }
+    // Spray during rise/crash: fast upward-streaking particles above the surface.
+    let spray_amt = smoothstep(0.45, 0.60, ph) * (1.0 - smoothstep(0.74, 0.80, ph));
+    if (spray_amt > 0.0) {
+        let sp = snow_layer2(vec2<f32>(uv.x, 1.0 - uv.y), t * 2.5, 16.0, 0.8, 6.0, 0.05, 0.06);
+        col = col + vec3<f32>(0.85, 0.92, 0.97) * sp * spray_amt * 0.6;
+    }
+    // Engulf: full-screen underwater — deep teal, caustic shimmer, rising bubbles.
+    let uw = smoothstep(0.58, 0.62, ph) * (1.0 - smoothstep(0.72, 0.76, ph));
+    if (uw > 0.0) {
+        let caust = fbm(uv * 6.0 + vec2<f32>(t * 0.8, -t * 0.5))
+                  * fbm(uv * 9.0 - vec2<f32>(t * 0.6, t * 0.4));
+        var deep = vec3<f32>(0.03, 0.17, 0.25) + vec3<f32>(0.18, 0.45, 0.50) * caust;
+        let bub = snow_layer2(vec2<f32>(uv.x, 1.0 - uv.y), t, 14.0, 0.5, 9.0, 0.05, 0.0);
+        deep = deep + vec3<f32>(0.7, 0.85, 0.9) * bub * 0.5;
+        col = mix(col, deep * mix(0.5, 1.0, day), uw);
+    }
+    return col;
 }
 
 // Snow pile height in uv units at column x. Grows linearly to full size over 150s.
@@ -733,7 +772,20 @@ fn window_alpha(uv: vec2<f32>, t: f32, cond: i32, intensity: f32) -> f32 {
             a = a * (1.0 - clamp(ie.x, 0.0, 1.0) * 0.9 * smoothstep(0.06, 0.0, dd));
         }
     } else if (cond == 7) {
-        // Tsunami window work arrives with the ocean (Task 3); base mask until then.
+        let ph = tsunami_phase();
+        // Impact bulge: the window swells outward as the wall arrives, peaking at the crash.
+        let bulge = smoothstep(0.45, 0.62, ph) * (1.0 - smoothstep(0.66, 0.74, ph)) * 0.012;
+        a = base_mask(uv, -bulge);
+        // Recede: water sheets off — heavy streams hanging below the bottom edge + side runs.
+        let shed = smoothstep(0.74, 0.78, ph) * (1.0 - smoothstep(0.92, 1.0, ph));
+        if (shed > 0.0) {
+            let stream = fbm(vec2<f32>(x * 10.0, t * 1.4));
+            let ext = smoothstep(0.9, 1.0, uv.y) * smoothstep(0.25, 0.75, stream) * shed;
+            a = max(a, ext * base_mask(vec2<f32>(uv.x, 0.5), 0.0));   // streams hang below
+            let side_d = min(uv.x, 1.0 - uv.x);
+            a = max(a, shed * smoothstep(0.012, 0.0, side_d)
+                        * smoothstep(0.35, 0.75, fbm(vec2<f32>(uv.y * 8.0, t + x))) * 0.8);
+        }
     }
     return clamp(a, 0.0, 1.0);
 }
