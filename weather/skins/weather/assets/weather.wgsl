@@ -105,13 +105,16 @@ fn cloud_density(p: vec3<f32>, t: f32, cp: CloudParams) -> f32 {
     let base = fbm3d(q);
     // Vertical profile: densest mid-slab, feathered top/bottom.
     let hprof = smoothstep(1.5, 1.9, p.y) * smoothstep(3.6, 2.7, p.y);
-    return clamp((base - (1.0 - cp.coverage)) * 2.4, 0.0, 1.0) * hprof;
+    // Threshold spans the noise's real value range (~0.30..0.62), not [0,1].
+    let thr = mix(0.62, 0.30, cp.coverage);
+    return clamp((base - thr) * 4.0, 0.0, 1.0) * hprof;
 }
 // Cheap 2-octave density for the per-step sun tap (shadow term needs no fine detail).
 fn cloud_density_lo(p: vec3<f32>, t: f32, cp: CloudParams) -> f32 {
     let q = p * cp.scale + vec3<f32>(t * cp.speed, 0.0, t * cp.speed * 0.35);
     let hprof = smoothstep(1.5, 1.9, p.y) * smoothstep(3.6, 2.7, p.y);
-    return clamp((fbm3d2(q) - (1.0 - cp.coverage)) * 2.4, 0.0, 1.0) * hprof;
+    let thr = mix(0.62, 0.30, cp.coverage);
+    return clamp((fbm3d2(q) - thr) * 4.0, 0.0, 1.0) * hprof;
 }
 fn march_clouds(uv: vec2<f32>, rd: vec3<f32>, t: f32, sd: vec3<f32>,
                 key_col: vec3<f32>, amb_col: vec3<f32>, cp: CloudParams,
@@ -123,7 +126,7 @@ fn march_clouds(uv: vec2<f32>, rd: vec3<f32>, t: f32, sd: vec3<f32>,
     let n = cp.steps;
     let dt = (t1 - t0) / f32(n);
     // Per-pixel dithered start (grain pass hides the stepping).
-    var tt = t0 + dt * hash21(uv * u.res);
+    var tt = t0 + dt * 0.7 * hash21(uv * u.res);
     var trans = 1.0;
     var acc = vec3<f32>(0.0);
     let albedo = mix(vec3<f32>(1.0, 1.0, 1.0), vec3<f32>(0.22, 0.24, 0.30), cp.dark);
@@ -133,15 +136,19 @@ fn march_clouds(uv: vec2<f32>, rd: vec3<f32>, t: f32, sd: vec3<f32>,
         if (trans < 0.10) { break; }
         let p = ro + rd * tt;
         // Two-tier sampling: a cheap 2-octave probe rejects empty space before paying
-        // for the full-detail density (cloud fields are ~half empty).
-        if (cloud_density_lo(p, t, cp) < 0.015) { tt = tt + dt; continue; }
+        // for the full-detail density. Only worth it in sparse fields — dense storm
+        // cells never reject, so the probe would be pure overhead there.
+        if (cp.coverage < 0.7 && cloud_density_lo(p, t, cp) < 0.015) { tt = tt + dt; continue; }
         let dens = cloud_density(p, t, cp);
         if (dens > 0.012) {
             // 1-tap sun shadow (Beer's law, 2-octave density) + powder darkening in cores.
-            let ldens = cloud_density_lo(p + sd * 0.5, t, cp);
-            let shadow = exp(-ldens * 2.4);
+            // Near-black storm cells skip the tap — their shading is ambient + flash.
+            var shadow = 0.45;
+            if (cp.dark <= 0.7) {
+                shadow = exp(-cloud_density_lo(p + sd * 0.5, t, cp) * 2.4);
+            }
             let powder = 1.0 - exp(-dens * 4.5);
-            var lit = albedo * (key_col * shadow * phase * powder + amb_col * 0.4);
+            var lit = albedo * (key_col * (shadow * phase * powder + 0.15) + amb_col * 0.75);
             // Storm interior flash: point light inside the cell during a strike.
             if (flash_amt > 0.001) {
                 let fd = p - flash_pos;
@@ -153,7 +160,10 @@ fn march_clouds(uv: vec2<f32>, rd: vec3<f32>, t: f32, sd: vec3<f32>,
         }
         tt = tt + dt;
     }
-    return vec4<f32>(acc, 1.0 - trans);
+    // Atmospheric perspective: distant (near-horizon) cloud fades into the sky instead of
+    // stacking into a muddy wall at the bottom of the dome.
+    let dist_fade = exp(-max(t0 - 8.0, 0.0) * 0.10);
+    return vec4<f32>(acc * dist_fade, (1.0 - trans) * dist_fade);
 }
 
 // 3-octave fbm for far/cheap layers (perf budget: far planes never use the 5-octave fbm).
@@ -294,12 +304,6 @@ fn clear_c(uv: vec2<f32>, t: f32, sky: Sky, intensity: f32) -> vec3<f32> {
     let rd = view_ray(uv);
     let sd = sun_dir(u.sun);
     var col = sky_dome(rd, sd, u.sun);
-    // Sparse fair-weather wisps: short march, low coverage (drawn under the stars/moon).
-    let cpw = CloudParams(0.18 + intensity * 0.3, 0.05, 0.03, 0.5, 8);
-    let clw = march_clouds(uv, rd, t, sd, sky.key,
-                           mix(vec3<f32>(0.08, 0.09, 0.15), vec3<f32>(0.6, 0.68, 0.8), day),
-                           cpw, vec3<f32>(0.0, 0.0, 0.0), 0.0);
-    col = col * (1.0 - clw.a) + clw.rgb;
     // Two-layer starfield: far = dim + dense (offset/scaled grid), near = bright + sparse.
     let starvis = smoothstep(0.15, -0.25, u.sun);
     col = col + vec3<f32>(0.85, 0.88, 1.0) * stars(uv * 1.9 + vec2<f32>(3.7, 1.3), t * 0.7) * starvis * 0.35;
@@ -327,8 +331,8 @@ fn cloud_c(uv: vec2<f32>, t: f32, sky: Sky, intensity: f32) -> vec3<f32> {
     // Cloud-break moment: a real coverage gap sweeps through (drives coverage down),
     // letting a god-ray shaft cross the scene.
     let mb = moment(t, 0.05, 0.6, 9.0);
-    let cover = clamp(0.45 + 0.35 * intensity - mb.x * 0.25, 0.05, 0.9);
-    let cp = CloudParams(cover, 0.12, 0.05, 0.42, 16);
+    let cover = clamp(0.25 + 0.35 * intensity - mb.x * 0.25, 0.05, 0.62);
+    let cp = CloudParams(cover, 0.12, 0.05, 0.42, 14);
     let amb = mix(vec3<f32>(0.10, 0.11, 0.17), vec3<f32>(0.55, 0.62, 0.75), day);
     let cl = march_clouds(uv, rd, t, sd, sky.key, amb, cp, vec3<f32>(0.0, 0.0, 0.0), 0.0);
     col = col * (1.0 - cl.a) + cl.rgb;

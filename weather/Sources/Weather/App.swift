@@ -57,6 +57,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let env = ProcessInfo.processInfo.environment
         if let c = env["WX_COND"].flatMap(Double.init) { host.conditionOverride = c }
         if let s = env["WX_SUN"].flatMap(Double.init) { host.sunOverride = s }
+        if let i = env["WX_INT"].flatMap(Double.init) { host.intensityOverride = i }
+        if let a = env["WX_AGE"].flatMap(Double.init) { host.backdateConditionChange(seconds: a) }
         if let p = env["WX_POS"] {
             let parts = p.split(separator: ",").compactMap { Double($0) }
             if parts.count == 2, let screen = NSScreen.main {
@@ -64,6 +66,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 window.setFrameOrigin(NSPoint(x: parts[0], y: topLeftY))
             }
         }
+
+        // Report the final window frame (global bottom-left coords) + main-screen height so
+        // scripted verification can compute exact capture regions instead of guessing.
+        let sh = NSScreen.screens.first?.frame.height ?? 0
+        FileHandle.standardError.write("WX_FRAME \(window.frame.origin.x),\(window.frame.origin.y),\(window.frame.width),\(window.frame.height) SCREEN_H \(sh)\n".data(using: .utf8)!)
 
         if env["WX_SHY"] != nil {
             // Verification/automation mode: show the window without stealing focus.

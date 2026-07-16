@@ -23,6 +23,12 @@ final class WeatherHost {
         return now.timeIntervalSince(_condChangedAt)
     }
 
+    /// Presenter/automation: pretend the current condition started `seconds` ago (WX_AGE env).
+    /// Lets demos/verification jump straight to grown snow piles etc.
+    func backdateConditionChange(seconds: Double) {
+        lock.lock(); _condChangedAt = Date().addingTimeInterval(-seconds); lock.unlock()
+    }
+
     /// The current weather state. Thread-safe: the engine reads via the host vtable on the
     /// RENDER thread (num/str/rowCount/rowString) while the app mutates from the MAIN thread
     /// (the live WeatherService refresh swaps the whole model). All access is lock-guarded,
@@ -69,6 +75,14 @@ final class WeatherHost {
         set { lock.lock(); _seasonOverride = newValue; lock.unlock() }
     }
 
+    /// Presenter/automation override for the shader intensity uniform only (WX_INT env).
+    /// Lock-guarded like `model`; `nil` = live. Forces only `wx_intensity`.
+    var intensityOverride: Double? {
+        get { lock.lock(); defer { lock.unlock() }; return _intensityOverride }
+        set { lock.lock(); _intensityOverride = newValue; lock.unlock() }
+    }
+    private var _intensityOverride: Double?
+
     /// Parse the `i` out of "wx_hour_<i>_<suffix>", or nil.
     private func hourIndex(_ key: String, suffix: String) -> Int? {
         let prefix = "wx_hour_"
@@ -86,7 +100,7 @@ final class WeatherHost {
             // `Date()` on every read: the sky evolves continuously with zero timers.
             return sunOverride ?? SunMath.sunElevation(now: Date(), sunrise: model.sunrise, sunset: model.sunset)
         case "wx_temp":      return model.temp
-        case "wx_intensity": return model.intensity
+        case "wx_intensity": return intensityOverride ?? model.intensity
         case "wx_season":    return seasonOverride ?? model.season
         case "wx_cond_age":  return conditionAge()
         default:             return nil
