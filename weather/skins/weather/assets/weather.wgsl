@@ -641,13 +641,14 @@ fn tsunami_c(uv: vec2<f32>, t: f32, sky: Sky, intensity: f32) -> vec3<f32> {
     level = level + smoothstep(0.74, 0.86, ph) * 0.85;   // fast drain — text returns as the hero zone clears
     // Crash quake: violent high-frequency shake through the impact.
     let quake = smoothstep(0.56, 0.61, ph) * (1.0 - smoothstep(0.80, 0.85, ph));
-    level = level + sin(t * 47.0) * 0.012 * quake;
+    level = level + sin(t * 47.0) * 0.022 * quake
+                  + sin(t * 31.0 + uv.x * 3.0) * 0.015 * quake;   // traveling slosh-rock
     // 4 parallax wave bands stacked below `level`, each fbm-displaced, nearer = darker + wilder.
     let chop = 1.0 + smoothstep(0.30, 0.58, ph) * 3.5;            // seas turn violent as it builds
     for (var k = 0; k < 4; k = k + 1) {
         let fk = f32(k);
         let wob = (fbm(vec2<f32>(uv.x * (2.0 + fk * 1.3) + t * (0.25 + fk * 0.18), fk * 3.7)) - 0.5) * chop;
-        let surf = level + fk * 0.030 + wob * (0.025 + fk * 0.012);
+        let surf = level + fk * 0.030 + wob * (0.025 + fk * 0.012) * (1.0 + lurch * 2.5);
         let m = smoothstep(surf, surf + 0.012, uv.y);
         let water = mix(vec3<f32>(0.10, 0.34, 0.44), vec3<f32>(0.02, 0.13, 0.21), fk / 3.0);
         col = mix(col, water * mix(0.35, 1.0, day), m * 0.85);
@@ -655,14 +656,25 @@ fn tsunami_c(uv: vec2<f32>, t: f32, sky: Sky, intensity: f32) -> vec3<f32> {
         col = col + vec3<f32>(0.90, 0.95, 1.0)
                   * smoothstep(0.010, 0.0, abs(uv.y - surf)) * (0.25 + 0.5 * chop * abs(wob));
     }
+    // Whitewater streaming down the towering wave face.
+    let face = smoothstep(level, level + 0.35, uv.y) * (1.0 - smoothstep(level + 0.35, level + 0.6, uv.y)) * lurch;
+    if (face > 0.0) {
+        let wf = rain_streaks(uv, t * 1.8, 1.0, 0.02, 2.5);
+        col = col + vec3<f32>(0.85, 0.90, 0.96) * wf * face * 0.7;
+    }
     // Spray during rise/crash: fast upward-streaking particles above the surface.
     let spray_amt = smoothstep(0.50, 0.60, ph) * (1.0 - smoothstep(0.74, 0.80, ph));
     if (spray_amt > 0.0) {
         let sp = snow_layer2(vec2<f32>(uv.x, 1.0 - uv.y), t * 2.5, 16.0, 0.8, 6.0, 0.05, 0.06);
         col = col + vec3<f32>(0.85, 0.92, 0.97) * sp * spray_amt * 1.1;
         // Foam explosion at the moment of impact.
-        let burst = smoothstep(0.595, 0.615, ph) * (1.0 - smoothstep(0.63, 0.70, ph));
+        let burst = smoothstep(0.595, 0.615, ph) * (1.0 - smoothstep(0.65, 0.74, ph));
         col = col + vec3<f32>(0.95, 0.97, 1.0) * fbm(uv * 8.0 + vec2<f32>(t * 3.0, -t * 2.0)) * burst * 0.9;
+        // Slam-flash: a half-second full-frame white hit at the instant of impact.
+        col = col + vec3<f32>(1.0, 1.0, 1.0) * smoothstep(0.598, 0.606, ph) * (1.0 - smoothstep(0.610, 0.622, ph)) * 0.5;
+        // Foam chunks flung across the frame.
+        let chunks = snow_layer2(vec2<f32>(uv.x + t * 0.6, 1.0 - uv.y), t * 1.5, 7.0, 1.4, 12.0, 0.18, 0.05);
+        col = col + vec3<f32>(0.92, 0.95, 1.0) * chunks * burst * 0.8;
     }
     // Engulf: full-screen underwater — deep teal, caustic shimmer, rising bubbles.
     let uw = smoothstep(0.58, 0.62, ph) * (1.0 - smoothstep(0.78, 0.82, ph));
@@ -795,10 +807,26 @@ fn window_alpha(uv: vec2<f32>, t: f32, cond: i32, intensity: f32) -> f32 {
     } else if (cond == 7) {
         let ph = tsunami_phase();
         // Impact bulge: the window swells outward as the wall arrives, peaking at the crash.
-        let bulge = smoothstep(0.52, 0.61, ph) * (1.0 - smoothstep(0.68, 0.76, ph)) * 0.030;
+        let bulge = smoothstep(0.52, 0.61, ph) * (1.0 - smoothstep(0.68, 0.76, ph)) * 0.045;
         let quake = smoothstep(0.56, 0.61, ph) * (1.0 - smoothstep(0.80, 0.85, ph));
-        let sh = vec2<f32>(sin(t * 47.0), cos(t * 39.0)) * 0.006 * quake;
-        a = base_mask(uv + sh, -bulge);
+        // The window ROCKS through the crash: rotation about center + hard 2-axis shake.
+        let ang = sin(t * 33.0) * 0.02 * quake;
+        let uvr = (uv - vec2<f32>(0.5, 0.5)) * rot(ang) + vec2<f32>(0.5, 0.5);
+        let sh = vec2<f32>(sin(t * 47.0), cos(t * 39.0)) * 0.016 * quake;
+        a = base_mask(uvr + sh, -bulge);
+        // Pieces tear off the top edge and are flung during the crash.
+        if (quake > 0.3) {
+            for (var k = 0; k < 2; k = k + 1) {
+                let fk = f32(k);
+                let m2 = moment(u.cond_age, 1.4, 0.8, 30.0 + fk);
+                if (m2.w > 0.5) {
+                    let cx = 0.2 + 0.6 * m2.z + m2.y * 0.5 * (fk - 0.5);
+                    let cy = -0.01 + m2.y * 0.22;
+                    let dd2 = length((uv - vec2<f32>(cx, cy)) * vec2<f32>(1.0, u.res.y / u.res.x));
+                    a = max(a, smoothstep(0.016, 0.009, dd2) * (1.0 - m2.y) * quake);
+                }
+            }
+        }
         // Sides warp with the water: pressure undulation grows through the build, turns
         // violent in the quake, and wavers like refraction while engulfed.
         let press = smoothstep(0.30, 0.60, ph);
