@@ -19,25 +19,25 @@ final class ConditionOverrideTests: XCTestCase {
     func testCycleForwardWrapsThroughLive() {
         XCTAssertEqual(ConditionCycle.next(nil), 0)
         XCTAssertEqual(ConditionCycle.next(0), 1)
-        XCTAssertEqual(ConditionCycle.next(4), 5)
-        XCTAssertEqual(ConditionCycle.next(5), nil)   // 5 -> live
+        XCTAssertEqual(ConditionCycle.next(5), 6)     // into the demo conditions
+        XCTAssertEqual(ConditionCycle.next(7), nil)   // 7 -> live
     }
 
     func testCycleBackwardWrapsThroughLive() {
-        XCTAssertEqual(ConditionCycle.prev(nil), 5)
-        XCTAssertEqual(ConditionCycle.prev(5), 4)
+        XCTAssertEqual(ConditionCycle.prev(nil), 7)
+        XCTAssertEqual(ConditionCycle.prev(7), 6)
         XCTAssertEqual(ConditionCycle.prev(1), 0)
         XCTAssertEqual(ConditionCycle.prev(0), nil)   // 0 -> live
     }
 
-    func testIsDayOverrideForcesOnlyWxIsDay() {
-        let host = WeatherHost(model: .sample)   // sample.isDay == 1
-        XCTAssertEqual(host.num("wx_is_day"), 1)
-        host.isDayOverride = 0
-        XCTAssertEqual(host.num("wx_is_day"), 0)          // override wins
+    func testSunOverrideForcesOnlyWxSun() {
+        let host = WeatherHost(model: .sample)
+        host.sunOverride = -1.0
+        XCTAssertEqual(host.num("wx_sun"), -1.0)           // override wins
         XCTAssertEqual(host.num("wx_condition"), WeatherModel.sample.condition) // others live
-        host.isDayOverride = nil
-        XCTAssertEqual(host.num("wx_is_day"), 1)          // back to live
+        host.sunOverride = nil
+        let live = host.num("wx_sun")!
+        XCTAssertTrue(live >= -1 && live <= 1)             // back to live (wall-clock value)
     }
 
     func testSeasonOverrideForcesOnlyWxSeason() {
@@ -57,8 +57,8 @@ final class ConditionOverrideTests: XCTestCase {
         XCTAssertEqual(ConditionCycle.next(3, upTo: 3), nil)   // season wraps at 3
         XCTAssertEqual(ConditionCycle.prev(nil, upTo: 3), 3)
         XCTAssertEqual(ConditionCycle.prev(0, upTo: 3), nil)
-        // Existing 1-arg condition cycle still works (upTo 5):
-        XCTAssertEqual(ConditionCycle.next(5), nil)
+        // 1-arg condition cycle spans the demo conditions (upTo 7):
+        XCTAssertEqual(ConditionCycle.next(7), nil)
         XCTAssertEqual(ConditionCycle.next(nil), 0)
     }
 }

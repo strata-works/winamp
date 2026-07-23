@@ -6,7 +6,8 @@ final class WeatherHostTests: XCTestCase {
 
     func testShaderUniformsAreNumeric() {
         XCTAssertEqual(host.num("wx_condition"), WeatherModel.sample.condition)
-        XCTAssertEqual(host.num("wx_is_day"), WeatherModel.sample.isDay)
+        let sun = host.num("wx_sun")!            // live value depends on wall-clock
+        XCTAssertTrue(sun >= -1 && sun <= 1)
         XCTAssertEqual(host.num("wx_temp"), WeatherModel.sample.temp)
         XCTAssertEqual(host.num("wx_intensity"), WeatherModel.sample.intensity)
         XCTAssertEqual(host.num("wx_season"), WeatherModel.sample.season)

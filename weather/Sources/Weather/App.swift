@@ -51,8 +51,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         bridge = b
         view.bridge = b
 
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        // Launch-time presenter/automation overrides (also used by scripted verification):
+        //   WX_COND=0..5 forces the condition · WX_SUN=-1..1 forces sun elevation ·
+        //   WX_POS="x,y" positions the window (screen points, top-left origin).
+        let env = ProcessInfo.processInfo.environment
+        if let c = env["WX_COND"].flatMap(Double.init) { host.conditionOverride = c }
+        if let s = env["WX_SUN"].flatMap(Double.init) { host.sunOverride = s }
+        if let i = env["WX_INT"].flatMap(Double.init) { host.intensityOverride = i }
+        if let a = env["WX_AGE"].flatMap(Double.init) { host.backdateConditionChange(seconds: a) }
+        if let p = env["WX_POS"] {
+            let parts = p.split(separator: ",").compactMap { Double($0) }
+            if parts.count == 2, let screen = NSScreen.main {
+                let topLeftY = screen.frame.maxY - parts[1] - CGFloat(canvasH)
+                window.setFrameOrigin(NSPoint(x: parts[0], y: topLeftY))
+            }
+        }
+
+        // Report the final window frame (global bottom-left coords) + main-screen height so
+        // scripted verification can compute exact capture regions instead of guessing.
+        let sh = NSScreen.screens.first?.frame.height ?? 0
+        FileHandle.standardError.write("WX_FRAME \(window.frame.origin.x),\(window.frame.origin.y),\(window.frame.width),\(window.frame.height) SCREEN_H \(sh)\n".data(using: .utf8)!)
+
+        if env["WX_SHY"] != nil {
+            // Verification/automation mode: show the window without stealing focus.
+            window.orderFrontRegardless()
+        } else {
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+        }
 
         refresh()  // launch fetch
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 15 * 60, repeats: true) { [weak self] _ in
@@ -80,12 +106,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // Presenter controls (overrides force only the shader; hero/hourly/daily text stays live):
-    //   →/← tour condition · D toggles day/night · S cycles season · R refetches.
+    //   →/← tour condition · D cycles dawn/noon/dusk/night · S cycles season · R refetches.
     private func handleKey(_ code: UInt16) {
         switch code {
         case 124: host.conditionOverride = ConditionCycle.next(host.conditionOverride)          // →
         case 123: host.conditionOverride = ConditionCycle.prev(host.conditionOverride)          // ←
-        case 2:   host.isDayOverride = ConditionCycle.next(host.isDayOverride, upTo: 1)          // D
+        case 2:   host.sunOverride = ConditionCycle.next(host.sunOverride, stops: SunMath.presenterStops) // D
         case 1:   host.seasonOverride = ConditionCycle.next(host.seasonOverride, upTo: 3)        // S
         case 15:  refresh()                                                                       // R
         default:  break
