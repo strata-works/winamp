@@ -50,3 +50,32 @@ list{ collection = "daily", x = 24, y = 312, w = W - 48, h = 238, row_height = 3
         { bind = "hi",    font = F_PRI, right = 70, y = 8, size = 15, color = PRI },
         { bind = "lo",    font = F_SEC, right = 10, y = 8, size = 15, halign = "right", color = LO },
       } }
+
+-- ── Location search overlay (M4) ──────────────────────────────────────────────
+-- Everything here is gated on the host bool `search_active`: the two value_fill
+-- panels draw nothing when it is 0, and every text line binds a host string that
+-- is "" while inactive. Declared last, so it composites on top of the scene.
+local SEARCH_ROWS = 5
+local cardX, cardY = 28, 150
+local cardW, cardH = W - 56, 320
+
+-- Full-scene dim, then the card. value_fill draws nothing at value 0, full color at 1.
+value_fill{ path = rect{ x = 0, y = 0, w = W, h = H }, value = "search_active",
+            color = { r = 6, g = 9, b = 16, a = 150 }, direction = "down" }
+value_fill{ path = rounded_rect{ x = cardX, y = cardY, w = cardW, h = cardH, radius = 16 },
+            value = "search_active",
+            color = { r = 14, g = 18, b = 28, a = 235 }, direction = "down" }
+
+-- Query line.
+text{ value = "search_query", font = F_PRI, x = cardX + 22, y = cardY + 20, size = 22, color = PRI }
+-- Status line (Type a city… / Searching… / No matches / Offline). "" while results show.
+text{ value = "search_status", font = F_SEC, x = cardX + 22, y = cardY + 74, size = 14, color = SEC }
+-- Result rows; the selected one carries a "▸" marker baked into the label host-side.
+local searchRowY0 = cardY + 70
+for i = 0, SEARCH_ROWS - 1 do
+  text{ value = "search_row_" .. i .. "_label", font = F_SEC,
+        x = cardX + 18, y = searchRowY0 + i * 32, size = 15, color = PRI }
+end
+-- Navigation hint pinned near the card bottom.
+text{ value = "search_hint", font = F_SEC, x = cardX + 22, y = cardY + cardH - 30,
+      size = 12, halign = "left", color = SEC }
