@@ -135,7 +135,10 @@ final class WeatherHost {
         case "search_hint":   return s.active ? "↑↓ select · ⏎ go · esc cancel" : ""
         default:
             if let i = indexBetween(key, prefix: "search_row_", suffix: "_label") {
-                guard s.active, i >= 0, i < s.results.count else { return "" }
+                // Gate on `.results`, not just non-empty: while a new query debounces, the status
+                // reads `.querying` but the previous results linger — without this the stale rows
+                // would draw under the "Searching…" status line.
+                guard s.active, s.status == .results, i >= 0, i < s.results.count else { return "" }
                 // "‣" (U+2023 triangular bullet), NOT "▸" (U+25B8): the bundled Inter has no
                 // glyph for the small right triangle and renders it as tofu; the bullet is present.
                 let marker = (i == s.selected) ? "‣  " : "    "
