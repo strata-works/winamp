@@ -70,7 +70,7 @@ value_fill{ path = rounded_rect{ x = cardX, y = cardY, w = cardW, h = cardH, rad
 text{ value = "search_query", font = F_PRI, x = cardX + 22, y = cardY + 20, size = 22, color = PRI }
 -- Status line (Type a city… / Searching… / No matches / Offline). "" while results show.
 text{ value = "search_status", font = F_SEC, x = cardX + 22, y = cardY + 74, size = 14, color = SEC }
--- Result rows; the selected one carries a "▸" marker baked into the label host-side.
+-- Result rows; the selected one carries a "‣" marker baked into the label host-side.
 local searchRowY0 = cardY + 70
 for i = 0, SEARCH_ROWS - 1 do
   text{ value = "search_row_" .. i .. "_label", font = F_SEC,
