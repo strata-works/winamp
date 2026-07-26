@@ -136,7 +136,9 @@ final class WeatherHost {
         default:
             if let i = indexBetween(key, prefix: "search_row_", suffix: "_label") {
                 guard s.active, i >= 0, i < s.results.count else { return "" }
-                let marker = (i == s.selected) ? "▸  " : "    "
+                // "‣" (U+2023 triangular bullet), NOT "▸" (U+25B8): the bundled Inter has no
+                // glyph for the small right triangle and renders it as tofu; the bullet is present.
+                let marker = (i == s.selected) ? "‣  " : "    "
                 return marker + s.results[i].label
             }
         }

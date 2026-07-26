@@ -38,7 +38,7 @@ final class WeatherHostSearchTests: XCTestCase {
         let host = WeatherHost(model: .sample)
         host.search = activeSearch()                          // selected index 1
         XCTAssertEqual(host.str("search_row_0_label"), "    Cape Town, Western Cape, South Africa")
-        XCTAssertEqual(host.str("search_row_1_label"), "▸  Cape Coral, Florida, United States")
+        XCTAssertEqual(host.str("search_row_1_label"), "‣  Cape Coral, Florida, United States")
         XCTAssertEqual(host.str("search_row_2_label"), "")   // only 2 results
     }
 
