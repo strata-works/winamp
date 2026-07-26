@@ -83,19 +83,32 @@ final class WeatherHost {
     }
     private var _intensityOverride: Double?
 
+    private var _search = LocationSearch()
+
+    /// The location-search overlay state. Set from the MAIN thread (key handler / debounce);
+    /// read from the RENDER thread via `num`/`str`. Lock-guarded like `model`.
+    var search: LocationSearch {
+        get { lock.lock(); defer { lock.unlock() }; return _search }
+        set { lock.lock(); _search = newValue; lock.unlock() }
+    }
+
     /// True while the tsunami demo condition has the window engulfed — the whole UI drowns.
     private var uiDrowned: Bool {
         (conditionOverride ?? model.condition) == 7 && Tsunami.isEngulfed(age: conditionAge())
     }
 
-    /// Parse the `i` out of "wx_hour_<i>_<suffix>", or nil.
-    private func hourIndex(_ key: String, suffix: String) -> Int? {
-        let prefix = "wx_hour_"
+    /// Parse the integer `i` out of "<prefix><i><suffix>", or nil.
+    private func indexBetween(_ key: String, prefix: String, suffix: String) -> Int? {
         guard key.hasPrefix(prefix), key.hasSuffix(suffix) else { return nil }
         let start = key.index(key.startIndex, offsetBy: prefix.count)
         let end = key.index(key.endIndex, offsetBy: -suffix.count)
         guard start <= end else { return nil }
         return Int(key[start..<end])
+    }
+
+    /// Parse the `i` out of "wx_hour_<i>_<suffix>", or nil.
+    private func hourIndex(_ key: String, suffix: String) -> Int? {
+        indexBetween(key, prefix: "wx_hour_", suffix: suffix)
     }
 
     func num(_ key: String) -> Double? {
@@ -108,11 +121,31 @@ final class WeatherHost {
         case "wx_intensity": return intensityOverride ?? model.intensity
         case "wx_season":    return seasonOverride ?? model.season
         case "wx_cond_age":  return conditionAge()
+        case "search_active": return search.active ? 1 : 0
         default:             return nil
         }
     }
 
     func str(_ key: String) -> String? {
+        // Search overlay first — must render regardless of the tsunami "drowned" blanking below.
+        let s = search
+        switch key {
+        case "search_query":  return s.active ? s.query : ""
+        case "search_status": return s.active ? s.statusLine : ""
+        case "search_hint":   return s.active ? "↑↓ select · ⏎ go · esc cancel" : ""
+        default:
+            if let i = indexBetween(key, prefix: "search_row_", suffix: "_label") {
+                // Gate on `.results`, not just non-empty: while a new query debounces, the status
+                // reads `.querying` but the previous results linger — without this the stale rows
+                // would draw under the "Searching…" status line.
+                guard s.active, s.status == .results, i >= 0, i < s.results.count else { return "" }
+                // "‣" (U+2023 triangular bullet), NOT "▸" (U+25B8): the bundled Inter has no
+                // glyph for the small right triangle and renders it as tofu; the bullet is present.
+                let marker = (i == s.selected) ? "‣  " : "    "
+                return marker + s.results[i].label
+            }
+        }
+
         if uiDrowned { return "" }   // empty strings skip rendering — the forecast is underwater
         // Snapshot once so the count-check and the index read below see the SAME model — two
         // separate `model` reads could observe different snapshots (TOCTOU → out-of-bounds) once
