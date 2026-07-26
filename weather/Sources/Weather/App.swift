@@ -13,8 +13,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var view: SkinView!
     private var host: WeatherHost!
     private var bridge: CarapaceBridge!
-    private let service = WeatherService()
+    private var service = WeatherService()
     private var refreshTimer: Timer?
+    private let store = LocationStore()
+    private let geocoder: Geocoder = OpenMeteoGeocoder()
+    private var search = LocationSearch()
+    private var searchDebounce: Timer?
 
     private let canvasW = 400
     private let canvasH = 680
@@ -23,6 +27,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.regular)
         installMainMenu()
 
+        // Restore the last-chosen city (falls back to the WeatherService default = Accra).
+        if let loc = store.load() {
+            service = WeatherService(latitude: loc.latitude, longitude: loc.longitude,
+                                     locationName: loc.name)
+        }
+
         // First frame shows the bundled fixture immediately; the launch fetch replaces it.
         host = WeatherHost(model: (try? service.loadBundledFixture()) ?? .sample)
         hostBox.host = host
@@ -30,7 +40,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         view = SkinView(frame: NSRect(x: 0, y: 0, width: canvasW, height: canvasH))
         view.canvasW = Double(canvasW)
         view.canvasH = Double(canvasH)
-        view.onKey = { [weak self] code in self?.handleKey(code) }
+        view.onKey = { [weak self] code, chars in self?.handleKey(code, chars) }
 
         window = SkinWindow(contentRect: NSRect(x: 200, y: 200, width: canvasW, height: canvasH),
                             styleMask: [.borderless, .closable, .miniaturizable],
@@ -106,16 +116,72 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // Presenter controls (overrides force only the shader; hero/hourly/daily text stays live):
-    //   →/← tour condition · D cycles dawn/noon/dusk/night · S cycles season · R refetches.
-    private func handleKey(_ code: UInt16) {
+    //   →/← tour condition · D cycles dawn/noon/dusk/night · S cycles season · R refetches ·
+    //   L opens location search. While searching, keys drive the overlay (see handleSearchKey).
+    private func handleKey(_ code: UInt16, _ chars: String?) {
+        if search.active { handleSearchKey(code, chars); return }
         switch code {
         case 124: host.conditionOverride = ConditionCycle.next(host.conditionOverride)          // →
         case 123: host.conditionOverride = ConditionCycle.prev(host.conditionOverride)          // ←
         case 2:   host.sunOverride = ConditionCycle.next(host.sunOverride, stops: SunMath.presenterStops) // D
         case 1:   host.seasonOverride = ConditionCycle.next(host.seasonOverride, upTo: 3)        // S
         case 15:  refresh()                                                                       // R
+        case 37:  search.enter(); publishSearch()                                                 // L
         default:  break
         }
+    }
+
+    private func publishSearch() { host.search = search }
+
+    private func handleSearchKey(_ code: UInt16, _ chars: String?) {
+        switch code {
+        case 53:      search.exit(); publishSearch(); searchDebounce?.invalidate()   // Esc
+        case 36, 76:  commitSearch()                                                  // Return / Enter
+        case 51:      search.backspace(); publishSearch(); scheduleGeocode()          // Delete
+        case 126:     search.moveSelection(-1); publishSearch()                       // Up
+        case 125:     search.moveSelection(1); publishSearch()                        // Down
+        case 123, 124: break                                                          // ←/→ ignored
+        default:
+            if let s = chars, isPrintable(s) {
+                search.typed(s); publishSearch(); scheduleGeocode()
+            }
+        }
+    }
+
+    /// Accept only visible characters (letters, digits, space, punctuation) — never control/
+    /// function keys, which arrive as non-printable scalars or nil.
+    private func isPrintable(_ s: String) -> Bool {
+        !s.isEmpty && s.unicodeScalars.allSatisfy { $0.value >= 0x20 && $0.value != 0x7F }
+    }
+
+    /// Debounce the network geocode ~250 ms after the last keystroke.
+    private func scheduleGeocode() {
+        searchDebounce?.invalidate()
+        let q = search.query
+        guard !q.isEmpty else { return }   // backspace-to-empty already reset status to .idle
+        searchDebounce = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: false) { [weak self] _ in
+            self?.runGeocode(q)
+        }
+    }
+
+    private func runGeocode(_ q: String) {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let results = try await self.geocoder.search(q)
+                await MainActor.run { self.search.setResults(results, forQuery: q); self.publishSearch() }
+            } catch {
+                await MainActor.run { self.search.setError(forQuery: q); self.publishSearch() }
+            }
+        }
+    }
+
+    private func commitSearch() {
+        guard let r = search.commit() else { return }   // Enter with nothing selectable → ignore
+        service = WeatherService(latitude: r.latitude, longitude: r.longitude, locationName: r.name)
+        store.save(StoredLocation(latitude: r.latitude, longitude: r.longitude, name: r.name))
+        search.exit(); publishSearch(); searchDebounce?.invalidate()
+        refresh()
     }
 
     private func installMainMenu() {

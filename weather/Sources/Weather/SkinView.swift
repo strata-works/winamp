@@ -73,7 +73,7 @@ final class SkinView: NSView {
     override func mouseUp(with e: NSEvent) { dragOrigin = nil; dragStartMouse = nil }
 
     override func keyDown(with e: NSEvent) {
-        onKey?(e.keyCode)
+        onKey?(e.keyCode, e.characters)
     }
-    var onKey: ((UInt16) -> Void)?
+    var onKey: ((UInt16, String?) -> Void)?
 }
