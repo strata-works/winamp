@@ -20,14 +20,16 @@ Two new optional tables, valid on **any** primitive (exactly like `anchor`/`min`
 
 ```lua
 -- 30%-wide sidebar, full height, but never wider than 320px:
+--   frac.w sets width; anchor top+bottom stretches height; left pin keeps x at 0.
 view{ id="nav", x=0, y=34, w=144, h=270,
       anchor={"left","top","bottom"},
       frac={ w=0.30 }, max={ w=320 } }
 
--- content pane fills the remaining 70%:
+-- content pane occupying the remaining 70% (x at 30%, width 70%):
+--   BOTH x and w are fractional — see "independent per-field" below.
 view{ id="app", x=144, y=34, w=336, h=270,
-      anchor={"right","top","bottom"},
-      frac={ x=0.30 } }
+      anchor={"top","bottom"},
+      frac={ x=0.30, w=0.70 } }
 ```
 
 - **`frac = { x?, y?, w?, h? }`** — each present field is a **fraction of the container** along that field's axis: `x` and `w` scale by logical **width**, `y` and `h` by logical **height**. Absent fields stay absolute. Typical range 0–1; values > 1 are allowed (deliberate overflow); negative values clamp to 0.
@@ -40,7 +42,7 @@ The absolute `x/y/w/h` remain **required** and continue to define the design-spa
 Resolution stays per-axis and composes with anchors. Today `resolve_axis(p, e, d, l, near, far, min_e)` returns `(pos, extent)`. It gains three inputs — `max_e: Option<f32>`, `frac_pos: Option<f32>`, `frac_ext: Option<f32>` — and resolves in this order:
 
 1. **Anchor-derived** `(np, ne)` exactly as today (both-pinned → stretch `e+delta`; near → `(p, e)`; far → `(p+delta, e)`; neither → proportional re-center `p*(l/d)`).
-2. **Fractional override (per field):** if `frac_pos` is set, `np = frac_pos * l`; if `frac_ext` is set, `ne = frac_ext * l`. A fractional value overrides **only that one field** — the element's other field on the same axis, and its other axis entirely, still flow through anchors. (This is how the split above composes: `nav` overrides its extent to 30%; `app` overrides its position to 30% and lets the right anchor stretch its extent to fill.)
+2. **Fractional override (per field, independent):** if `frac_pos` is set, `np = frac_pos * l`; if `frac_ext` is set, `ne = frac_ext * l`. A fractional value overrides **only that one field** and does **not** feed back into the other field's anchor computation (extent is still derived from design size + pins, never from a frac-overridden position). So "fill the remaining space" is authored by making **both** position and extent fractional — not by mixing a fractional position with a far-edge anchor. (In the split above: `nav` sets `frac.w=0.30` and lets top/bottom anchors stretch its height; `app` sets `frac.x=0.30` **and** `frac.w=0.70` and lets top/bottom anchors stretch its height. Each references only the container — no sibling awareness. If `nav`'s `max` caps it while `app`'s position stays a pure fraction, a gap opens past the cap — that gap is the visible signature of `max`, not a bug.)
 3. **Clamp extent** to `[min_e, max_e]`: apply `min` first (raise), then `max` (lower). If an author sets `max < min`, `max` wins (documented). Existing negative/​non-finite guards are retained (`ne ≥ 0`, finite `np`).
 
 `resolve_bbox` feeds each axis its own frac fields (`frac.x`/`frac.w` + `min.w`/`max.w` for horizontal; `frac.y`/`frac.h` + `min.h`/`max.h` for vertical).
@@ -83,7 +85,7 @@ Plus: `cargo test --workspace` green; the full local gate (`cargo fmt --all`, cl
 
 ## Demo (SP1 visual proof)
 
-A **new, minimal `carapace-demo` skin** dedicated to showing fractional reflow — a small "layout playground": a proportional **30% sidebar with `max={w=320}`** (`fill{}` chrome, `anchor={"left","top","bottom"}`) and a **content panel filling the remaining 70%** (`frac={x=0.30}`, `anchor={"right","top","bottom"}`), plus a 50/50 splitter row so the proportional behavior is obvious on resize. Pure `fill{}` chrome — no host-content wiring.
+A **new, minimal `carapace-demo` skin** dedicated to showing fractional reflow — a small "layout playground": a proportional **30% sidebar with `max={w=320}`** (`fill{}` chrome, `frac={w=0.30}`, `anchor={"left","top","bottom"}`) and a **content panel occupying the remaining 70%** (`frac={x=0.30, w=0.70}`, `anchor={"top","bottom"}`). Pure `fill{}` chrome — no host-content wiring. On resize the sidebar/content tile proportionally; once the sidebar hits its 320px cap, it stops and the cap becomes visible as a gap before the content pane.
 
 It is a **separate skin**, not an edit to the existing frame skin, specifically so **every existing golden snapshot stays byte-identical** (the backward-compat gate below). The demo already reflows on `WindowEvent::Resized` via `engine.layout(w,h)`; wiring is just registering/selecting the new skin in `carapace-demo`. On resize: the sidebar holds 30% until it caps at 320px, then stops; the content fills the rest.
 
