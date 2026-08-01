@@ -377,3 +377,58 @@ fn no_frac_no_max_is_identity_with_today() {
         }
     );
 }
+
+#[test]
+fn frac_extent_on_vertical_axis() {
+    // frac.h scales by logical HEIGHT (mirror of the width-axis coverage).
+    let anchors = anc(
+        Anchors::from_edges(&["left", "top"]),
+        None,
+        None,
+        Frac {
+            h: Some(0.5),
+            ..Frac::EMPTY
+        },
+    );
+    let r = resolve_bbox(
+        (400.0, 300.0),
+        (400.0, 600.0),
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 100.0,
+            h: 90.0,
+        },
+        anchors,
+    );
+    near(r.h, 300.0); // 0.5 * 600
+    near(r.w, 100.0); // untouched (no frac.w, left-only anchor)
+}
+
+#[test]
+fn negative_fraction_clamps_to_zero() {
+    // A negative frac must clamp to 0 (both position and extent), never produce negatives.
+    let anchors = anc(
+        Anchors::from_edges(&["left", "top"]),
+        None,
+        None,
+        Frac {
+            x: Some(-0.5),
+            w: Some(-0.25),
+            ..Frac::EMPTY
+        },
+    );
+    let r = resolve_bbox(
+        (400.0, 300.0),
+        (1000.0, 300.0),
+        Rect {
+            x: 40.0,
+            y: 0.0,
+            w: 80.0,
+            h: 20.0,
+        },
+        anchors,
+    );
+    near(r.x, 0.0);
+    near(r.w, 0.0);
+}
