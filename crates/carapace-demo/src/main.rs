@@ -165,6 +165,7 @@ const MEDIA_SKINS: &[&str] = &[
     "skins/transport",
     "skins/frame",
     "skins/shaderdemo",
+    "skins/layout",
 ];
 const SYSMON_SKINS: &[&str] = &["skins/sysmon"];
 const INIT_SCALE: u32 = 2;

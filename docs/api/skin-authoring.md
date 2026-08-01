@@ -17,10 +17,23 @@ Reflects `crates/carapace/src/{vocab,script,scene,skin,shape,render}.rs` as of 2
 
 Primitives are Lua globals that each take a single table argument, e.g. `fill{ ... }`. The engine registers one constructor per primitive in `VocabRegistry::base()` (`vocab.rs:569-582`) and wires them data-drivenly (`script.rs:132-166`). The stock set is ten primitives; hosts can register more (see [Custom primitives](#custom-primitives)).
 
-**Two fields work on every primitive** (handled outside each primitive's own `build()`):
+**Layout + role fields work on every primitive** (handled outside each primitive's own `build()`, in `parse_anchors`):
 
-- `anchor = { "left", "right", "top", "bottom" }` + `min = { w =, h = }` — resize pins for frame skins (`parse_anchors`, `script.rs:96-113`). Default is top-left/fixed (`layout.rs:26-33`).
+- `anchor = { "left", "right", "top", "bottom" }` — resize pins for frame skins. A pinned gap is held constant on resize; both edges of an axis pinned ⇒ that axis stretches. Default is top-left/fixed (`layout.rs`).
+- `min = { w =, h = }` / `max = { w =, h = }` — floor / ceiling on a resolved extent. Absent `min` axis = `0` (no floor); absent `max` axis = no ceiling. Clamp order is `min` (raise) then `max` (lower), so if `max < min`, `max` wins.
+- `frac = { x =, y =, w =, h = }` — express a field as a **fraction of the container** instead of an absolute unit: `x`,`w` scale by the logical **width**, `y`,`h` by the logical **height** (typical range 0–1; negatives clamp to 0). A `frac` field overrides **only that one field, independently** — it does not feed the anchor computation of the other field. So "fill the remaining space" needs **both** a fractional position and a fractional extent (e.g. a content pane at `frac = { x = 0.30, w = 0.70 }`), not a fractional position plus a far-edge anchor. `min`/`max`/`frac` are honored even without an `anchor` (element then defaults to top-left).
 - `role = "drag" | "passthrough"` — only meaningful on primitives that create a hotspot (`fill`, `image`, `region`); default `Control` (`parse_role`, `vocab.rs:148-156`).
+
+Example — a 30%-wide sidebar capped at 320px beside a content pane that fills the rest:
+
+```lua
+-- sidebar: 30% of width, never wider than 320px, full height
+fill{ path = rect{ x=0, y=0, w=144, h=320 }, color = { r=44, g=52, b=74 },
+      anchor = { "left", "top", "bottom" }, frac = { w = 0.30 }, max = { w = 320 } }
+-- content: occupies 30%..100% (BOTH x and w fractional)
+fill{ path = rect{ x=144, y=0, w=336, h=320 }, color = { r=28, g=32, b=42 },
+      anchor = { "top", "bottom" }, frac = { x = 0.30, w = 0.70 } }
+```
 
 ### `fill{}`
 

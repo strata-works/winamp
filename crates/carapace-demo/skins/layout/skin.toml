@@ -1,0 +1,8 @@
+schema = 1
+id = "layout"
+name = "Layout"
+engine = "^0.1"
+canvas = { width = 480, height = 320 }
+entry = "skin.lua"
+resizable = true
+min_size = [320, 220]
