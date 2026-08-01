@@ -108,20 +108,35 @@ fn lua_args_to_values(args: mlua::MultiValue) -> Vec<Value> {
 }
 
 fn parse_anchors(args: &Table) -> mlua::Result<crate::layout::Anchors> {
-    use crate::layout::Anchors;
-    let edges: Vec<String> = match args.get::<Option<Table>>("anchor")? {
-        Some(t) => t
-            .sequence_values::<String>()
-            .filter_map(|v| v.ok())
-            .collect(),
-        None => return Ok(Anchors::TOP_LEFT),
+    use crate::layout::{Anchors, Frac};
+    let mut a = match args.get::<Option<Table>>("anchor")? {
+        Some(t) => {
+            let edges: Vec<String> = t
+                .sequence_values::<String>()
+                .filter_map(|v| v.ok())
+                .collect();
+            let refs: Vec<&str> = edges.iter().map(|s| s.as_str()).collect();
+            Anchors::from_edges(&refs)
+        }
+        None => Anchors::TOP_LEFT,
     };
-    let refs: Vec<&str> = edges.iter().map(|s| s.as_str()).collect();
-    let mut a = Anchors::from_edges(&refs);
     if let Some(m) = args.get::<Option<Table>>("min")? {
         let w: f32 = m.get::<Option<f32>>("w")?.unwrap_or(0.0);
         let h: f32 = m.get::<Option<f32>>("h")?.unwrap_or(0.0);
         a.min = Some((w, h));
+    }
+    if let Some(m) = args.get::<Option<Table>>("max")? {
+        let w: f32 = m.get::<Option<f32>>("w")?.unwrap_or(f32::INFINITY);
+        let h: f32 = m.get::<Option<f32>>("h")?.unwrap_or(f32::INFINITY);
+        a.max = Some((w, h));
+    }
+    if let Some(f) = args.get::<Option<Table>>("frac")? {
+        a.frac = Frac {
+            x: f.get::<Option<f32>>("x")?,
+            y: f.get::<Option<f32>>("y")?,
+            w: f.get::<Option<f32>>("w")?,
+            h: f.get::<Option<f32>>("h")?,
+        };
     }
     Ok(a)
 }
