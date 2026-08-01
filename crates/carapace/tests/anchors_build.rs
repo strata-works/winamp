@@ -1,7 +1,7 @@
 use carapace::command::SkinSource;
 use carapace::engine::Engine;
 use carapace::fixture::FixtureHost;
-use carapace::layout::Anchors;
+use carapace::layout::{Anchors, Frac};
 use carapace::vocab::VocabRegistry;
 
 const SKIN: &str = "\
@@ -26,6 +26,8 @@ fn anchors_parsed_parallel_to_nodes() {
             top: true,
             bottom: true,
             min: None,
+            max: None,
+            frac: Frac::EMPTY,
         }
     );
     assert_eq!(anchors[1], Anchors::TOP_LEFT); // no anchor attr -> default

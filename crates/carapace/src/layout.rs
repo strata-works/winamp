@@ -86,13 +86,6 @@ impl Anchors {
     }
 }
 
-/// Snap a fractional-override result to the nearest 1/10000th unit, removing f32 multiplication
-/// ULP noise (e.g. `0.3_f32 * 800.0_f32` lands on `240.00002`, not the mathematically exact `240.0`)
-/// while preserving all precision meaningful at logical-pixel scale.
-fn snap(v: f32) -> f32 {
-    (v * 10_000.0).round() / 10_000.0
-}
-
 /// Resolve one axis: origin `p`, extent `e`, design length `d`, logical length `l`, pins
 /// `(near, far)`, floor `min_e`, ceiling `max_e` (INFINITY = none), optional fractional overrides
 /// `frac_pos`/`frac_ext` (fractions of `l`). Returns `(p', e')`.
@@ -117,10 +110,10 @@ fn resolve_axis(
         (false, false) => (p * (l / d.max(1.0)), e), // proportional re-center
     };
     if let Some(f) = frac_pos {
-        np = snap(f.max(0.0) * l);
+        np = f.max(0.0) * l;
     }
     if let Some(f) = frac_ext {
-        ne = snap(f.max(0.0) * l);
+        ne = f.max(0.0) * l;
     }
     if ne < min_e {
         ne = min_e; // floor first

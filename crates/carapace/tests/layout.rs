@@ -3,6 +3,12 @@ use carapace::layout::{Anchors, Frac, Rect, resolve_bbox};
 const DESIGN: (f32, f32) = (100.0, 100.0);
 const BIG: (f32, f32) = (200.0, 140.0);
 
+/// Approximate comparison for fraction*length results, which carry f32 multiplication ULP noise
+/// (e.g. `0.3_f32 * 800.0_f32` lands on `240.00002`, not the mathematically exact `240.0`).
+fn near(a: f32, b: f32) {
+    assert!((a - b).abs() < 1e-2, "expected ~{b}, got {a}");
+}
+
 fn a(left: bool, right: bool, top: bool, bottom: bool) -> Anchors {
     Anchors {
         left,
@@ -160,7 +166,7 @@ fn frac_extent_is_container_fraction() {
         },
         a,
     );
-    assert_eq!(r.w, 300.0); // 0.30 * 1000
+    near(r.w, 300.0); // 0.30 * 1000
     assert_eq!(r.h, 100.0); // untouched (no frac.h, top-only anchor)
 }
 
@@ -188,7 +194,7 @@ fn frac_position_only_leaves_extent_to_anchors() {
         },
         a,
     );
-    assert_eq!(r.x, 300.0); // 0.30 * 1000
+    near(r.x, 300.0); // 0.30 * 1000
     assert_eq!(r.w, 256.0); // NOT stretched -- extent is design width, position frac is independent
 }
 
@@ -216,8 +222,8 @@ fn frac_fill_remaining_uses_both_x_and_w() {
         },
         a,
     );
-    assert_eq!(r.x, 300.0);
-    assert_eq!(r.w, 700.0); // right edge = 300 + 700 = 1000
+    near(r.x, 300.0);
+    near(r.w, 700.0); // right edge = 300 + 700 = 1000
 }
 
 #[test]
@@ -278,7 +284,7 @@ fn min_then_max_max_wins_when_contradictory() {
         },
         a,
     );
-    assert_eq!(r.w, 100.0);
+    near(r.w, 100.0);
 }
 
 #[test]
@@ -328,9 +334,9 @@ fn sidebar_content_split_composes() {
         content,
     );
     assert_eq!(s.x, 0.0);
-    assert_eq!(s.w, 240.0);
-    assert_eq!(c.x, 240.0);
-    assert_eq!(c.w, 560.0);
+    near(s.w, 240.0);
+    near(c.x, 240.0);
+    near(c.w, 560.0);
     // At 2000 wide: sidebar caps at 320; content still starts at 30% (600) -> a gap 320..600.
     let s2 = resolve_bbox(
         d,
