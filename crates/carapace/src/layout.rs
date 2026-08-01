@@ -16,6 +16,31 @@ pub struct Rect {
     pub h: f32,
 }
 
+/// Per-element fractional overrides. Each present field replaces that field's anchor-resolved
+/// value with `fraction * container_length` along its axis (`x`,`w` → width; `y`,`h` → height).
+/// Absent fields stay absolute.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Frac {
+    /// Fraction of the container width, replacing the resolved x-position.
+    pub x: Option<f32>,
+    /// Fraction of the container height, replacing the resolved y-position.
+    pub y: Option<f32>,
+    /// Fraction of the container width, replacing the resolved width.
+    pub w: Option<f32>,
+    /// Fraction of the container height, replacing the resolved height.
+    pub h: Option<f32>,
+}
+
+impl Frac {
+    /// All-absolute (no fractional override on any field).
+    pub const EMPTY: Frac = Frac {
+        x: None,
+        y: None,
+        w: None,
+        h: None,
+    };
+}
+
 /// Which window edges an element is pinned to (gap held constant), plus an optional stretch floor.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Anchors {
@@ -29,6 +54,10 @@ pub struct Anchors {
     pub bottom: bool,
     /// Minimum (w, h) a stretched element collapses to. 0 on an axis = no floor.
     pub min: Option<(f32, f32)>,
+    /// Maximum (w, h) a stretched/fractional element grows to. Absent axis = f32::INFINITY (no cap).
+    pub max: Option<(f32, f32)>,
+    /// Per-field fractional overrides (fractions of the container).
+    pub frac: Frac,
 }
 
 impl Anchors {
@@ -39,6 +68,8 @@ impl Anchors {
         top: true,
         bottom: false,
         min: None,
+        max: None,
+        frac: Frac::EMPTY,
     };
 
     /// Build from a list of edge names (`"left"`, `"right"`, `"top"`, `"bottom"`); unknown ignored.
@@ -49,13 +80,35 @@ impl Anchors {
             top: edges.contains(&"top"),
             bottom: edges.contains(&"bottom"),
             min: None,
+            max: None,
+            frac: Frac::EMPTY,
         }
     }
 }
 
+/// Snap a fractional-override result to the nearest 1/10000th unit, removing f32 multiplication
+/// ULP noise (e.g. `0.3_f32 * 800.0_f32` lands on `240.00002`, not the mathematically exact `240.0`)
+/// while preserving all precision meaningful at logical-pixel scale.
+fn snap(v: f32) -> f32 {
+    (v * 10_000.0).round() / 10_000.0
+}
+
 /// Resolve one axis: origin `p`, extent `e`, design length `d`, logical length `l`, pins
-/// `(near, far)`, floor `min_e`. Returns `(p', e')`.
-fn resolve_axis(p: f32, e: f32, d: f32, l: f32, near: bool, far: bool, min_e: f32) -> (f32, f32) {
+/// `(near, far)`, floor `min_e`, ceiling `max_e` (INFINITY = none), optional fractional overrides
+/// `frac_pos`/`frac_ext` (fractions of `l`). Returns `(p', e')`.
+#[allow(clippy::too_many_arguments)]
+fn resolve_axis(
+    p: f32,
+    e: f32,
+    d: f32,
+    l: f32,
+    near: bool,
+    far: bool,
+    min_e: f32,
+    max_e: f32,
+    frac_pos: Option<f32>,
+    frac_ext: Option<f32>,
+) -> (f32, f32) {
     let delta = l - d;
     let (mut np, mut ne) = match (near, far) {
         (true, true) => (p, e + delta),  // both gaps fixed -> stretch
@@ -63,8 +116,17 @@ fn resolve_axis(p: f32, e: f32, d: f32, l: f32, near: bool, far: bool, min_e: f3
         (false, true) => (p + delta, e), // far gap fixed -> rides far edge
         (false, false) => (p * (l / d.max(1.0)), e), // proportional re-center
     };
+    if let Some(f) = frac_pos {
+        np = snap(f.max(0.0) * l);
+    }
+    if let Some(f) = frac_ext {
+        ne = snap(f.max(0.0) * l);
+    }
     if ne < min_e {
-        ne = min_e;
+        ne = min_e; // floor first
+    }
+    if ne > max_e {
+        ne = max_e; // then ceiling (max < min -> max wins)
     }
     if ne < 0.0 {
         ne = 0.0;
@@ -78,8 +140,13 @@ fn resolve_axis(p: f32, e: f32, d: f32, l: f32, near: bool, far: bool, min_e: f3
 /// Resolve a design-space bounding box to a logical bounding box under its anchors.
 pub fn resolve_bbox(design: (f32, f32), logical: (f32, f32), bbox: Rect, a: Anchors) -> Rect {
     let (min_w, min_h) = a.min.unwrap_or((0.0, 0.0));
-    let (x, w) = resolve_axis(bbox.x, bbox.w, design.0, logical.0, a.left, a.right, min_w);
-    let (y, h) = resolve_axis(bbox.y, bbox.h, design.1, logical.1, a.top, a.bottom, min_h);
+    let (max_w, max_h) = a.max.unwrap_or((f32::INFINITY, f32::INFINITY));
+    let (x, w) = resolve_axis(
+        bbox.x, bbox.w, design.0, logical.0, a.left, a.right, min_w, max_w, a.frac.x, a.frac.w,
+    );
+    let (y, h) = resolve_axis(
+        bbox.y, bbox.h, design.1, logical.1, a.top, a.bottom, min_h, max_h, a.frac.y, a.frac.h,
+    );
     Rect { x, y, w, h }
 }
 
@@ -271,6 +338,8 @@ mod tests {
             top: true,
             bottom: false,
             min: None,
+            max: None,
+            frac: Frac::EMPTY,
         }];
         let resolved = resolve_scene(&design, &anchors, (300.0, 100.0));
         match &resolved.nodes[0] {
@@ -305,6 +374,8 @@ mod tests {
             top: true,
             bottom: true,
             min: None,
+            max: None,
+            frac: Frac::EMPTY,
         }];
         let resolved = resolve_scene(&design, &anchors, (300.0, 140.0));
         match &resolved.nodes[0] {
